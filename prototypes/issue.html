@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<!--
+  JEEVES issue page — the modal extracted into a full-page view.
+  URL: issue.html#<cardId>   (hash-based so it works on file:// too)
+  Reads the card id from location.hash, renders header + step tabs + work area + footer.
+  Shares data + logic with the board via board-shared.js (localStorage-backed).
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Issue · JEEVES</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="board.css" />
+</head>
+<body>
+<div id="app"></div>
+
+<script src="board-shared.js"></script>
+<script>
+  function goBoard() { location.href = 'board-jeeves.html'; }
+
+  function paintIssue() {
+    const card = cardById(state.currentId);
+    if (!card) { goBoard(); return; }
+    const i = state.step, step = card.steps[i];
+    const tabs = card.steps.map((s, idx) => ({ s, idx }))
+      .filter(({ s }) => isTabVisible(s))
+      .map(({ s, idx }) => tabHtml(s, idx, i)).join('');
+    const body = step.kind === 'info' ? infoBody(card) : workArea(card, step);
+    document.getElementById('app').innerHTML = `
+      <div class="issue-page">
+        <div class="ovh">
+          <button class="back-btn" onclick="goBoard()" title="Back to board">←</button>
+          <div><div class="ov-title" id="dlg-title">${esc(card.title) || '<em style="color:var(--muted-foreground)">Untitled</em>'}</div></div>
+          <button class="x" onclick="goBoard()" title="Back to board">✕</button>
+        </div>
+        <div class="wizard-tabs-row">
+          <div class="wizard-tabs">${tabs}</div>
+          <button class="info-btn" type="button" onclick="openInsights('${card.id}')" title="Insights" aria-label="Insights">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          </button>
+        </div>
+        <div class="wizard-body"><div class="issue-body-inner">${body}</div></div>
+        ${dialogFooter(card, i, step)}
+      </div>`;
+    if (step.kind === 'info') setTimeout(() => document.getElementById('issue-title')?.focus(), 50);
+    document.title = `${card.title || 'Untitled'} · JEEVES`;
+  }
+
+  function loadIssue() {
+    const id = location.hash.slice(1);
+    const card = cardById(id);
+    if (!card) { goBoard(); return; }
+    state.currentId = id;
+    state.step = dialogStartIndex(card);
+    state.editingCR = null;
+    paintIssue();
+  }
+
+  /* Register hooks so shared action functions (advance, deleteCard, …) repaint
+     the issue view or navigate back to the board after mutating state. */
+  App.repaintIssue = paintIssue;
+  App.afterDelete  = goBoard;
+  App.openCard     = id => { if (id !== state.currentId) { location.hash = id; } };
+
+  window.addEventListener('hashchange', loadIssue);
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      if (document.querySelector('.insights-modal')) { closeInsights(); return; }
+      const t = e.target;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      goBoard();
+    }
+  });
+
+  loadIssue();
+</script>
+</body>
+</html>

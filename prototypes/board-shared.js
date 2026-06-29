@@ -512,9 +512,9 @@ function persistDraftForm(cardId, idx) {
   const prev = card.draftTasks[idx] || {};
   card.draftTasks[idx] = {
     title: document.getElementById('draft-title')?.value || '',
-    desc:  document.getElementById('draft-desc')?.value || '',
+    desc: document.getElementById('draft-desc')?.value || '',
     criteria: prev.criteria || [],
-    files:    prev.files || [],
+    files: prev.files || [],
     blockedBy: prev.blockedBy || [],
   };
   saveCards();
@@ -556,7 +556,7 @@ function renderBlockedRow(cardId, idx) {
 function toggleBlocker(cardId, idx, blockerIdx, keepDropdownOpen) {
   const card = cardById(cardId); if (!card) return;
   card.draftTasks = card.draftTasks || [];
-  const d = card.draftTasks[idx] || (card.draftTasks[idx] = { title:'', desc:'', criteria:[], files:[], blockedBy:[] });
+  const d = card.draftTasks[idx] || (card.draftTasks[idx] = { title: '', desc: '', criteria: [], files: [], blockedBy: [] });
   d.blockedBy = d.blockedBy || [];
   const pos = d.blockedBy.indexOf(blockerIdx);
   if (pos >= 0) d.blockedBy.splice(pos, 1); else d.blockedBy.push(blockerIdx);
@@ -684,12 +684,267 @@ function refreshReviewActions(cardId) {
   if (el) el.innerHTML = reviewActionsInner(card);
 }
 
+/* =========================================================================
+   HUMAN REVIEW · TASK EVALUATION PLAN
+   In production this is a separate self-contained HTML doc rendered in an
+   iframe. For the prototype we inline it so the sections are interactive.
+   Each section is collapsible; open/closed state lives in state.epOpen so a
+   repaint (e.g. after pushing an AI-review item into the Changes panel)
+   preserves which sections are expanded.
+   ========================================================================= */
+const EP_ICONS = {
+  critical: `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-1 5h2v6h-2zm0 8h2v2h-2z"/></svg>`,
+  warning:  `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`,
+  info:     `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`
+};
+const EP_PLUS = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
+
+/* Mocked eval-plan content for the streak-calc task. In production this is
+   produced by the evaluator and shipped with the eval-plan HTML. */
+const TASK_EVAL = {
+  desc: "Adds the streak-calculation API endpoint. Reads activity events from the store, computes consecutive-day streaks honouring DST transitions and the device timezone, and returns the current streak and longest streak.",
+  notices: [
+    { type: 'critical', title: 'Deviation from plan', body: 'added a caching layer (streakCache) that the plan never specified' },
+    { type: 'warning',  title: 'Test gap',            body: 'no test covering the DST spring-forward boundary day' },
+    { type: 'info',     title: 'Refactor',            body: 'timezone helper extracted into tz.ts for reuse by the badge task' }
+  ],
+  uiChanges: true,
+  shots: [
+    { cap: 'Badge — before', sub: 'streak resets across DST' },
+    { cap: 'Badge — after',  sub: 'streak survives DST' }
+  ],
+  /* Narrative diff: git diff reordered by architectural layer (not file
+     path). Each group explains what changed and why; every file ref is a
+     cursor://file/path:line link that opens in Cursor at the right line. */
+  diff: [
+    {
+      layer: 'Business logic',
+      why: 'Core streak math moved into streak.ts and now takes an explicit timezone so DST boundaries are honoured. A cache was added (not in the plan) to avoid recomputing on every badge render — this is the deviation flagged in Notifications.',
+      files: [
+        { path: 'src/streak.ts', line: 14 },
+        { path: 'src/tz.ts', line: 1 }
+      ],
+      hunks: [
+        { file: 'src/streak.ts', start: 14, lines: [
+          { kind: 'ctx', text: " export function streak(events) {" },
+          { kind: 'del', text: "-   const days = uniqueDays(events);" },
+          { kind: 'del', text: "-   return countConsecutive(days);" },
+          { kind: 'add', text: '+   const { tz } = deviceTz();' },
+          { kind: 'add', text: '+   const days = uniqueDays(events, tz);' },
+          { kind: 'add', text: '+   const result = countConsecutive(days);' },
+          { kind: 'add', text: '+   streakCache.set(key(events), result); // not in plan' },
+          { kind: 'add', text: '+   return result;' },
+          { kind: 'ctx', text: ' }' }
+        ] }
+      ]
+    },
+    {
+      layer: 'API',
+      why: 'Thin controller over the calc core — no domain logic here, just request parsing and response shaping. The endpoint returns both the current and longest streak in one call.',
+      files: [ { path: 'src/api/streak.ts', line: 12 } ],
+      hunks: [
+        { file: 'src/api/streak.ts', start: 12, lines: [
+          { kind: 'ctx', text: " router.get('/streak', async ctx => {" },
+          { kind: 'add', text: '+   const s = computeStreak(ctx.userId);' },
+          { kind: 'add', text: '+   ctx.body = { current: s.current, longest: s.longest };' },
+          { kind: 'ctx', text: ' });' }
+        ] }
+      ]
+    },
+    {
+      layer: 'Tests',
+      why: 'Added timezone and cache-hit coverage. The DST spring-forward case is skipped here — that is the test gap flagged in Notifications and queued as a follow-up.',
+      files: [ { path: 'test/streak.test.ts', line: 40 } ],
+      hunks: [
+        { file: 'test/streak.test.ts', start: 40, lines: [
+          { kind: 'add', text: '+ test("respects device timezone offset", () => {' },
+          { kind: 'add', text: '+   expect(streak(events, { tz: "America/New_York" })).toEqual(3);' },
+          { kind: 'add', text: '+ });' },
+          { kind: 'add', text: '+ test.skip("DST spring-forward boundary", () => {});' }
+        ] }
+      ]
+    }
+  ],
+  tests: {
+    pass: 18, skip: 2, fail: 0,
+    items: [
+      { name: 'counts a single-day streak',          status: 'pass' },
+      { name: 'bridges a gap shorter than 24h',      status: 'pass' },
+      { name: 'respects device timezone offset',     status: 'pass' },
+      { name: 'DST spring-forward boundary',         status: 'skip' },
+      { name: 'cache hit returns same value',        status: 'pass' }
+    ]
+  },
+  aiReview: [
+    { text: 'Caching layer deviates from the plan — either document the decision or remove streakCache.' },
+    { text: 'Add a DST spring-forward test case to close the test gap.' },
+    { text: 'Consider exposing tz as an option instead of always reading the device default.' },
+    { text: 'Longest-streak logic looks correct and well-named.' }
+  ],
+  meta: [
+    ['Session duration', '4m 12s'],
+    ['Tokens used',      '48,210  (31,004 in · 17,206 out)'],
+    ['Model',            'claude-4.6-sonnet'],
+    ['Branch',           'feat/streak-api'],
+    ['Commit',           'a1f4c0e'],
+    ['Files changed',    '4'],
+    ['Lines of code',    '+126 / −18'],
+    ['Cost',             '$0.21']
+  ]
+};
+
+function epOpen(id) {
+  const o = state.epOpen || (state.epOpen = {});
+  return o[id] !== false; /* default open */
+}
+function epToggle(id, btn) {
+  const o = state.epOpen || (state.epOpen = {});
+  o[id] = !epOpen(id);
+  const sec = btn.closest('.ep-section');
+  if (sec) sec.classList.toggle('closed', !epOpen(id));
+}
+
+function epSection(id, title, meta, bodyHtml) {
+  const closed = epOpen(id) ? '' : ' closed';
+  return `<section class="ep-section${closed}">
+    <button class="ep-head" type="button" onclick="epToggle('${id}',this)" aria-expanded="${epOpen(id)}">
+      <span class="ep-chev" aria-hidden="true"></span>
+      <span class="ep-title">${title}</span>${meta ? `<span class="ep-meta muted">${meta}</span>` : ''}
+    </button>
+    <div class="ep-body">${bodyHtml}</div>
+  </section>`;
+}
+
+function epNoticesHtml(notices) {
+  const items = notices.map(n => `<li class="ep-notice ${n.type}">
+      <span class="ep-n-icon">${EP_ICONS[n.type] || EP_ICONS.info}</span>
+      <span class="ep-n-text"><b>${esc(n.title)}</b> — ${esc(n.body)}</span>
+    </li>`).join('');
+  return `<ul class="ep-notices">${items}</ul>`;
+}
+
+function epShotsHtml(shots) {
+  if (!shots || !shots.length) return `<div class="muted" style="font-size:12.5px">No UI changes in this task.</div>`;
+  return `<div class="ep-shots">${shots.map(s => `<figure class="ep-shot">
+      <div class="ep-shot-img">screenshot</div>
+      <figcaption class="ep-shot-cap"><b>${esc(s.cap)}</b><span class="muted">${esc(s.sub)}</span></figcaption>
+    </figure>`).join('')}</div>`;
+}
+
+function epFileRef(f) {
+  const uri = `cursor://file/${f.path}:${f.line}`;
+  return `<a class="ep-file" href="${esc(uri)}" title="Open ${esc(uri)} in Cursor"
+    onclick="event.preventDefault();epOpenCursor('${esc(uri)}')">${esc(f.path)}<span class="ep-file-line">:${f.line}</span></a>`;
+}
+/* In production this hands off to Cursor's URI handler; in the prototype we
+   just acknowledge so the click is non-destructive. */
+function epOpenCursor(uri) { alert('PROTOTYPE: open ' + uri + ' in Cursor'); }
+
+function epHunkHtml(h) {
+  const head = `<div class="row hunk">@@ ${esc(h.file)} @${h.start} @@</div>`;
+  const rows = h.lines.map(r => `<div class="row ${r.kind}">${esc(r.text)}</div>`).join('');
+  return `<div class="ep-diff">${head}${rows}</div>`;
+}
+
+function epDiffHtml(groups) {
+  return groups.map(g => `<div class="ep-diff-group">
+      <div class="ep-diff-layer">
+        <span class="ep-diff-layer-name">${esc(g.layer)}</span>
+        <span class="ep-diff-files">${g.files.map(epFileRef).join('')}</span>
+      </div>
+      <p class="ep-diff-why">${esc(g.why)}</p>
+      ${g.hunks.map(epHunkHtml).join('')}
+    </div>`).join('');
+}
+
+function epDiffCounts(groups) {
+  let a = 0, d = 0;
+  groups.forEach(g => g.hunks.forEach(h => h.lines.forEach(r => {
+    if (r.kind === 'add') a++; else if (r.kind === 'del') d++;
+  })));
+  return `+${a} / −${d}`;
+}
+
+function epTestsHtml(t) {
+  const summary = `<div class="ep-tests-summary">
+      <span class="n ok"><b>${t.pass}</b> passed</span>
+      <span class="n skip"><b>${t.skip}</b> skipped</span>
+      <span class="n fail"><b>${t.fail}</b> failed</span>
+    </div>`;
+  const items = t.items.map(it => `<div class="ep-test">
+      <span class="ep-chip ${it.status}">${it.status}</span>
+      <span>${esc(it.name)}</span>
+    </div>`).join('');
+  return summary + `<div class="ep-test-list">${items}</div>`;
+}
+
+function epAiReviewHtml(items) {
+  const rows = items.map((it, i) => `<div class="ep-ai-item">
+      <span class="txt">${esc(it.text)}</span>
+      <button class="ep-ai-add" type="button" title="Add to Changes" aria-label="Add to Changes"
+        onclick="addReviewToChanges(${i})">${EP_PLUS}</button>
+    </div>`).join('');
+  return `<div class="ep-ai">${rows}</div>
+    <div class="muted" style="font-size:11.5px;margin-top:7px">Use + to push a note into the Changes panel →</div>`;
+}
+
+function epMetaHtml(meta) {
+  const rows = meta.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+  return `<dl class="ep-meta-grid">${rows}</dl>`;
+}
+
+/* AI-review + button → push the note into the card's change requests.
+   We update only the Changes panel DOM (count badge, new block, footer
+   button) instead of repainting the whole issue view, so the eval-plan
+   panel's scroll position is preserved. Section open state is untouched. */
+function addReviewToChanges(i) {
+  const card = cardById(state.currentId); if (!card) return;
+  const item = TASK_EVAL.aiReview[i]; if (!item) return;
+  const cr = { id: 'cr' + (++nextCardId), text: item.text };
+  const list = ensureChangeRequests(card);
+  list.push(cr);
+  saveCards();
+
+  const countEl = document.querySelector('.cr-count');
+  if (countEl) countEl.textContent = String(list.length);
+
+  const scroll = document.querySelector('.cr-scroll');
+  if (scroll) {
+    const empty = scroll.querySelector('.cr-empty');
+    if (empty) empty.remove();
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = crViewBlock(card, cr);
+    const node = wrapper.firstElementChild;
+    if (node) scroll.appendChild(node);
+  }
+
+  refreshReviewActions(card.id);
+}
+
 function taskReviewArea(card) {
-  const main = `<div class="attn" style="margin-bottom:12px"><div class="h">⚠ ${card.flags || 0} attention flags</div>
-    <ul><li><b>Deviation from plan</b> — added a caching layer not in the plan</li><li><b>Test gap</b> — no DST-day test</li></ul></div>`
-    + evalLink('View evaluation plan', 'narrative diff · QA checklist · AI review · screenshots')
-    + `<div class="sec-label" style="margin-top:12px">QA checklist</div>`
-    + qaListHtml(card, TASK_QA_ITEMS);
+  const ev = TASK_EVAL;
+  const main = `<div class="ep">
+    <div class="ep-page-head">
+      <div><div class="ep-page-title">Evaluation plan</div>
+        <div class="muted" style="font-size:12px">Task · ${esc(card.title || 'Untitled')}</div></div>
+    </div>
+    ${epSection('ep-desc',   'Short description', null,
+      `<p class="ep-desc">${esc(ev.desc)}</p>`)}
+    ${epSection('ep-notif',  'Notifications', `${ev.notices.length} flag${ev.notices.length === 1 ? '' : 's'}`,
+      epNoticesHtml(ev.notices))}
+    ${epSection('ep-sum',    'Summary', null,
+      `<p class="ep-desc" style="margin-bottom:10px">${esc(ev.desc)}</p>` + epShotsHtml(ev.uiChanges ? ev.shots : null))}
+    ${epSection('ep-diff',   'Narrative diff', epDiffCounts(ev.diff),
+      epDiffHtml(ev.diff))}
+    ${epSection('ep-tests',  'Tests', `${ev.tests.pass + ev.tests.skip} cases`,
+      epTestsHtml(ev.tests))}
+    ${epSection('ep-ai',     'AI review', `${ev.aiReview.length} notes`,
+      epAiReviewHtml(ev.aiReview))}
+    ${epSection('ep-qa',     'QA checklist', null,
+      qaListHtml(card, TASK_QA_ITEMS))}
+    ${epSection('ep-meta',   'Metadata', null,
+      epMetaHtml(ev.meta))}
+  </div>`;
   return reviewLayout(card, main);
 }
 function featureReviewArea(card) {
@@ -766,9 +1021,11 @@ function implementChanges(cardId) {
     const drafts = card.draftTasks || defaultDraftTasks(card);
     drafts.forEach((d, idx) => {
       const id = 'tc' + (++nextCardId);
-      CARDS.push({ id, col: 'implement', kind: 'task-child', parent: card.id, title: d.title, desc: d.desc,
+      CARDS.push({
+        id, col: 'implement', kind: 'task-child', parent: card.id, title: d.title, desc: d.desc,
         branch: `${card.branch || 'feat/new'}/card-${idx + 1}`,
-        steps: mk('task-child', 'implement', { plan: 'queued', impl: 'pending', airev: 'pending' }) });
+        steps: mk('task-child', 'implement', { plan: 'queued', impl: 'pending', airev: 'pending' })
+      });
     });
     card.implProgress = { cur: 1, total: drafts.length };
   }

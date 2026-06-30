@@ -66,11 +66,19 @@ function seedCards() {
     },
 
     // ---- Feature in Human Review (all children merged) — one coherent eval plan ----
+    // draftTasks record the 4 original slices; when "Create tasks" is clicked
+    // they're archived as read-only "Round 1" artifacts in the Tasks tab.
     {
       id: 'fr1', col: 'review', kind: 'feature', title: 'Onboarding revamp', desc: 'Trim signup to 2 steps, add progress hint.',
       branch: 'feat/onboarding', flags: 3, evalReady: true, childCount: 4,
       steps: mk('feature', 'review', { grill: 'done', prd: 'done', tasks: 'done', review: 'needs-user' }),
       qa: [true, false, false],
+      draftTasks: [
+        { title: 'Signup form collapse', desc: 'Reduce the signup form from 5 steps to 2.' },
+        { title: 'Progress hint component', desc: 'Stepper-style hint visible on every step.' },
+        { title: 'Signup analytics events', desc: 'Emit one event per step, dedup after merge.' },
+        { title: 'Onboarding copy revision', desc: 'Rewrite copy for the 2-step flow.' },
+      ],
       changeRequests: [
         { id: 'cr-fr1a', text: 'Step 2 still asks for phone — PRD said email-only signup.' },
       ],
@@ -79,7 +87,7 @@ function seedCards() {
     // ---- Feature in Finalize ----
     {
       id: 'f1', col: 'finalize', kind: 'feature', title: 'Profile redesign', desc: 'New profile layout with stat cards.',
-      branch: 'feat/profile', steps: mk('feature', 'finalize', { refactor: 'done', document: 'ai-working', deploy: 'queued' })
+      branch: 'feat/profile', steps: mk('feature', 'finalize', { document: 'ai-working', deploy: 'queued' })
     },
   ];
 }
@@ -106,7 +114,7 @@ const COLUMNS = [
   { id: 'shape', name: 'Define Feature', sub: 'Features: Grill → PRD → Tasks' },
   { id: 'implement', name: 'Implement Task', sub: 'Tasks: Plan → Implement → AI Review' },
   { id: 'review', name: 'Human Review', sub: 'Your call before merge' },
-  { id: 'finalize', name: 'Finalize', sub: 'Refactor → Document → Deploy' },
+  { id: 'finalize', name: 'Finalize', sub: 'Document → Deploy' },
 ];
 
 /* Per-kind pipelines. Every pipeline starts with 'backlog' so the Info tab
@@ -124,7 +132,7 @@ const STAGE_STEPS = {
   shape: [['grill', 'Grill', 'chat'], ['prd', 'PRD', 'ai'], ['tasks', 'Tasks', 'ai']],
   implement: [['plan', 'Plan', 'ai'], ['impl', 'Implement', 'ai'], ['airev', 'AI Review', 'ai']],
   review: [['review', 'Human Review', 'human']],
-  finalize: [['refactor', 'Refactor', 'ai'], ['document', 'Document', 'ai'], ['deploy', 'Deploy', 'ai']],
+  finalize: [['document', 'Document', 'ai'], ['deploy', 'Deploy', 'ai']],
 };
 
 /* Build the cumulative step list for a card on `pipeline` sitting in `col`.
@@ -372,9 +380,6 @@ Track consecutive-day workout streaks and surface them in the product.
       <div class="f"><span class="badge badge-secondary">Minor</span><span>computeStreak() reads Date.now() directly — inject a clock.</span></div>
       <div class="f"><span class="badge badge-outline">Suggestion</span><span>Memoise per user; recompute on new log only.</span></div></div>`;
   if (T === 'review') return card.kind === 'feature' ? featureReviewArea(card) : taskReviewArea(card);
-  if (T === 'refactor') return `<div class="panel findings">
-      <div class="f"><span class="badge badge-secondary">Opportunity</span><span>Extract <code>streak</code> + <code>badge</code> into a shared <code>gamification</code> module.</span></div>
-      <div class="f"><span class="badge badge-secondary">Opportunity</span><span>Two timezone helpers diverged — consolidate.</span></div></div>`;
   if (T === 'document') return `<div class="panel doc"><h4>Docs updated</h4><ul><li>README: streaks feature section</li><li>ADR-014: device-local reset decision</li></ul></div>`;
   if (T === 'deploy') return `<div class="runlog"><div class="ok">[deploy] ✓ PR feat/onboarding → main opened</div><div class="t">[deploy] awaiting CI…</div></div>`;
   return `<div class="muted">—</div>`;
@@ -415,11 +420,38 @@ function draftCardHtml(card, d, idx) {
   </div>`;
 }
 
+/* Read-only rendering of a prior round's draft tasks (the merged slices from
+   before a rework). No trash, no click-to-edit, tinted to look archived. */
+function archivedDraftHtml(d, idx) {
+  return `<div class="card archived-card">
+    <div class="card-pad">
+      <div class="card-top"><span class="card-title">${idx + 1}. ${esc(d.title) || '<em>Untitled task</em>'}</span><span class="archived-tag">merged ✓</span></div>
+      <div class="card-desc">${esc(d.desc || '')}</div>
+    </div>
+  </div>`;
+}
+
+/* Prior rounds, each a collapsible <details> group. Most recent round first. */
+function archivedTasksHtml(card) {
+  const rounds = card.archivedTasks || [];
+  if (!rounds.length) return '';
+  const sorted = [...rounds].sort((a, b) => b.round - a.round);
+  return sorted.map(r => `<details class="archived-round">
+    <summary class="archived-round-head">
+      <span class="archived-chev">▾</span> Round ${r.round} tasks <span class="muted">(${r.tasks.length} merged ✓)</span>
+    </summary>
+    <div class="tasks-list archived-list">${r.tasks.map((d, i) => archivedDraftHtml(d, i)).join('')}</div>
+  </details>`).join('');
+}
+
 function tasksLeft(card, step) {
   if (step.status === 'needs-user') {
     const drafts = card.draftTasks || (card.draftTasks = defaultDraftTasks(card), card.draftTasks);
     const list = drafts.map((d, idx) => draftCardHtml(card, d, idx)).join('');
-    return `<div class="tasks-list">${list}</div>`;
+    const reworkHead = (card.reworkRound || 0) > 0
+      ? `<div class="tasks-section-label">Rework tasks — from your change requests</div>`
+      : '';
+    return `${archivedTasksHtml(card)}${reworkHead}<div class="tasks-list">${list}</div>`;
   }
   if (step.status === 'ai-working') {
     const kids = childrenOf(card);
@@ -427,8 +459,17 @@ function tasksLeft(card, step) {
     const sorted = [...kids].sort((a, b) => Number(needsUser(b)) - Number(needsUser(a)));
     return `<div class="tasks-list">${sorted.map(renderCard).join('')}</div>`;
   }
-  const n = card.childCount || childrenOf(card).length || 'all';
-  return `<div class="panel doc"><h4>Tasks complete</h4><p>${n} task${n === 1 ? '' : 's'} implemented and merged. Ready for your review of the whole feature.</p></div>`;
+  // Tasks complete: keep the headline, drop the descriptive paragraph, and
+  // still show the tasks. Children are gone (merged & removed at completeTasks),
+  // so the current round comes from card.draftTasks rendered read-only; any
+  // earlier rework rounds come from card.archivedTasks (collapsed above).
+  const drafts = card.draftTasks || [];
+  const prior = (card.archivedTasks || []).length > 0;
+  const thisRoundLabel = prior ? `<div class="tasks-section-label">This round</div>` : '';
+  const thisRound = drafts.length
+    ? `${thisRoundLabel}<div class="tasks-list archived-list">${drafts.map((d, i) => archivedDraftHtml(d, i)).join('')}</div>`
+    : '';
+  return `<div class="tasks-complete-banner"><span class="tasks-complete-emoji">🎉</span> Tasks complete</div>${archivedTasksHtml(card)}${thisRound}`;
 }
 
 function tasksArea(card) {
@@ -437,14 +478,19 @@ function tasksArea(card) {
   const fab = step.status === 'needs-user'
     ? `<button class="btn btn-outline fab" type="button" onclick="addDraftTask('${card.id}')" title="Add task">+ Add task</button>`
     : '';
+  const rework = (card.reworkRound || 0) > 0;
+  const aiBubble = rework
+    ? `<div class="bub ai">Here${count === 1 ? "'s" : ' are'} ${count || 'the'} rework task${count === 1 ? '' : 's'} from your change request${count === 1 ? '' : 's'}. Tweak them, or tell me what to adjust.</div>`
+    : `<div class="bub ai">I've broken the feature into ${count || 'a few'} end-to-end slices. Click any task to inspect or edit it.</div>`;
   // During implementation (ai-working) the sidepanel isn't useful — the work
   // is happening on the child task cards, not in this chat. Hide it so the
-  // task list gets the full width.
-  const side = step.status === 'ai-working' ? '' : `<aside class="prd-side">
+  // task list gets the full width. Also hide it once tasks are done — there's
+  // nothing to ask the AI about until the feature is re-reviewed.
+  const side = (step.status === 'ai-working' || step.status === 'done') ? '' : `<aside class="prd-side">
       <div class="chat">
-        <div class="bub ai">I've broken the feature into ${count || 'a few'} end-to-end slices. Click any task to inspect or edit it.</div>
-        <div class="bub me">Make the API slice cover the DST edge case too.</div>
-        <div class="bub ai">Done — added a criterion and a test file to that slice.</div>
+        ${aiBubble}
+        ${rework ? '' : `<div class="bub me">Make the API slice cover the DST edge case too.</div>
+        <div class="bub ai">Done — added a criterion and a test file to that slice.</div>`}
       </div>
       <div class="composer">
         <button class="attach-btn" type="button" title="Attach files" aria-label="Attach files" onclick="attachFile(this)">
@@ -621,16 +667,33 @@ function deleteDraftTask(cardId, idx) {
 }
 
 /* ---- Human Review: one coherent eval plan for a feature, per-task for a task ---- */
-function evalLink(label, sub) {
-  return `<div class="eval-link" onclick="alert('PROTOTYPE: opens the self-contained eval-plan HTML')"><span style="font-size:18px">📄</span>
-    <div><b style="color:oklch(0.45 0.15 150)">${label}</b><div class="muted" style="font-size:12px">${sub}</div></div>
-    <span style="margin-left:auto" class="muted">↗</span></div>`;
-}
-
 /* Two-column split: the review content on the left, a "Request changes"
    sidepanel on the right (instead of the AI chat the PRD/Tasks tabs use).
-   Each change request is a simple editable/deletable text block. */
+   Each change request is a simple editable/deletable text block.
+   When a feature's review tab is opened from ANOTHER column (i.e. after
+   "Create tasks" sent it back to Define), the eval plan is an artifact —
+   render it read-only, full width, no sidepanel. */
 function reviewLayout(card, mainHtml) {
+  // The review tab persists after "Implement changes" (task) or "Create tasks"
+  // (feature) sends the card back to its work column. Viewed from there it's a
+  // read-only artifact: full width, no "Request changes" sidepanel, with a
+  // banner describing what's happening.
+  const hasReview = card.steps.some(s => s.key === 'review');
+  if (hasReview && card.col !== 'review') {
+    let banner;
+    if (card.kind === 'feature') {
+      const round = card.reworkRound || 0;
+      banner = round > 0
+        ? `Rework in progress — edit the new tasks in the Tasks tab.`
+        : `This evaluation is kept as a read-only artifact.`;
+    } else {
+      banner = `<span class="spin"></span><span>Implementing changes…</span>`;
+    }
+    return `<div class="review-readonly">
+      <div class="review-readonly-banner">${banner}</div>
+      ${mainHtml}
+    </div>`;
+  }
   return `<div class="prd-layout">
     <div class="prd-editor review-left">${mainHtml}</div>
     ${changeRequestsArea(card)}
@@ -638,7 +701,6 @@ function reviewLayout(card, mainHtml) {
 }
 
 const TASK_QA_ITEMS = ['Streak of 1 renders correctly', 'DST day does not double-count', 'Timezone read from device'];
-const FEATURE_QA_ITEMS = ['All child tasks pass their QA', 'Cross-task consistency checked', 'Combined narrative diff reviewed'];
 
 /* QA checklist whose state drives the Approve button. Persisted on the card
    as `card.qa` (booleans, aligned to the items array). */
@@ -646,8 +708,9 @@ function qaListHtml(card, items) {
   if (!Array.isArray(card.qa) || card.qa.length !== items.length) {
     card.qa = items.map((_, i) => !!(card.qa && card.qa[i]));
   }
+  const ro = card.col !== 'review'; // read-only artifact when viewed from another column
   return `<ul class="qa">${items.map((label, i) =>
-    `<li><input type="checkbox" ${card.qa[i] ? 'checked' : ''} onchange="toggleQa('${card.id}',${i})"> ${esc(label)}</li>`).join('')}</ul>`;
+    `<li><input type="checkbox" ${card.qa[i] ? 'checked' : ''} ${ro ? 'disabled' : `onchange="toggleQa('${card.id}',${i})"`}> ${esc(label)}</li>`).join('')}</ul>`;
 }
 function qaComplete(card) {
   const qa = card.qa;
@@ -661,14 +724,16 @@ function toggleQa(cardId, i) {
   refreshReviewActions(cardId);
 }
 
-/* The review action button. With pending change requests it becomes
-   "Implement changes" (sends the card back to Implement). With none it's
-   "Approve" — a secondary outline button until QA is complete, then a
-   celebratory gradient button. */
+/* The review action button. With pending change requests a task becomes
+   "Implement changes" (back to Implement for another pass) while a feature
+   becomes "Create tasks" (back to the Tasks tab with one draft per request).
+   With no change requests it's "Approve" — a secondary outline button until
+   QA is complete, then a celebratory gradient button. */
 function reviewActionsInner(card) {
   const changes = (card.changeRequests || []).length;
   if (changes > 0) {
-    return `<button class="btn btn-primary issue-action-btn" onclick="implementChanges('${card.id}')">Implement changes →</button>`;
+    const label = card.kind === 'feature' ? 'Create tasks →' : 'Implement changes →';
+    return `<button class="btn btn-primary issue-action-btn" onclick="implementChanges('${card.id}')">${label}</button>`;
   }
   if (qaComplete(card)) {
     return `<button class="btn btn-approve-grad issue-action-btn" onclick="approveCard('${card.id}')">Approve</button>`;
@@ -793,6 +858,80 @@ const TASK_EVAL = {
   ]
 };
 
+/* Mocked feature-level eval plan for the onboarding-revamp feature. This is
+   the *acceptance gate* (stage 11, `/eval-acceptance`) — deliberately thinner
+   than the per-task eval: no diff narrative and no thermo-nuclear review
+   (those live on each child's eval plan, linked from the Tasks section).
+   Instead it covers only what emerges once the slices are assembled. */
+const FEATURE_EVAL = {
+  desc: "Trims signup from 5 steps to 2 and adds a progress hint. All four child slices (signup-form collapse, progress hint, signup analytics, onboarding copy) are merged into feat/onboarding; this eval validates the feature as a whole against the PRD.",
+  shots: [
+    { cap: 'Signup — before', sub: '5 steps, 38% drop-off at step 3' },
+    { cap: 'Signup — after',  sub: '2 steps + progress hint' },
+    { cap: 'Completed state', sub: 'hint celebrates, routes to home' },
+    { cap: 'Mobile signup',   sub: 'hint + email-only both fit one screen' }
+  ],
+  /* Feature-level only. Per-task flags live on the task cards in the Tasks
+     section below — they are not duplicated here. */
+  notices: [
+    { type: 'warning',  title: 'Cross-slice inconsistency', body: 'progress-hint and copy tasks diverged on step wording — "Step 1 of 2" vs "1/2"' },
+    { type: 'critical', title: 'Regression',                body: 'signup analytics fires twice on the final step — passed in the child eval, doubled after merge' },
+    { type: 'info',     title: 'Non-goal check',            body: 'social sharing hook was not added (correct — deferred in PRD non-goals)' }
+  ],
+  tasks: [
+    { id: 't-signup',    title: 'Signup form collapse',  flags: 1 },
+    { id: 't-hint',      title: 'Progress hint component', flags: 0 },
+    { id: 't-analytics', title: 'Signup analytics events', flags: 1 },
+    { id: 't-copy',      title: 'Onboarding copy revision', flags: 0 }
+  ],
+  refactor: [
+    'Pull the step-progress UI into a shared <Stepper> component — hint and form both roll their own.',
+    'Two analytics event helpers (signup.ts + hint.ts) emit the same events — merge into one events module.',
+    'onboardingStep() and signupStep() refer to the same thing — pick one name.'
+  ],
+  tests: {
+    pass: 64, skip: 1, fail: 1,
+    items: [
+      { name: 'signup: submits with email-only',          status: 'pass' },
+      { name: 'hint: renders on step 2',                  status: 'pass' },
+      { name: 'analytics: fires once per step',           status: 'fail', regress: true },
+      { name: 'e2e: signup → home redirect',              status: 'pass' },
+      { name: 'e2e: logout → signup again shows hint',    status: 'pass' },
+      { name: 'e2e: invalid email keeps hint on step 1',  status: 'pass' },
+      { name: 'a11y: hint announced by screen reader',    status: 'skip' }
+    ]
+  },
+  /* PRD acceptance criteria — in production auto-seeded from the PRD's own
+     checkbox list authored during the Define stage, so the criteria written
+     then are the exact same checkboxes checked here. */
+  prdCriteria: [
+    'Signup is 2 steps maximum',
+    'Email-only — no phone field',
+    'Progress hint visible on every step',
+    'Drop-off analytics still fire'
+  ],
+  /* End-to-end journeys that span multiple slices. Behaviour-derived (written
+     by /eval-acceptance after assembly), not spec-derived. */
+  qaJourneys: [
+    'New user → signup (email only) → lands on home with hint shown',
+    'Existing user → logout → signup again → hint still appears',
+    'Submit invalid email → error shown → hint stays on current step',
+    'Complete signup → analytics fires once per step (not twice)'
+  ],
+  meta: [
+    ['Slices merged',  '4'],
+    ['Total duration', '26m 41s across 4 child runs + this eval'],
+    ['Tokens used',    '198,420  (140,210 in · 58,210 out)'],
+    ['Model',          'claude-4.6-sonnet'],
+    ['Feature branch', 'feat/onboarding'],
+    ['Base',           'main'],
+    ['Commit',         'f3e2a81'],
+    ['Files changed',  '17'],
+    ['Lines of code',  '+612 / −284'],
+    ['Total cost',     '$1.94']
+  ]
+};
+
 function epOpen(id) {
   const o = state.epOpen || (state.epOpen = {});
   return o[id] !== false; /* default open */
@@ -871,21 +1010,22 @@ function epTestsHtml(t) {
       <span class="n skip"><b>${t.skip}</b> skipped</span>
       <span class="n fail"><b>${t.fail}</b> failed</span>
     </div>`;
-  const items = t.items.map(it => `<div class="ep-test">
+  const items = t.items.map(it => `<div class="ep-test${it.regress ? ' regress' : ''}">
       <span class="ep-chip ${it.status}">${it.status}</span>
       <span>${esc(it.name)}</span>
+      ${it.regress ? '<span class="ep-chip regress">Regression</span>' : ''}
     </div>`).join('');
   return summary + `<div class="ep-test-list">${items}</div>`;
 }
 
-function epAiReviewHtml(items) {
+function epAiReviewHtml(items, ro) {
   const rows = items.map((it, i) => `<div class="ep-ai-item">
       <span class="txt">${esc(it.text)}</span>
-      <button class="ep-ai-add" type="button" title="Add to Changes" aria-label="Add to Changes"
-        onclick="addReviewToChanges(${i})">${EP_PLUS}</button>
+      ${ro ? '' : `<button class="ep-ai-add" type="button" title="Add to Changes" aria-label="Add to Changes"
+        onclick="addReviewToChanges(${i})">${EP_PLUS}</button>`}
     </div>`).join('');
-  return `<div class="ep-ai">${rows}</div>
-    <div class="muted" style="font-size:11.5px;margin-top:7px">Use + to push a note into the Changes panel →</div>`;
+  const hint = ro ? '' : `<div class="muted" style="font-size:11.5px;margin-top:7px">Use + to push a note into the Changes panel →</div>`;
+  return `<div class="ep-ai">${rows}</div>${hint}`;
 }
 
 function epMetaHtml(meta) {
@@ -897,10 +1037,9 @@ function epMetaHtml(meta) {
    We update only the Changes panel DOM (count badge, new block, footer
    button) instead of repainting the whole issue view, so the eval-plan
    panel's scroll position is preserved. Section open state is untouched. */
-function addReviewToChanges(i) {
+function pushChangeRequest(text) {
   const card = cardById(state.currentId); if (!card) return;
-  const item = TASK_EVAL.aiReview[i]; if (!item) return;
-  const cr = { id: 'cr' + (++nextCardId), text: item.text };
+  const cr = { id: 'cr' + (++nextCardId), text };
   const list = ensureChangeRequests(card);
   list.push(cr);
   saveCards();
@@ -920,26 +1059,36 @@ function addReviewToChanges(i) {
 
   refreshReviewActions(card.id);
 }
+function addReviewToChanges(i) {
+  const item = TASK_EVAL.aiReview[i];
+  if (item) pushChangeRequest(item.text);
+}
+/* Refactor + button → same path as an AI-review note. No tag prefix: each
+   change request becomes a plain task in the Tasks tab when "Create tasks" is
+   clicked, and the originating section is irrelevant once it's a slice. */
+function addRefactorToChanges(i) {
+  const text = FEATURE_EVAL.refactor[i];
+  if (text) pushChangeRequest(text);
+}
 
 function taskReviewArea(card) {
   const ev = TASK_EVAL;
+  const ro = card.col !== 'review'; // read-only artifact when viewed from another column
+  const round = card.reworkRound || 0;
+  const reworkBadge = round > 0
+    ? `<span class="rework-badge" title="Evaluation re-run after requested changes">Round ${round + 1}</span>`
+    : '';
   const main = `<div class="ep">
-    <div class="ep-page-head">
-      <div><div class="ep-page-title">Evaluation plan</div>
-        <div class="muted" style="font-size:12px">Task · ${esc(card.title || 'Untitled')}</div></div>
-    </div>
-    ${epSection('ep-desc',   'Short description', null,
-      `<p class="ep-desc">${esc(ev.desc)}</p>`)}
+    ${epSection('ep-sum',    'Summary', null,
+      `${reworkBadge}<p class="ep-desc" style="margin-bottom:10px">${esc(ev.desc)}</p>` + epShotsHtml(ev.uiChanges ? ev.shots : null))}
     ${epSection('ep-notif',  'Notifications', `${ev.notices.length} flag${ev.notices.length === 1 ? '' : 's'}`,
       epNoticesHtml(ev.notices))}
-    ${epSection('ep-sum',    'Summary', null,
-      `<p class="ep-desc" style="margin-bottom:10px">${esc(ev.desc)}</p>` + epShotsHtml(ev.uiChanges ? ev.shots : null))}
-    ${epSection('ep-diff',   'Narrative diff', epDiffCounts(ev.diff),
+    ${epSection('ep-diff',   'Code changes', epDiffCounts(ev.diff),
       epDiffHtml(ev.diff))}
     ${epSection('ep-tests',  'Tests', `${ev.tests.pass + ev.tests.skip} cases`,
       epTestsHtml(ev.tests))}
     ${epSection('ep-ai',     'AI review', `${ev.aiReview.length} notes`,
-      epAiReviewHtml(ev.aiReview))}
+      epAiReviewHtml(ev.aiReview, ro))}
     ${epSection('ep-qa',     'QA checklist', null,
       qaListHtml(card, TASK_QA_ITEMS))}
     ${epSection('ep-meta',   'Metadata', null,
@@ -947,20 +1096,80 @@ function taskReviewArea(card) {
   </div>`;
   return reviewLayout(card, main);
 }
+function featureTaskRowHtml(t, idx) {
+  const flag = t.flags > 0
+    ? `<span class="ep-flag-count">${t.flags} flag${t.flags === 1 ? '' : 's'}</span>`
+    : `<span class="muted ep-task-noflag">no flags</span>`;
+  return `<div class="card ep-task-row" onclick="openFeatureTask('${esc(t.id)}')" title="Open ${esc(t.title)} evaluation plan">
+    <div class="card-pad">
+      <div class="card-top">
+        <span class="card-title">${idx + 1}. ${esc(t.title)}</span>
+        ${flag}
+      </div>
+    </div>
+  </div>`;
+}
+/* In production each child's eval plan is a self-contained HTML file committed
+   on its branch; clicking opens that file. The prototype just acknowledges. */
+function openFeatureTask(id) {
+  alert("PROTOTYPE: opens task " + id + " evaluation plan (the self-contained HTML committed on the child's branch)");
+}
+
+function epRefactorHtml(items, ro) {
+  const rows = items.map((it, i) => `<div class="ep-ai-item ep-refactor">
+      <span class="txt">${esc(it)}</span>
+      ${ro ? '' : `<button class="ep-ai-add" type="button" title="Add to Changes" aria-label="Add to Changes"
+        onclick="addRefactorToChanges(${i})">${EP_PLUS}</button>`}
+    </div>`).join('');
+  return `<div class="ep-ai">${rows}</div>`;
+}
+
+/* Feature QA = two labelled sub-groups sharing one checkbox workflow and one
+   Approve gate. PRD acceptance (spec-derived, top-down) + E2E journeys
+   (behaviour-derived, bottom-up). Both back the single `card.qa` array so
+   `qaComplete` / `toggleQa` / `refreshReviewActions` work unchanged. */
+function featureQaHtml(card) {
+  const prd = FEATURE_EVAL.prdCriteria;
+  const journeys = FEATURE_EVAL.qaJourneys;
+  const items = prd.concat(journeys);
+  if (!Array.isArray(card.qa) || card.qa.length !== items.length) {
+    card.qa = items.map((_, i) => !!(card.qa && card.qa[i]));
+  }
+  const ro = card.kind === 'feature' && card.col !== 'review'; // read-only artifact
+  const group = (label, hint, list, offset) => `<div class="ep-qa-group">
+      <div class="ep-qa-label">${label}<span class="muted"> ${hint}</span></div>
+      <ul class="qa">${list.map((label2, j) =>
+        `<li><input type="checkbox" ${card.qa[offset + j] ? 'checked' : ''} ${ro ? 'disabled' : `onchange="toggleQa('${card.id}',${offset + j})"`}> ${esc(label2)}</li>`).join('')}</ul>
+    </div>`;
+  return group('PRD acceptance criteria', '(spec-derived)', prd, 0)
+       + group('End-to-end user journeys', '(behaviour-derived)', journeys, prd.length);
+}
+
 function featureReviewArea(card) {
-  const n = card.childCount || childrenOf(card).length;
-  const main = `<div class="attn" style="margin-bottom:12px"><div class="h">⚠ ${card.flags || 0} attention flags across ${n} tasks</div>
-    <ul>
-      <li><b>Deviation from plan</b> — caching layer added in the API task</li>
-      <li><b>Test gap</b> — no DST-day test in the calc task</li>
-      <li><b>Consistency</b> — badge &amp; push tasks diverged on timezone helper</li>
-    </ul></div>`
-    + evalLink('View coherent evaluation plan', `rollup of ${n} tasks · combined narrative diff · aggregated QA · consolidated AI review`)
-    + `<div class="sec-label" style="margin-top:14px">Per-task evaluation plans</div>`
-    + `<div class="childcard">Streak calc API · <span class="muted">2 flags</span></div>`
-    + `<div class="childcard">Streak UI badge · <span class="muted">0 flags</span></div>`
-    + `<div class="sec-label" style="margin-top:14px">QA checklist</div>`
-    + qaListHtml(card, FEATURE_QA_ITEMS);
+  const ev = FEATURE_EVAL;
+  const ro = card.col !== 'review'; // read-only artifact when viewed from another column
+  const totalFlags = ev.tasks.reduce((s, t) => s + (t.flags || 0), 0);
+  const taskRows = ev.tasks.map((t, i) => featureTaskRowHtml(t, i)).join('');
+  const round = card.reworkRound || 0;
+  const reworkBadge = round > 0
+    ? `<span class="rework-badge" title="Evaluation re-run after rework">Round ${round + 1}</span>`
+    : '';
+  const main = `<div class="ep">
+    ${epSection('ep-fsum',     'Summary', null,
+      `${reworkBadge}<p class="ep-desc" style="margin:0 0 12px">${esc(ev.desc)}</p>` + epShotsHtml(ev.shots))}
+    ${epSection('ep-fnotif',   'Notifications', `${ev.notices.length} feature-level`,
+      epNoticesHtml(ev.notices))}
+    ${epSection('ep-ftasks',   'Tasks', `${ev.tasks.length} merged · ${totalFlags} flags`,
+      `<div class="ep-tasks">${taskRows}</div>`)}
+    ${epSection('ep-frefactor','Refactor opportunities', `${ev.refactor.length} found`,
+      epRefactorHtml(ev.refactor, ro))}
+    ${epSection('ep-ftests',   'Tests — full regression', `${ev.tests.pass + ev.tests.skip + ev.tests.fail} cases`,
+      epTestsHtml(ev.tests))}
+    ${epSection('ep-fqa',      'QA — acceptance & journeys', null,
+      featureQaHtml(card))}
+    ${epSection('ep-fmeta',    'Metadata', null,
+      epMetaHtml(ev.meta))}
+  </div>`;
   return reviewLayout(card, main);
 }
 
@@ -997,39 +1206,76 @@ function approveCard(cardId) {
   card.col = 'finalize';
   card.evalReady = false;
   card.changeRequests = [];
-  card.steps = mk(card.kind, 'finalize', { refactor: 'queued', document: 'pending', deploy: 'pending' });
+  card.steps = mk(card.kind, 'finalize', { document: 'pending', deploy: 'pending' });
   state.step = dialogStartIndex(card);
   state.editingCR = null;
   saveCards();
   App.repaintIssue();
 }
 
-/* "Implement changes" → send the card back to the Implement stage with the
-   requested changes consumed. Tasks go back to the Implement column; a feature
-   returns to Define Feature with its task slices re-queued for re-implementation. */
+/* "Implement changes" (task) / "Create tasks" (feature) → act on the requested
+   changes. A task goes back to the Implement column for another pass. A feature
+   does NOT re-implement in place — instead it returns to the Define column's
+   Tasks tab with one new draft task per change request, so the human/AI can
+   shape the rework slices before they ship. The Human Review tab persists as a
+   read-only artifact (review step flips to 'done' rather than being dropped),
+   the prior draft tasks are archived as read-only rounds, and the change
+   requests are consumed into drafts (the sidebar empties). */
 function implementChanges(cardId) {
   const card = cardById(cardId); if (!card) return;
-  card.changeRequests = [];
   card.evalReady = false;
   if (card.kind === 'task-child' || card.kind === 'task-standalone') {
+    // Record the requested changes on the card (shown in the Info tab under
+    // "Changes added later") before consuming them.
+    const reqs = (card.changeRequests || []).map(cr => cr.text).filter(Boolean);
+    if (reqs.length) {
+      card.addedChanges = (card.addedChanges || []).concat(reqs);
+    }
+    card.changeRequests = [];
+    card.qa = [];            // reset acceptance gate — re-checked on re-review
+    card.reworkRound = (card.reworkRound || 0) + 1;
     card.col = 'implement';
-    card.steps = mk(card.kind, 'implement', { plan: 'done', impl: 'queued', airev: 'pending' });
+    // Mutate steps in place so the Human Review tab PERSISTS as a read-only
+    // artifact (a from-scratch mk would drop it). plan done, impl queued for
+    // another pass, airev pending, review → done artifact.
+    const planStep = card.steps.find(s => s.key === 'plan');
+    if (planStep) planStep.status = 'done';
+    const implStep = card.steps.find(s => s.key === 'impl');
+    if (implStep) implStep.status = 'queued';
+    const airevStep = card.steps.find(s => s.key === 'airev');
+    if (airevStep) airevStep.status = 'pending';
+    const reviewStep = card.steps.find(s => s.key === 'review');
+    if (reviewStep) reviewStep.status = 'done';
+    // Stay on the Human Review tab (read-only artifact) rather than jumping to
+    // the AI Review tab, so the user sees the "Implementing changes…" banner.
+    state.step = card.steps.findIndex(s => s.key === 'review');
   } else {
+    // Archive the current draft tasks as a completed round (if any), then seed
+    // the editable list from the change requests — one task per request.
+    const priorDrafts = card.draftTasks && card.draftTasks.length ? card.draftTasks : null;
+    if (priorDrafts) {
+      card.archivedTasks = card.archivedTasks || [];
+      const round = (card.reworkRound || 0) + 1; // the round just completed
+      card.archivedTasks.push({ round, tasks: priorDrafts.map(d => ({ ...d })) });
+    }
+    card.reworkRound = (card.reworkRound || 0) + 1;
+    card.draftTasks = (card.changeRequests || []).map(cr => ({
+      title: cr.text || 'Rework task', desc: '', criteria: [], files: []
+    }));
+    card.changeRequests = [];
+    card.qa = [];            // reset acceptance gate — re-checked on re-review
+    card.implProgress = null; // stale round-1 progress; implementTasks re-sets it
     card.col = 'shape';
-    card.steps = mk('feature', 'shape', { grill: 'done', prd: 'done', tasks: 'ai-working' });
-    childrenOf(card).forEach(c => { const i = CARDS.indexOf(c); if (i !== -1) CARDS.splice(i, 1); });
-    const drafts = card.draftTasks || defaultDraftTasks(card);
-    drafts.forEach((d, idx) => {
-      const id = 'tc' + (++nextCardId);
-      CARDS.push({
-        id, col: 'implement', kind: 'task-child', parent: card.id, title: d.title, desc: d.desc,
-        branch: `${card.branch || 'feat/new'}/card-${idx + 1}`,
-        steps: mk('task-child', 'implement', { plan: 'queued', impl: 'pending', airev: 'pending' })
-      });
-    });
-    card.implProgress = { cur: 1, total: drafts.length };
+    // Mutate steps in place so the Human Review tab PERSISTS (a from-scratch
+    // mk('feature','shape',…) would drop it). tasks → editable, review → done
+    // artifact, grill/prd stay done.
+    const tasksStep = card.steps.find(s => s.key === 'tasks');
+    if (tasksStep) tasksStep.status = 'needs-user';
+    const reviewStep = card.steps.find(s => s.key === 'review');
+    if (reviewStep) reviewStep.status = 'done';
+    // Land on the Tasks tab so the user can edit the rework drafts.
+    state.step = dialogStartIndex(card);
   }
-  state.step = dialogStartIndex(card);
   state.editingCR = null;
   saveCards();
   App.repaintIssue();
@@ -1170,6 +1416,12 @@ function tabHtml(s, idx, cur) {
 }
 
 function infoBody(card) {
+  const added = (card.addedChanges && card.addedChanges.length)
+    ? `<div class="issue-field" style="margin-top:16px">
+        <label class="sec-label">Changes added later</label>
+        <ul class="added-changes">${card.addedChanges.map(t => `<li>${esc(t)}</li>`).join('')}</ul>
+      </div>`
+    : '';
   return `
     <div class="issue-field">
       <label class="sec-label" for="issue-title">Title</label>
@@ -1183,7 +1435,7 @@ function infoBody(card) {
         placeholder="Describe the issue…"
         oninput="autoSaveInfo()"
       >${esc(card.desc || '')}</textarea>
-    </div>`;
+    </div>${added}`;
 }
 
 function dialogFooter(card, i, step) {
@@ -1216,16 +1468,23 @@ function dialogFooter(card, i, step) {
     return `<div class="wizard-foot">${del}<div style="flex:1"></div>
       <button class="btn btn-outline issue-action-btn" onclick="completeTasks('${card.id}')">Simulate AI finished → review</button></div>`;
   }
+  // Human Review tab → Approve / Create tasks / Implement changes (driven by
+  // the sidebar + QA). When the tab is opened as a read-only artifact from
+  // another column (after "Implement changes"/"Create tasks" sent the card
+  // back to its work column), show no action footer — just the delete control.
+  // Checked before the implement-column branch so the artifact view stays read-only.
+  if (step.key === 'review') {
+    if (card.col !== 'review') {
+      return `<div class="wizard-foot">${del}</div>`;
+    }
+    return `<div class="wizard-foot">${del}<div style="flex:1"></div>
+      <span id="review-actions">${reviewActionsInner(card)}</span></div>`;
+  }
   // A task card (child or standalone) mid-Implement → simulate the AI finishing
   // its plan/impl/AI-review and hand it off to Human Review.
   if (card.col === 'implement' && (card.kind === 'task-child' || card.kind === 'task-standalone')) {
     return `<div class="wizard-foot">${del}<div style="flex:1"></div>
       <button class="btn btn-outline issue-action-btn" onclick="completeChildTask('${card.id}')">Simulate AI finished → review</button></div>`;
-  }
-  // Human Review tab → Approve / Implement changes (driven by the sidebar + QA).
-  if (step.key === 'review') {
-    return `<div class="wizard-foot">${del}<div style="flex:1"></div>
-      <span id="review-actions">${reviewActionsInner(card)}</span></div>`;
   }
   return `<div class="wizard-foot">${del}</div>`;
 }
@@ -1441,16 +1700,20 @@ function createTasks() {
   App.repaintIssue();
 }
 
-/* Feature's "Implement" hand-off: spawn child task cards and turn Tasks orange. */
+/* Feature's "Implement" hand-off: spawn child task cards and turn Tasks orange.
+   Rework rounds get a /rework-N-M branch suffix so they don't collide with the
+   original /card-M branch names. */
 function implementTasks(featureId) {
   const card = cardById(featureId);
   if (!card) return;
   const drafts = card.draftTasks || defaultDraftTasks(card);
+  const round = card.reworkRound || 0;
   drafts.forEach((d, idx) => {
     const id = 'tc' + (++nextCardId);
+    const branchSuffix = round > 0 ? `rework-${round}-${idx + 1}` : `card-${idx + 1}`;
     CARDS.push({
       id, col: 'implement', kind: 'task-child', parent: card.id, title: d.title, desc: d.desc,
-      branch: `${card.branch || 'feat/new'}/card-${idx + 1}`,
+      branch: `${card.branch || 'feat/new'}/${branchSuffix}`,
       steps: mk('task-child', 'implement', { plan: 'queued', impl: 'pending', airev: 'pending' })
     });
   });
@@ -1461,7 +1724,10 @@ function implementTasks(featureId) {
   App.repaintIssue();
 }
 
-/* Simulate all children merged → Tasks done → feature auto-advances to review. */
+/* Simulate all children merged → Tasks done → feature auto-advances to review.
+   On a rework re-review the acceptance gate resets (qa emptied) so the human
+   re-checks QA against the freshly merged state; changeRequests are already
+   empty (consumed into tasks when "Create tasks" was clicked). */
 function completeTasks(featureId) {
   const card = cardById(featureId);
   if (!card) return;
@@ -1470,8 +1736,9 @@ function completeTasks(featureId) {
   card.col = 'review';
   card.evalReady = true;
   card.flags = card.flags || 2;
+  card.changeRequests = [];
   card.steps = mk('feature', 'review', { grill: 'done', prd: 'done', tasks: 'done', review: 'needs-user' });
-  card.qa = [true, false, false];
+  card.qa = []; // reset: featureQaHtml re-initialises to all-unchecked on render
   state.step = dialogStartIndex(card);
   saveCards();
   App.repaintIssue();
@@ -1486,8 +1753,9 @@ function completeChildTask(taskId) {
   card.col = 'review';
   card.evalReady = true;
   card.flags = card.flags || 1;
+  card.changeRequests = [];
   card.steps = mk(kind, 'review', { review: 'needs-user' });
-  card.qa = [true, false, false];
+  card.qa = []; // reset: qaListHtml re-initialises to all-unchecked on render
   if (card.parent) {
     const parent = cardById(card.parent);
     if (parent && parent.implProgress) {

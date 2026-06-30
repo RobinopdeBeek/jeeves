@@ -1107,6 +1107,116 @@ body {
   margin-bottom: 12px;
 }
 
+/* ---- Rework: archived prior-round tasks (read-only) ---- */
+.tasks-section-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--muted-foreground);
+  margin: 4px 2px 8px;
+}
+
+/* "Tasks complete" banner — no panel outline, just a celebratory heading. */
+.tasks-complete-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--foreground);
+  padding: 2px 2px 12px;
+}
+.tasks-complete-emoji {
+  font-size: 19px;
+  line-height: 1;
+}
+
+.archived-round {
+  border: 1px dashed color-mix(in oklch, var(--muted-foreground) 30%, transparent);
+  border-radius: var(--radius);
+  margin-bottom: 14px;
+  background: color-mix(in oklch, var(--muted-foreground) 5%, transparent);
+}
+.archived-round[open] .archived-chev { transform: rotate(0deg); }
+.archived-chev {
+  display: inline-block;
+  transform: rotate(-90deg);
+  transition: transform .12s;
+  margin-right: 6px;
+  color: var(--muted-foreground);
+}
+.archived-round-head {
+  list-style: none;
+  cursor: pointer;
+  padding: 9px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  display: flex;
+  align-items: center;
+}
+.archived-round-head::-webkit-details-marker { display: none; }
+.archived-list { padding: 0 12px 12px; }
+
+.archived-card {
+  opacity: .85;
+  background: color-mix(in oklch, var(--muted-foreground) 6%, var(--card));
+  border-style: dashed;
+  cursor: default;
+}
+.archived-card:hover { transform: none; }
+.archived-tag {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: color-mix(in oklch, var(--ok) 75%, black);
+  background: color-mix(in oklch, var(--ok) 14%, transparent);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+/* ---- Read-only evaluation artifact (review tab opened from another column) ---- */
+.review-readonly { max-width: 880px; }
+.review-readonly-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+  background: color-mix(in oklch, var(--muted-foreground) 7%, transparent);
+  border: 1px solid color-mix(in oklch, var(--muted-foreground) 18%, transparent);
+  border-radius: var(--radius);
+  padding: 7px 12px;
+  margin-bottom: 14px;
+}
+
+/* "Changes added later" — read-only record appended to the Info tab. */
+.added-changes {
+  margin: 6px 0 0;
+  padding: 10px 12px 10px 28px;
+  list-style: disc;
+  background: color-mix(in oklch, var(--muted-foreground) 6%, transparent);
+  border: 1px solid color-mix(in oklch, var(--muted-foreground) 16%, transparent);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--foreground);
+}
+.added-changes li { margin: 3px 0; line-height: 1.45; }
+.added-changes li::marker { color: var(--muted-foreground); }
+
+/* Re-review badge shown in the eval Summary when the feature has been reworked. */
+.rework-badge {
+  display: inline-block;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: color-mix(in oklch, var(--user) 78%, black);
+  background: var(--user-soft);
+  border-radius: 999px;
+  padding: 2px 10px;
+  margin-bottom: 10px;
+}
+
 .fab {
   position: absolute;
   right: 16px;
@@ -2096,4 +2206,73 @@ body {
 .ep-meta-grid dd {
   margin: 0;
   font-variant-numeric: tabular-nums;
+}
+
+/* =========================================================================
+   HUMAN REVIEW · FEATURE EVALUATION PLAN (acceptance gate)
+   ========================================================================= */
+.ep-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Merged-child task rows — reuse the board .card look so they're visually
+   identical to cards elsewhere on the board. */
+.ep-task-row {
+  background: var(--card);
+}
+
+.ep-task-row .card-pad {
+  padding: 10px 12px;
+  gap: 4px;
+}
+
+.ep-task-row .card-title {
+  font-size: 13px;
+}
+
+.ep-task-noflag {
+  font-size: 11px;
+}
+
+/* Refactor opportunities (improve-architecture output) */
+.ep-refactor .txt {
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+/* Regression-highlighted test row */
+.ep-test.regress {
+  background: color-mix(in oklch, var(--destructive) 6%, white);
+  margin: 0 -6px;
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+.ep-chip.regress {
+  margin-left: auto;
+  background: color-mix(in oklch, var(--destructive) 15%, white);
+  color: var(--destructive);
+}
+
+/* QA sub-groups: PRD acceptance + E2E journeys under one section */
+.ep-qa-group + .ep-qa-group {
+  margin-top: 14px;
+}
+
+.ep-qa-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--foreground);
+  margin-bottom: 4px;
+}
+
+.ep-qa-label .muted {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11px;
 }

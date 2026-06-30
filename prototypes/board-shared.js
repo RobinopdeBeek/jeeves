@@ -110,11 +110,11 @@ function resetCards() {
 
 /* ---------- data ---------- */
 const COLUMNS = [
-  { id: 'backlog', name: 'Backlog', sub: 'Captured ideas, not started' },
-  { id: 'shape', name: 'Define Feature', sub: 'Features: Grill → PRD → Tasks' },
-  { id: 'implement', name: 'Implement Task', sub: 'Tasks: Plan → Implement → AI Review' },
-  { id: 'review', name: 'Human Review', sub: 'Your call before merge' },
-  { id: 'finalize', name: 'Finalize', sub: 'Document → Deploy' },
+  { id: 'backlog',    name: 'Backlog',         short: 'Backlog',    sub: 'Captured ideas, not started' },
+  { id: 'shape',      name: 'Define Feature',  short: 'Define',     sub: 'Features: Grill → PRD → Tasks' },
+  { id: 'implement',  name: 'Implement Task',  short: 'Implement',  sub: 'Tasks: Plan → Implement → AI Review' },
+  { id: 'review',     name: 'Human Review',    short: 'Review',     sub: 'Your call before merge' },
+  { id: 'finalize',   name: 'Finalize',        short: 'Finalize',   sub: 'Document → Deploy' },
 ];
 
 /* Per-kind pipelines. Every pipeline starts with 'backlog' so the Info tab
@@ -1492,10 +1492,22 @@ function dialogFooter(card, i, step) {
 /* =========================================================================
    BOARD
    ========================================================================= */
+/* Mobile shows one column at a time as a list; the bottom nav switches it.
+   Desktop ignores `state.mobileCol` and renders every column side by side. */
+function mobileActiveCol() {
+  if (!state.mobileCol || !COLUMNS.some(c => c.id === state.mobileCol)) state.mobileCol = 'backlog';
+  return state.mobileCol;
+}
+function selectMobileCol(id) {
+  state.mobileCol = id;
+  if (typeof render === 'function') render();
+}
+
 function renderBoard() {
+  const active = mobileActiveCol();
   const cols = COLUMNS.map(col => {
     const body = (col.id === 'implement' || col.id === 'review') ? groupedColBody(col.id) : simpleColBody(col.id);
-    return `<div class="col">
+    return `<div class="col${col.id === active ? ' mobile-active' : ''}" data-col="${col.id}">
       <div class="col-wrap">
         <div class="col-head">
           <span class="name">${col.name}</span>
@@ -1504,6 +1516,14 @@ function renderBoard() {
         <div class="col-body">${body}</div>
       </div>
     </div>`;
+  }).join('');
+  const nav = COLUMNS.map(col => {
+    const count = cardsInCol(col.id).length;
+    return `<button class="mnav-btn${col.id === active ? ' active' : ''}" type="button"
+      onclick="selectMobileCol('${col.id}')" title="${esc(col.name)}" aria-label="${esc(col.name)}">
+      <span class="mnav-label">${esc(col.short)}</span>
+      <span class="mnav-count">${count}</span>
+    </button>`;
   }).join('');
   return `<div class="topbar">
     <div class="brand"><span class="j">J</span>JEEVES board</div>
@@ -1517,7 +1537,8 @@ function renderBoard() {
     <button class="btn btn-outline btn-sm" onclick="resetCards();render()" title="Restore demo data">Reset</button>
     <button class="btn btn-primary" onclick="addIssue()">+ Add issue</button>
   </div>
-  <div class="scroll"><div class="board">${cols}</div></div>`;
+  <div class="scroll"><div class="board">${cols}</div></div>
+  <nav class="mnav" aria-label="Columns">${nav}</nav>`;
 }
 
 function simpleColBody(colId) {

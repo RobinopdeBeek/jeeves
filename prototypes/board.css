@@ -1739,28 +1739,93 @@ body {
   font-weight: 600;
 }
 
+/* ---------- mobile bottom nav (one column at a time as a list) ---------- */
+.mnav {
+  display: none;
+}
+
 /* ---------- mobile ---------- */
-@media (max-width: 820px) {
+@media (max-width: 767px) {
   .project-picker {
     display: none;
   }
 
+  /* Show only the active column as a full-width vertical list. */
   .board {
     flex-direction: column;
+    padding: 12px 12px 88px;
+    min-width: 0;
   }
 
   .col {
     width: 100%;
     flex: none;
+    display: none;
+  }
+
+  .col.mobile-active {
+    display: flex;
   }
 
   .col-body {
-    flex-direction: row;
-    overflow-x: auto;
+    flex-direction: column;
+    overflow: visible;
   }
 
   .col-body>.card {
-    min-width: 250px;
+    min-width: 0;
+  }
+
+  /* Bottom nav: 5 buttons, one per column. */
+  .mnav {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 30;
+    height: 58px;
+    border-top: 1px solid var(--border);
+    background: var(--background);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .mnav-btn {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    background: none;
+    border: none;
+    color: var(--muted-foreground);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    padding: 6px 2px;
+    transition: color .12s;
+  }
+
+  .mnav-btn.active {
+    color: var(--foreground);
+    font-weight: 600;
+  }
+
+  .mnav-count {
+    min-width: 18px;
+    text-align: center;
+    font-size: 10px;
+    line-height: 14px;
+    border-radius: 999px;
+    padding: 0 6px;
+    background: var(--secondary);
+    color: var(--muted-foreground);
+  }
+
+  .mnav-btn.active .mnav-count {
+    background: var(--primary);
+    color: var(--primary-foreground);
   }
 
   .issue-body-inner {

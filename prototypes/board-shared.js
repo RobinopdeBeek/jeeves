@@ -270,6 +270,8 @@ function cardMeta(card) {
 }
 
 /* ---- Insights modal (replaces the old inline ov-meta line) ---- */
+const INS_FOLDER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>`;
+
 function insightsHtml(card) {
   const done = card.steps.filter(s => s.status === 'done').length;
   const total = card.steps.length;
@@ -282,7 +284,17 @@ function insightsHtml(card) {
     ${row('Progress', `${done} / ${total} steps done`)}
     ${row('Kind', esc(card.kind || '—'))}
   </div>
+  <button class="ins-artifacts-link" type="button" onclick="openArtifactsFolder('${esc(card.id)}')" title="Open this card's artifacts folder">
+    ${INS_FOLDER_SVG}<span>Open artifacts folder</span>
+  </button>
   <div class="ins-foot muted">More insights (tokens by step, run history, diffs) will appear here.</div>`;
+}
+
+/* In production this opens data/cards/<id>/ in Finder/Explorer on the host,
+   or the /artifacts/<id> HTTP listing when accessed remotely (phone/tablet). */
+function openArtifactsFolder(cardId) {
+  alert('PROTOTYPE: opens the artifacts folder for card ' + cardId +
+    ' (Finder/Explorer on the host, or the /artifacts/' + cardId + ' HTTP listing remotely)');
 }
 
 function openInsights(cardId) {

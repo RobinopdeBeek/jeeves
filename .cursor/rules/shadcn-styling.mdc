@@ -1,0 +1,24 @@
+---
+description: shadcn styling philosophy — all styling lives in base components, call sites stay clean
+globs: client/**/*.tsx
+alwaysApply: false
+---
+
+# shadcn Styling Philosophy
+
+Goal: the entire theme must stay swappable via tweakcn/presets. That only works if all styling lives in the base components (`client/components/ui/`), never at call sites.
+
+- **Use default shadcn components as-is for now.** No design polish or visual tweaking until a dedicated design pass later.
+- **Call sites use `className` for layout only** (flex, gap, width, grid placement). Never override colors, typography, radii, or shadows at a call site.
+- **Need a new look for an existing component?** Add a variant to the base component (via `cva`), then use it by name.
+- **Need a new component?** First search the registry with the shadcn MCP / `npx shadcn@latest search`. Only build custom if nothing fits, and build it shadcn-style: in `client/components/ui/`, using `cva` variants, `cn()`, and semantic tokens (`bg-primary`, `text-muted-foreground` — never raw colors like `bg-blue-500`).
+
+```tsx
+// ❌ BAD — styling at the call site
+<Button className="rounded-full bg-blue-600 px-6 text-white">Save</Button>
+
+// ✅ GOOD — add a variant to client/components/ui/button.tsx…
+// variants: { variant: { ..., pill: "rounded-full bg-primary px-6 text-primary-foreground" } }
+// …then use it by name:
+<Button variant="pill">Save</Button>
+```

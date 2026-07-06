@@ -1,4 +1,4 @@
-import { ArrowLeft, Trash2 } from "lucide-react";
+import { IconArrowLeft, IconTrash } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, type Card } from "@/lib/api";
@@ -57,7 +57,7 @@ export function CardView() {
       <div className="flex h-dvh flex-col items-center justify-center gap-4">
         <p className="text-muted-foreground">Card not found.</p>
         <Button variant="outline" onClick={() => navigate("/")}>
-          <ArrowLeft /> Back to board
+          <IconArrowLeft data-icon="inline-start" /> Back to board
         </Button>
       </div>
     );
@@ -69,14 +69,14 @@ export function CardView() {
     <div className="mx-auto flex h-dvh max-w-3xl flex-col">
       <header className="flex items-center gap-2 border-b px-4 py-2.5">
         <Button variant="ghost" size="icon-sm" onClick={() => navigate("/")} title="Back to board">
-          <ArrowLeft />
+          <IconArrowLeft />
         </Button>
         <span className="truncate font-semibold">{card.title || "Untitled"}</span>
         <div className="flex-1" />
         <AlertDialog>
           <AlertDialogTrigger asChild>
             <Button variant="ghost" size="icon-sm" title="Delete card">
-              <Trash2 className="text-destructive" />
+              <IconTrash className="text-destructive" />
             </Button>
           </AlertDialogTrigger>
           <AlertDialogContent>

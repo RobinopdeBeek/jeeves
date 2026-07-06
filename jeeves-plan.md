@@ -53,6 +53,7 @@ Later:  extract client to Cloudflare Pages if needed
 | UI framework | React + Tailwind | Responsive, no overhead |
 | Within-column reorder | `@dnd-kit` | Cards move between columns via pipeline logic, not drag — DnD is only for reordering inside a column (Backlog, draft tasks in Define, etc.) |
 | Base components | shadcn/ui | Card, Badge, Button, Dialog, Sheet, Progress |
+| Icons | Tabler Icons (`@tabler/icons-react`) | Project standard; shadcn `iconLibrary` is `tabler` |
 | Markdown editor | MDXEditor | True WYSIWYG, outputs clean markdown, no format conversion |
 | Execution engine | Sandcastle | Handles worktrees, branches, merging — already solved |
 | Agent | `cursor("composer-2")` | Your subscription, pick and combine models for different tasks, Cursor's codebase intelligence |

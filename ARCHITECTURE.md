@@ -78,6 +78,7 @@ command" — no code changes.
 | UI | React + Tailwind | Responsive web covers laptop, tablet, and phone |
 | Within-column reorder | `@dnd-kit` | Cards move between columns via pipeline logic, not drag — DnD is only for reordering inside a column (Backlog, draft tasks in Define, etc.) |
 | Base components | shadcn/ui | Card, Badge, Button, Dialog, Sheet, Progress |
+| Icons | Tabler Icons (`@tabler/icons-react`) | Project standard; shadcn `iconLibrary` is `tabler` |
 | Markdown editor | MDXEditor | True WYSIWYG that outputs clean markdown |
 | Execution sandbox | Sandcastle | Worktrees, branches, and merging already solved |
 | Agent | `cursor("composer-2")` | Existing subscription + Cursor's codebase intelligence |

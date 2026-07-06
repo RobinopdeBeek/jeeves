@@ -1,4 +1,4 @@
-import { Plus } from "lucide-react";
+import { IconPlus } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, type Card, type ColumnId, type Project } from "@/lib/api";
@@ -41,7 +41,7 @@ export function Board() {
         )}
         <div className="flex-1" />
         <Button onClick={addIssue} size="sm">
-          <Plus /> Add issue
+          <IconPlus data-icon="inline-start" /> Add issue
         </Button>
       </header>
 
@@ -64,7 +64,7 @@ export function Board() {
                 </div>
                 {col.id === "backlog" && (
                   <Button variant="ghost" size="icon-sm" onClick={addIssue} title="Add to backlog">
-                    <Plus />
+                    <IconPlus />
                   </Button>
                 )}
               </div>

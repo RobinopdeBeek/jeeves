@@ -1,0 +1,33 @@
+---
+description: Icon library — always use Tabler Icons via @tabler/icons-react
+globs: client/**/*.tsx
+alwaysApply: false
+---
+
+# Icons (Tabler)
+
+This project uses **Tabler Icons** (`@tabler/icons-react`). Never import from `lucide-react`, `react-icons`, `@heroicons/react`, or other icon libraries.
+
+- **Import from `@tabler/icons-react`.** Tabler names use an `Icon` prefix: `IconPlus`, `IconArrowLeft`, `IconTrash`.
+- **Icons in `Button` use `data-icon`.** `data-icon="inline-start"` (prefix) or `data-icon="inline-end"` (suffix). No `mr-2`, `size-4`, or other sizing/spacing classes on the icon.
+- **Pass icons as component objects, not string keys.** `icon={IconCheck}`, not a string lookup map.
+- **Registry components may ship with Lucide imports.** Swap them to the matching Tabler icon when adding shadcn components.
+
+```tsx
+// ❌ BAD — wrong library
+import { Plus } from "lucide-react";
+
+// ❌ BAD — manual spacing/sizing in a Button
+<Button>
+  <IconPlus className="mr-2 size-4" />
+  Add issue
+</Button>
+
+// ✅ GOOD
+import { IconPlus } from "@tabler/icons-react";
+
+<Button>
+  <IconPlus data-icon="inline-start" />
+  Add issue
+</Button>
+```

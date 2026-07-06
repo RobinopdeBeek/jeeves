@@ -11,6 +11,10 @@ _Avoid_: Issue, ticket
 **Kind**:
 The pipeline family of a card: Feature or Task. Undecided for cards still in Backlog.
 
+**Kind decision**:
+The one-time, irreversible Backlog exit where a card's kind is chosen: "Grill me →" makes it a feature, "Implement now →" makes it a standalone task. Requires a title; a wrong choice is undone by deleting the card, never by reversing the decision.
+_Avoid_: Advance (that's any pipeline transition; this is specifically the first one)
+
 **Feature**:
 A card that is defined collaboratively (Grill → PRD → Tasks), fans out into child tasks, and is reviewed and finalized as a whole.
 

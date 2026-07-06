@@ -18,7 +18,7 @@ export function Board() {
     api.getProject().then(setProject).catch(console.error);
   }, []);
 
-  async function addIssue() {
+  async function addCard() {
     const card = await api.createCard();
     navigate(`/cards/${card.id}`);
   }
@@ -40,8 +40,8 @@ export function Board() {
           </span>
         )}
         <div className="flex-1" />
-        <Button onClick={addIssue} size="sm">
-          <IconPlus data-icon="inline-start" /> Add issue
+        <Button onClick={addCard} size="sm">
+          <IconPlus data-icon="inline-start" /> Add card
         </Button>
       </header>
 
@@ -63,7 +63,7 @@ export function Board() {
                   <div className="text-xs text-muted-foreground">{col.sub}</div>
                 </div>
                 {col.id === "backlog" && (
-                  <Button variant="ghost" size="icon-sm" onClick={addIssue} title="Add to backlog">
+                  <Button variant="ghost" size="icon-sm" onClick={addCard} title="Add to backlog">
                     <IconPlus />
                   </Button>
                 )}

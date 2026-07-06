@@ -26,7 +26,7 @@ export class CardStore {
 
   /**
    * Create an empty card at the bottom of Backlog (prototype UX: "+ Add
-   * issue" inserts immediately, then navigates to the Info view).
+   * card" inserts immediately, then navigates to the Info view).
    */
   createCard(projectId: string): Card {
     const [{ maxPosition }] = this.db

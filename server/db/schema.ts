@@ -1,8 +1,7 @@
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, unique } from "drizzle-orm/sqlite-core";
 
-// Slice-1 schema: only projects + cards, only the columns the walking
-// skeleton uses. Later slices add card_steps, runs, artifacts, ... via
-// migrations (see jeeves-plan.md "Data Model" for the full shape).
+// Drizzle schema — column source of truth. Slice 2 adds card_steps;
+// later slices add runs, artifacts, ... via migrations.
 
 export const projects = sqliteTable("projects", {
   id: text("id").primaryKey(),
@@ -30,5 +29,36 @@ export const cards = sqliteTable("cards", {
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 });
 
+export const cardSteps = sqliteTable(
+  "card_steps",
+  {
+    id: text("id").primaryKey(),
+    cardId: text("card_id")
+      .notNull()
+      .references(() => cards.id, { onDelete: "cascade" }),
+    stepKey: text("step_key", {
+      enum: [
+        "info",
+        "grill",
+        "prd",
+        "tasks",
+        "plan",
+        "impl",
+        "airev",
+        "review",
+        "document",
+        "deploy",
+      ],
+    }).notNull(),
+    status: text("status", {
+      enum: ["pending", "queued", "ai-working", "needs-user", "done"],
+    }).notNull(),
+    startedAt: integer("started_at", { mode: "timestamp_ms" }),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+  },
+  (t) => [unique().on(t.cardId, t.stepKey)],
+);
+
 export type Project = typeof projects.$inferSelect;
 export type Card = typeof cards.$inferSelect;
+export type CardStep = typeof cardSteps.$inferSelect;

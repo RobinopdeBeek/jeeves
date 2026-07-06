@@ -1,5 +1,21 @@
 export type ColumnId = "backlog" | "define" | "implement" | "review" | "finalize";
 
+export type StepStatus =
+  | "pending"
+  | "queued"
+  | "ai-working"
+  | "needs-user"
+  | "done";
+
+export type StepKind = "human" | "ai-chat" | "ai-execution";
+
+export interface CardStep {
+  key: string;
+  status: StepStatus;
+  label: string;
+  stepKind: StepKind;
+}
+
 export interface Card {
   id: string;
   projectId: string;
@@ -10,6 +26,7 @@ export interface Card {
   description: string;
   position: number;
   createdAt: string;
+  steps: CardStep[];
 }
 
 export interface Project {
@@ -17,6 +34,8 @@ export interface Project {
   name: string;
   repoPath: string;
 }
+
+export type KindPath = "feature" | "standalone";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
@@ -36,6 +55,11 @@ export const api = {
     request<Card>(`/api/cards/${id}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
+    }),
+  decideCard: (id: string, path: KindPath) =>
+    request<Card>(`/api/cards/${id}/decide`, {
+      method: "POST",
+      body: JSON.stringify({ path }),
     }),
   deleteCard: (id: string) =>
     request<{ ok: boolean }>(`/api/cards/${id}`, { method: "DELETE" }),

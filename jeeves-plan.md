@@ -1,9 +1,4 @@
-# JEEVES Workflow Board — Implementation Plan (v2)
-
-> **v2 note.** This revision rewrites the plan to match the prototype in `prototypes/`
-> (`board-jeeves.html`, `issue.html`, `board-shared.js`). The prototype is the source of
-> truth for UX flow; the **Data Model** section is the redesigned model (the prototype's
-> data shape is throwaway). Canonical vocabulary lives in [`CONTEXT.md`](./CONTEXT.md).
+# JEEVES Workflow Board — Implementation Plan
 
 ## What We're Building
 
@@ -56,7 +51,7 @@ Later:  extract client to Cloudflare Pages if needed
 | Server | Hono + Node.js | Lightweight, WebSocket native, runtime-agnostic |
 | Database | SQLite via Drizzle | Zero setup, single file, familiar ORM |
 | UI framework | React + Tailwind | Responsive, no overhead |
-| Kanban board | ReUI Kanban | shadcn-compatible, copy-and-own, `@dnd-kit` under the hood |
+| Within-column reorder | `@dnd-kit` | Cards move between columns via pipeline logic, not drag — DnD is only for reordering inside a column (Backlog, draft tasks in Define, etc.) |
 | Base components | shadcn/ui | Card, Badge, Button, Dialog, Sheet, Progress |
 | Markdown editor | MDXEditor | True WYSIWYG, outputs clean markdown, no format conversion |
 | Execution engine | Sandcastle | Handles worktrees, branches, merging — already solved |
@@ -686,11 +681,19 @@ progress state is stored.
 
 ## Project Structure
 
+The app lives at the **repo root** — this repository is jeeves. Planning artifacts
+(`jeeves-plan.md`, `CONTEXT.md`, `prototypes/`, `.agents/`) sit alongside runtime code.
+
 ```
-jeeves-board/
+jeeves/                             # repo root — also the app root
 ├── package.json
 ├── tsconfig.json
 ├── drizzle.config.ts
+├── CONTEXT.md                      # domain glossary
+├── ARCHITECTURE.md
+├── jeeves-plan.md
+├── docs/adr/
+├── prototypes/                     # throwaway HTML reference (not served in production)
 │
 ├── server/
 │   ├── index.ts                    # Hono app entry, serves client + API + WS

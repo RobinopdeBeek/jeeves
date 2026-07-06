@@ -76,7 +76,7 @@ command" — no code changes.
 | Server | Hono + Node.js | Lightweight, WebSocket-native, runtime-agnostic |
 | Database | SQLite via Drizzle (better-sqlite3) | Single-user, zero setup, one file to back up |
 | UI | React + Tailwind | Responsive web covers laptop, tablet, and phone |
-| Kanban board | ReUI Kanban | shadcn-compatible, copy-and-own, `@dnd-kit` underneath |
+| Within-column reorder | `@dnd-kit` | Cards move between columns via pipeline logic, not drag — DnD is only for reordering inside a column (Backlog, draft tasks in Define, etc.) |
 | Base components | shadcn/ui | Card, Badge, Button, Dialog, Sheet, Progress |
 | Markdown editor | MDXEditor | True WYSIWYG that outputs clean markdown |
 | Execution sandbox | Sandcastle | Worktrees, branches, and merging already solved |

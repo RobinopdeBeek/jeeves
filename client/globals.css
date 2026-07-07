@@ -69,6 +69,7 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --font-display: "Cormorant", ui-serif, Georgia, serif;
 }
 
 @layer base {

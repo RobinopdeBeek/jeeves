@@ -7,6 +7,7 @@ import path from "node:path";
 // client/dist, which the Hono server serves as static files.
 export default defineConfig({
   root: "client",
+  publicDir: path.resolve(__dirname, "public"),
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

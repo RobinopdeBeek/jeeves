@@ -16,6 +16,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { Logo } from "./Logo";
 
 /**
  * Full-page card view. Slice 1: only the Info tab (title + description with
@@ -55,6 +56,7 @@ export function CardView() {
   if (missing) {
     return (
       <div className="flex h-dvh flex-col items-center justify-center gap-4">
+        <Logo className="size-12" />
         <p className="text-muted-foreground">Card not found.</p>
         <Button variant="outline" onClick={() => navigate("/")}>
           <IconArrowLeft data-icon="inline-start" /> Back to board

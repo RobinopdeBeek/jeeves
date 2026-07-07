@@ -6,6 +6,8 @@ import { COLUMNS } from "@/lib/columns";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { CardTile } from "./CardTile";
+import { BrandTitle } from "./BrandTitle";
+import { Logo } from "./Logo";
 
 export function Board() {
   const navigate = useNavigate();
@@ -28,11 +30,9 @@ export function Board() {
   return (
     <div className="flex h-dvh flex-col bg-background">
       <header className="flex items-center gap-3 border-b px-4 py-2.5">
-        <div className="flex items-center gap-2 font-semibold">
-          <span className="flex size-6 items-center justify-center rounded bg-primary text-xs font-bold text-primary-foreground">
-            J
-          </span>
-          JEEVES board
+        <div className="flex items-center gap-3">
+          <Logo className="size-12" />
+          <BrandTitle />
         </div>
         {project && (
           <span className="rounded-md border bg-secondary px-2.5 py-1 text-xs font-medium text-secondary-foreground">

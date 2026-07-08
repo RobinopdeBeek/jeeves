@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, type Card, type ColumnId, type Project } from "@/lib/api";
 import { COLUMNS } from "@/lib/columns";
+import { useJeevesEvents } from "@/lib/events";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { CardTile } from "./CardTile";
@@ -19,6 +20,16 @@ export function Board() {
     api.listCards().then(setCards).catch(console.error);
     api.getProject().then(setProject).catch(console.error);
   }, []);
+
+  useJeevesEvents((event) => {
+    if (event.type !== "card.updated") return;
+    setCards((prev) => {
+      const exists = prev.some((c) => c.id === event.card.id);
+      return exists
+        ? prev.map((c) => (c.id === event.card.id ? event.card : c))
+        : [...prev, event.card];
+    });
+  });
 
   async function addCard() {
     const card = await api.createCard();

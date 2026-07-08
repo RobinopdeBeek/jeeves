@@ -2,13 +2,24 @@ import { Hono } from "hono";
 import { CardStoreError, type KindPath } from "../cards/store.js";
 import type { CardStore } from "../cards/store.js";
 import type { Project } from "../db/schema.js";
+import type { ExecutionEngine } from "../execution/engine.js";
+import type { RunStore } from "../execution/run-store.js";
 
 function isKindPath(value: unknown): value is KindPath {
   return value === "feature" || value === "standalone";
 }
 
+export interface CardRouteDeps {
+  engine: ExecutionEngine;
+  runs: RunStore;
+}
+
 /** Thin HTTP adapter over the CardStore seam. */
-export function cardRoutes(store: CardStore, project: Project) {
+export function cardRoutes(
+  store: CardStore,
+  project: Project,
+  deps: CardRouteDeps,
+) {
   const app = new Hono();
 
   app.get("/", (c) => c.json(store.listCards(project.id)));
@@ -33,10 +44,36 @@ export function cardRoutes(store: CardStore, project: Project) {
     }
     try {
       const card = store.decideKind(c.req.param("id"), body.path);
+      // Orchestration lives here, not in CardStore (ADR 0006): the
+      // standalone path leaves Plan queued — hand it to the engine.
+      if (card.steps.some((s) => s.key === "plan" && s.status === "queued")) {
+        deps.engine.enqueue(card.id, "plan");
+      }
       return c.json(card);
     } catch (e) {
       if (e instanceof CardStoreError) {
         return c.json({ error: e.message }, e.status as 400 | 404 | 409);
+      }
+      throw e;
+    }
+  });
+
+  app.get("/:id/runs", (c) => {
+    const card = store.getCard(c.req.param("id"));
+    if (!card) return c.json({ error: "not found" }, 404);
+    return c.json(deps.runs.listForCard(card.id));
+  });
+
+  app.post("/:id/steps/:stepKey/retry", (c) => {
+    const stepKey = c.req.param("stepKey");
+    if (stepKey !== "plan") {
+      return c.json({ error: "only the plan step is retryable in slice 3" }, 400);
+    }
+    try {
+      return c.json(deps.engine.retry(c.req.param("id"), stepKey));
+    } catch (e) {
+      if (e instanceof CardStoreError) {
+        return c.json({ error: e.message }, e.status as 404 | 409);
       }
       throw e;
     }

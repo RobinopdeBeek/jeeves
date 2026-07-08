@@ -143,7 +143,7 @@ them. Everything else (routes, React components) is a thin adapter.
 | `PipelineEngine` | `server/pipelines.ts` | pipeline lookup by `(kind, hasParent)`; `advance(card)` | all column/step transition rules, auto-advance, "workflow is code" |
 | `CardStore` | `server/db/` + card logic | CRUD, kind decision, fan-out, blocker edges, derived queries ("X of Y", queue candidates, Round N history) | SQLite/Drizzle, the unified draft/active/merged model, every derivation rule |
 | `ArtifactStore` | `server/routes/artifacts.ts` + storage logic | `save`, `harvest(worktree)`, `list(card)`, serve-path resolution | folder layout, frontmatter, manifest regeneration, lineage, rounds, supersession |
-| `ExecutionEngine` | `server/execution/` (`queue.ts`, `runner.ts`) | `enqueue(card, step)` + a run-event stream | `AgentRunner` (today: Sandcastle + cursor), worktrees, branch strategy, sequential queue, blocker checks, restart recovery, eval-skill sequencing |
+| `ExecutionEngine` | `server/execution/` (`engine.ts`, `runner.ts`, `sandcastle-runner.ts`, `run-store.ts`, `events.ts`) | `enqueue(card, step)` + a run-event stream | `AgentRunner` (today: Sandcastle + cursor), worktrees, branch strategy, sequential queue, blocker checks, restart recovery, eval-skill sequencing |
 | `AcpBridge` | `server/ws/chat.ts` | `openSession(skillPrompt)` → `UIMessage` stream | spawning `agent acp`, ACP→`UIMessage` projection, permission responses, JSON-RPC piping, disconnect/summary handling |
 
 The AI-execution skill prompts live in `.sandcastle/prompts/` and are self-describing; the

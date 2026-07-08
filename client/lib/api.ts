@@ -38,6 +38,27 @@ export interface Project {
 
 export type KindPath = "feature" | "standalone";
 
+export interface Run {
+  id: string;
+  cardId: string;
+  stepKey: string;
+  round: number;
+  skill: string;
+  status: "running" | "succeeded" | "failed";
+  startedAt: string;
+  finishedAt: string | null;
+  model: string | null;
+  tokensIn: number | null;
+  tokensOut: number | null;
+  cost: number | null;
+  error: string | null;
+  logPath: string | null;
+}
+
+export interface RunWithLog extends Run {
+  log: string;
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     headers: { "Content-Type": "application/json" },
@@ -64,4 +85,10 @@ export const api = {
     }),
   deleteCard: (id: string) =>
     request<{ ok: boolean }>(`/api/cards/${id}`, { method: "DELETE" }),
+  listRuns: (cardId: string) => request<Run[]>(`/api/cards/${cardId}/runs`),
+  getRun: (id: string) => request<RunWithLog>(`/api/runs/${id}`),
+  retryStep: (cardId: string, stepKey: string) =>
+    request<Card>(`/api/cards/${cardId}/steps/${stepKey}/retry`, {
+      method: "POST",
+    }),
 };

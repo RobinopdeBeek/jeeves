@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, type Card, type KindPath } from "@/lib/api";
 import { activeTabKey, visibleSteps } from "@/lib/card-steps";
+import { useJeevesEvents } from "@/lib/events";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -34,6 +35,12 @@ export function CardView() {
       .then(setCard)
       .catch(() => setMissing(true));
   }, [id]);
+
+  useJeevesEvents((event) => {
+    if (event.type === "card.updated" && event.card.id === id) {
+      setCard(event.card);
+    }
+  });
 
   useEffect(() => {
     if (!card || tabOverride === null) return;
@@ -110,7 +117,7 @@ export function CardView() {
       </div>
 
       <main className="flex flex-1 flex-col overflow-hidden p-4">
-        {Panel ? <Panel card={card} onCardChange={setCard} /> : null}
+        {Panel ? <Panel card={card} stepKey={activeKey} onCardChange={setCard} /> : null}
       </main>
 
       <footer className="flex items-center gap-2 border-t px-4 py-3">

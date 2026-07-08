@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, unique } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, unique } from "drizzle-orm/sqlite-core";
 
 // Drizzle schema — column source of truth. Slice 2 adds card_steps;
 // later slices add runs, artifacts, ... via migrations.
@@ -59,6 +59,30 @@ export const cardSteps = sqliteTable(
   (t) => [unique().on(t.cardId, t.stepKey)],
 );
 
+// One row per skill invocation. Failure lives here (`failed`) — the step
+// itself only goes to `needs-user`; the UI distinguishes by latest run status.
+export const runs = sqliteTable("runs", {
+  id: text("id").primaryKey(),
+  cardId: text("card_id")
+    .notNull()
+    .references(() => cards.id, { onDelete: "cascade" }),
+  stepKey: text("step_key").notNull(),
+  round: integer("round").notNull().default(0),
+  skill: text("skill").notNull(),
+  status: text("status", {
+    enum: ["running", "succeeded", "failed"],
+  }).notNull(),
+  startedAt: integer("started_at", { mode: "timestamp_ms" }).notNull(),
+  finishedAt: integer("finished_at", { mode: "timestamp_ms" }),
+  model: text("model"),
+  tokensIn: integer("tokens_in"),
+  tokensOut: integer("tokens_out"),
+  cost: real("cost"),
+  error: text("error"),
+  logPath: text("log_path"),
+});
+
 export type Project = typeof projects.$inferSelect;
 export type Card = typeof cards.$inferSelect;
 export type CardStep = typeof cardSteps.$inferSelect;
+export type Run = typeof runs.$inferSelect;

@@ -147,6 +147,56 @@ export class CardStore {
     return this.getCard(cardId)!;
   }
 
+  /**
+   * Transition a step's status (ExecutionEngine drives this during runs).
+   * Stamps startedAt on entering ai-working and completedAt on done.
+   */
+  setStepStatus(
+    cardId: string,
+    stepKey: StepKey,
+    status: StepStatus,
+  ): CardWithSteps {
+    const patch: Partial<typeof cardSteps.$inferInsert> = { status };
+    if (status === "ai-working") patch.startedAt = new Date();
+    if (status === "done") patch.completedAt = new Date();
+    this.db
+      .update(cardSteps)
+      .set(patch)
+      .where(and(eq(cardSteps.cardId, cardId), eq(cardSteps.stepKey, stepKey)))
+      .run();
+    const card = this.getCard(cardId);
+    if (!card) throw new CardStoreError(404, "card not found");
+    return card;
+  }
+
+  /** Steps waiting for the ExecutionEngine, oldest card first (boot scan). */
+  listQueuedSteps(): Array<{ cardId: string; stepKey: StepKey }> {
+    return this.db
+      .select({
+        cardId: cardSteps.cardId,
+        stepKey: cardSteps.stepKey,
+        createdAt: cards.createdAt,
+      })
+      .from(cardSteps)
+      .innerJoin(cards, eq(cardSteps.cardId, cards.id))
+      .where(eq(cardSteps.status, "queued"))
+      .orderBy(asc(cards.createdAt))
+      .all()
+      .map((r) => ({ cardId: r.cardId, stepKey: r.stepKey as StepKey }));
+  }
+
+  /** Target repo path for a card's project (the agent's cwd). */
+  getRepoPath(cardId: string): string {
+    const row = this.db
+      .select({ repoPath: projects.repoPath })
+      .from(cards)
+      .innerJoin(projects, eq(cards.projectId, projects.id))
+      .where(eq(cards.id, cardId))
+      .get();
+    if (!row) throw new CardStoreError(404, "card not found");
+    return row.repoPath;
+  }
+
   /** Hard delete (slice 1: cleans up abandoned empty cards). */
   deleteCard(id: string): boolean {
     const result = this.db.delete(cards).where(eq(cards.id, id)).run();

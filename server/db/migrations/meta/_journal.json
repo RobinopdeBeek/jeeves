@@ -15,6 +15,20 @@
       "when": 1783349331773,
       "tag": "0001_hesitant_jigsaw",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1783522778148,
+      "tag": "0002_robust_proudstar",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1783524459220,
+      "tag": "0003_mushy_toad",
+      "breakpoints": true
     }
   ]
 }

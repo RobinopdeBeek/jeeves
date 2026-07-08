@@ -22,8 +22,8 @@ Your laptop (always on, lid open)
   ├── Hono server (Node.js, single process)
   │     ├── Serves React board UI (responsive, all devices)
   │     ├── REST API  →  SQLite via Drizzle
-  │     ├── /ws/chat  →  Cursor ACP bridge (AI Chat steps)
-  │     └── Execution queue → Sandcastle + cursor("composer-2")
+  │     ├── /ws/chat  →  AcpBridge → AI SDK UIMessage stream (AI Chat steps)
+  │     └── Execution queue → AgentRunner → Sandcastle + cursor("composer-2")
   ├── Docker Desktop (Sandcastle sandbox requirement)
   ├── Cursor CLI (authenticated, your subscription)
   └── Your repo (Cursor-indexed, warm)
@@ -57,8 +57,42 @@ Later:  extract client to Cloudflare Pages if needed
 | Markdown editor | MDXEditor | True WYSIWYG, outputs clean markdown, no format conversion |
 | Execution engine | Sandcastle | Handles worktrees, branches, merging — already solved |
 | Agent | `cursor("composer-2")` | Your subscription, pick and combine models for different tasks, Cursor's codebase intelligence |
-| AI Chat | Cursor ACP bridge | Interactive sessions with full codebase context |
+| Chat state & streaming | Vercel AI SDK 5 (`ai`, `@ai-sdk/react`) | `useChat`, typed `UIMessage` parts, custom WebSocket transport |
+| Chat UI | assistant-ui (`@assistant-ui/react`, `@assistant-ui/react-ai-sdk`) | Pre-built message list, composer, streaming indicators over AI SDK |
+| AI chat transport | Cursor ACP bridge | Interactive sessions with full codebase context; ACP projected to `UIMessage` server-side |
 | Networking | Tailscale | Private, zero config, works from phone |
+
+> Full rationale and rejected alternatives → [ADR 0008](./docs/adr/0008-ai-sdk-assistant-ui-agent-runner.md)
+
+---
+
+## AI Chat & Agent Execution
+
+All inference runs on the Cursor subscription — no separate provider API keys.
+
+**Chat (AI Chat steps — Grill, PRD side-chat):** Vercel AI SDK 5 provides message state and
+streaming (`useChat`, typed `UIMessage` parts). assistant-ui layers pre-built chat primitives
+(message list, composer, streaming indicators) on top. The real work is in `AcpBridge`: it
+projects ACP JSON-RPC into `UIMessage` parts server-side and streams them over WebSocket via
+a custom `ChatTransport`. ACP vocabulary never reaches the client. Permission requests (ACP
+can ask the user to approve actions mid-stream) become custom message parts with a response
+path back through the transport. Chat transcripts persist as serialized `UIMessage[]` artifacts.
+
+**Execution (AI Execution steps — Plan, Implement, eval pipeline):** `ExecutionEngine` hides
+an `AgentRunner` interface (`run(prompt, options): AsyncIterable<RunEvent>`). Today's
+implementation is Sandcastle + `cursor("composer-2")`. This keeps the door open to swap in
+Vercel AI SDK's experimental `HarnessAgent` later without touching the board, queue, or chat
+UI. Harness streams project into AI SDK types, so the chat layer wouldn't change either.
+
+**Structured skill outputs:** skills that must return parseable data (notably `/to-issues`)
+write JSON to a known worktree path; the runner harvests it and validates with a Zod schema on
+the host, with retry on parse failure. We do not use `generateObject` — that would add a
+second billing path and bypass Cursor's codebase context.
+
+**Explicitly not using:** CopilotKit/AG-UI (generative UI framework), LangChain/Mastra/CrewAI
+(backend orchestration — Cursor is the agent), AI Elements (redundant with assistant-ui),
+Vercel Sandbox/Workflows/AI Gateway (hosted infra), HarnessAgent as primary path until
+Cursor is a supported adapter and the API stabilizes.
 
 ---
 
@@ -366,8 +400,9 @@ notifications                -- inserted at harvest from eval-assemble's sidecar
 ### The unified card model
 
 Draft tasks are **not** a separate entity: the moment `/to-issues` (or the rework breakdown
-skill) drafts a slice, a real `cards` row exists with `status = 'draft'`. Fan-out is a status
-flip to `active`, not a copy. What falls out:
+skill) produces a harvested, Zod-validated JSON sidecar and the runner creates card rows,
+a real `cards` row exists with `status = 'draft'`. Fan-out is a status flip to `active`, not
+a copy. What falls out:
 
 - The Tasks tab renders one list of child cards in three states — draft (editable), active
   (live board cards inline), merged (read-only, grouped by `round`). The prototype's
@@ -415,7 +450,7 @@ there are four classes, and storage follows from the class:
 | **Human/AI prose** | Grill summary, PRD, Plan | Humans + next AI step | Editable, diffable, greppable markdown |
 | **Structured state** | Draft cards + blockers, change requests, rework round, decisions, session meta (tokens/cost) | The UI and the queue | Queryable SQLite rows |
 | **Composite review doc** | Task Evaluation, Feature Evaluation | Human review; linked from other evaluations | Self-contained HTML pinned to a commit SHA |
-| **Media / raw** | Screenshots/GIFs, run logs, ACP transcripts | Occasional human, gallery | Plain files, possibly large |
+| **Media / raw** | Screenshots/GIFs, run logs, chat transcripts (`UIMessage[]`) | Occasional human, gallery | Plain files, possibly large |
 
 ### Storage: SQLite index + artifact folder
 
@@ -483,16 +518,19 @@ juggling, and the VPS migration is "copy the SQLite file + `data/`". Keep the pa
 
 Two production contexts, two flows:
 
-- **Host-produced** (grill summary, PRD, plan): written by the Hono server itself (ACP bridge,
-  MDXEditor save), which writes straight into `data/cards/<id>/<round>/`. Nothing to do.
-- **Sandbox-produced** (eval HTML, screenshots, run logs): generated *inside* the Sandcastle
-  run, whose cwd is the worktree — and in Docker mode the container can only see the worktree,
-  so the agent physically cannot write to the artifact folder. After the run completes, the
-  host-side runner **harvests** the known paths (e.g. `.jeeves/eval.html`,
-  `.jeeves/screenshots/`, `.jeeves/notifications.json` — the sidecar that feeds the
-  `notifications` table) out of the worktree into `data/cards/<id>/<round>/` *before*
-  Sandcastle tears the worktree down. A bind-mount alternative exists but breaks under
-  `noSandbox()` and adds moving parts; the harvest step works identically in both sandbox modes.
+- **Host-produced** (grill summary, PRD, plan, chat transcripts): written by the Hono server
+  itself (ACP bridge, MDXEditor save), which writes straight into `data/cards/<id>/<round>/`.
+  Nothing to do.
+- **Sandbox-produced** (eval HTML, screenshots, run logs, structured JSON sidecars): generated
+  *inside* the Sandcastle run, whose cwd is the worktree — and in Docker mode the container
+  can only see the worktree, so the agent physically cannot write to the artifact folder. After
+  the run completes, the host-side runner **harvests** the known paths (e.g. `.jeeves/eval.html`,
+  `.jeeves/screenshots/`, `.jeeves/notifications.json`, `.jeeves/to-issues.json`) out of the
+  worktree into `data/cards/<id>/<round>/` *before* Sandcastle tears the worktree down.
+  Structured sidecars are Zod-validated on the host before creating database rows (see
+  [ADR 0008](./docs/adr/0008-ai-sdk-assistant-ui-agent-runner.md)). A bind-mount alternative
+  exists but breaks under `noSandbox()` and adds moving parts; the harvest step works
+  identically in both sandbox modes.
 
 ### Serving artifacts
 
@@ -707,10 +745,11 @@ jeeves/                             # repo root — also the app root
 │   │   ├── artifacts.ts            # read/write per-step markdown + serve artifact folder over HTTP
 │   │   └── runs.ts                 # execution run log
 │   ├── ws/
-│   │   └── chat.ts                 # ACP bridge: spawn agent acp, pipe JSON-RPC (Grill, PRD chat)
+│   │   └── chat.ts                 # AcpBridge: ACP → UIMessage projection, WebSocket transport
 │   └── execution/
 │       ├── queue.ts                # sequential in-memory queue + blocked-by/dependency check
-│       └── runner.ts               # Sandcastle invocation, eval pipeline, log streaming
+│       ├── agent-runner.ts         # AgentRunner interface + RunEvent types
+│       └── runner.ts               # Sandcastle AgentRunner impl, eval pipeline, log streaming
 │
 ├── client/
 │   ├── index.html
@@ -720,8 +759,8 @@ jeeves/                             # repo root — also the app root
 │   │   ├── Card.tsx                # title, segmented step progress bar, needs-you border, notification dot
 │   │   ├── CardView.tsx            # full-page card view: step tabs + work area + footer
 │   │   ├── StepInfo.tsx            # Backlog Info tab + Grill-me / Implement-now decision
-│   │   ├── StepGrill.tsx           # streaming chat for the Grill step
-│   │   ├── StepPrd.tsx             # PRD markdown editor + AI side-chat
+│   │   ├── StepGrill.tsx           # assistant-ui chat (useChat + AcpBridge transport)
+│   │   ├── StepPrd.tsx             # PRD markdown editor + AI side-chat (reuses chat stack)
 │   │   ├── StepTasks.tsx           # draft cards list, blocked-by, fan-out, Round N history
 │   │   ├── StepExecution.tsx       # live RunLog + mini eval pipeline progress (Plan/Impl/AIReview)
 │   │   ├── ReviewTask.tsx          # Task Evaluation + Request-changes panel + QA gate
@@ -729,13 +768,13 @@ jeeves/                             # repo root — also the app root
 │   │   └── Evaluation.tsx          # sandboxed iframe of the evaluation HTML + qa-status listener
 │   └── hooks/
 │       ├── useBoard.ts             # cards + column/step state, SSE for live updates
-│       └── useChat.ts              # ACP WebSocket session management
+│       └── useAcpChat.ts           # useChat (@ai-sdk/react) + custom WebSocket ChatTransport
 │
 └── .sandcastle/
     ├── prompts/
     │   ├── grill-with-docs.md
     │   ├── to-prd.md
-    │   ├── to-issues.md             # outputs structured JSON with blocked-by (also drives rework breakdown)
+    │   ├── to-issues.md             # writes structured JSON sidecar (harvested + Zod-validated)
     │   ├── plan-implementation.md
     │   ├── implement-issue.md
     │   ├── eval-summary.md
@@ -775,8 +814,8 @@ modules, not modules of their own.
 | `PipelineEngine` | pipeline lookup by `(kind, hasParent)`; `advance(card)` | all column/step transition rules, auto-advance, "workflow is code" |
 | `CardStore` | CRUD, kind decision, fan-out, blocker edges, derived queries ("X of Y", queue candidates, Round N history) | SQLite/Drizzle, the unified draft/active/merged model, every derivation rule |
 | `ArtifactStore` | `save`, `harvest(worktree)`, `list(card)`, serve-path resolution | folder layout, frontmatter, manifest regeneration, lineage, rounds, supersession |
-| `ExecutionEngine` | `enqueue(card, step)` + a run-event stream | Sandcastle, worktrees, branch strategy, sequential queue, blocker checks, restart recovery, eval-skill sequencing |
-| `AcpBridge` | `openSession(skillPrompt)` → message stream | spawning `agent acp`, JSON-RPC piping, disconnect/summary handling |
+| `ExecutionEngine` | `enqueue(card, step)` + a run-event stream | `AgentRunner` (today: Sandcastle + cursor), worktrees, branch strategy, sequential queue, blocker checks, restart recovery, eval-skill sequencing |
+| `AcpBridge` | `openSession(skillPrompt)` → `UIMessage` stream | spawning `agent acp`, ACP→`UIMessage` projection, permission responses, JSON-RPC piping, disconnect/summary handling |
 
 ### The slice sequence
 
@@ -789,8 +828,8 @@ blocker relationship can be built in parallel or reordered.
 2. **Kind decision moves a card.** Info tab, "Grill me →" / "Implement now →",
    `PipelineEngine` lookup + `advance`. *Demo: a card walks its pipeline's columns.*
    (Blocked by 1.)
-3. **Tracer bullet: one real autonomous run.** `ExecutionEngine` in its thinnest form — a
-   single queued step invokes Sandcastle + `cursor("composer-2")` on a trivial prompt
+3. **Tracer bullet: one real autonomous run.** `ExecutionEngine` in its thinnest form — an
+   `AgentRunner` with a Sandcastle implementation runs a single queued step on a trivial prompt
    ("create hello.txt") in Docker, a `runs` row is written, the log streams live to the card.
    **Resolves the plan's first unknown — Cursor auth in Docker — here, not five slices in.**
    If Docker auth fails, swap to `noSandbox()` (one line). *Demo: watch hello.txt get created
@@ -798,9 +837,12 @@ blocker relationship can be built in parallel or reordered.
 4. **Artifact round-trip.** `ArtifactStore`: a host-written artifact + a harvest out of the
    worktree + served over HTTP + rendered read-only in the card view. *Demo: a run's output
    viewable from the phone.* (Blocked by 3.)
-5. **Grill end-to-end.** `AcpBridge` + streaming chat UI (`StepGrill`) + conversation summary
-   saved as artifact on hand-off. *Demo: a `/grill-with-docs` session from the phone.*
-   (Blocked by 1 only — independent of 3–4, can run in parallel.)
+5. **Grill end-to-end.** Establish the chat stack: `useChat` + assistant-ui over a custom
+   WebSocket `ChatTransport`; `AcpBridge` projects ACP JSON-RPC into AI SDK `UIMessage` parts
+   server-side (including permission-request custom parts). `StepGrill` renders streaming
+   chat; conversation summary saved as a `UIMessage[]` artifact on hand-off. *Demo: a
+   `/grill-with-docs` session from the phone.* (Blocked by 1 only — independent of 3–4, can
+   run in parallel.)
 
    **Grill → PRD hand-off summary prompt:**
 ```
@@ -809,13 +851,15 @@ Include: the problem statement as clarified, key assumptions surfaced,
 constraints identified, open questions remaining, and a readiness assessment.
 This will be used as input to /to-prd.
 ```
-6. **PRD step.** MDXEditor + AI side-chat reusing `AcpBridge`; PRD artifact with the
-   acceptance-criteria checklist. *Demo: author a PRD collaboratively from the tablet.*
-   (Blocked by 5.)
-7. **Fan-out.** `/to-issues` prompt outputs structured JSON (vertical slices + blocked-by);
-   draft cards (real `cards` rows, `status = 'draft'`) with add/delete/edit and blocker
-   edges; "Implement →" flips drafts to `active`; feature shows "Implementing Task X of Y".
-   *Demo: a feature becomes child cards on the board.* (Blocked by 6.)
+6. **PRD step.** MDXEditor + AI side-chat reusing the chat stack from slice 5; PRD artifact
+   with the acceptance-criteria checklist. *Demo: author a PRD collaboratively from the
+   tablet.* (Blocked by 5.)
+7. **Fan-out.** `/to-issues` writes a structured JSON sidecar in the worktree (vertical
+   slices + blocked-by); the runner harvests it and validates with a Zod schema before creating
+   draft cards (retry loop on parse failure). Draft cards (real `cards` rows, `status =
+   'draft'`) with add/delete/edit and blocker edges; "Implement →" flips drafts to `active`;
+   feature shows "Implementing Task X of Y". *Demo: a feature becomes child cards on the
+   board.* (Blocked by 6.)
 8. **Full task pipeline.** Plan → Implement → AI Review sequencing inside `ExecutionEngine`;
    blocker-aware queue rebuilt from `card_steps` on restart; orphaned `running` runs marked
    `failed` at boot; branch strategy onto the feature branch (or `main` for standalone).
@@ -875,7 +919,8 @@ The quality of the entire system depends on these prompts. Prioritise in this or
 1. `/eval-diff-narrative` — hardest to get right, highest value for review speed
 2. `/eval-qa-plan` — must be specific and actionable, not generic
 3. `/thermo-nuclear-review` — already exists in Cursor, wire it in
-4. `/to-issues` — quality here determines whether child cards are truly independent slices
+4. `/to-issues` — quality here determines whether child cards are truly independent slices;
+   output is a harvested JSON sidecar validated with Zod, not free-form markdown to parse
 5. `/eval-assemble` — notification consolidation logic is subtle, test carefully
 6. `/eval-acceptance` — feature-level scoping + refactor opportunities without re-reviewing slices
 
@@ -916,6 +961,11 @@ No architectural consequences either way.
 - Native mobile app (responsive web covers phone and tablet)
 - Custom diff renderer (eval-assemble generates HTML with inline diffs)
 - A `/prototype` step (dropped from the flow)
+- CopilotKit/AG-UI, LangChain/Mastra/CrewAI, AI Elements (see
+  [ADR 0008](./docs/adr/0008-ai-sdk-assistant-ui-agent-runner.md))
+- Direct provider API calls (`generateObject`/`generateText`) — all inference via Cursor
+- HarnessAgent as primary execution path until Cursor adapter exists
+- Vercel Sandbox/Workflows/AI Gateway hosted infra
 
 ---
 

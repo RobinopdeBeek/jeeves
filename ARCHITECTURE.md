@@ -49,12 +49,13 @@ Laptop (always on)
 What crosses each boundary:
 
 - **Browser ⇄ server:** REST for CRUD and transitions, SSE for live board state, WebSocket
-  for streaming AI chat, plain HTTP for artifact files. The evaluation renders in a
-  sandboxed iframe and reports QA progress to the board via `postMessage` — the board never
-  reaches into the iframe.
-- **Server ⇄ ACP agent:** the server spawns `agent acp` per chat session and pipes JSON-RPC.
-  Host-produced artifacts (grill summary, PRD, plan) are written by the server directly into
-  the artifact folder.
+  for streaming AI chat (AI SDK `UIMessage` stream via custom `ChatTransport`), plain HTTP
+  for artifact files. The evaluation renders in a sandboxed iframe and reports QA progress
+  to the board via `postMessage` — the board never reaches into the iframe.
+- **Server ⇄ ACP agent:** the server spawns `agent acp` per chat session, pipes JSON-RPC, and
+  projects events into AI SDK `UIMessage` parts inside `AcpBridge` (including permission
+  requests). Host-produced artifacts (grill summary, PRD, plan, chat transcripts) are written
+  by the server directly into the artifact folder.
 - **Server ⇄ sandbox:** the sandboxed agent can only see its worktree. It has no database
   access — it reads the injected inputs and the per-card `manifest.json`. Sandbox-produced
   artifacts (eval HTML, screenshots, `notifications.json`) are written to known paths inside
@@ -82,7 +83,9 @@ command" — no code changes.
 | Markdown editor | MDXEditor | True WYSIWYG that outputs clean markdown |
 | Execution sandbox | Sandcastle | Worktrees, branches, and merging already solved |
 | Agent | `cursor("composer-2")` | Existing subscription + Cursor's codebase intelligence |
-| AI chat | Cursor ACP bridge | Interactive sessions with full codebase context |
+| Chat state & streaming | Vercel AI SDK 5 (`ai`, `@ai-sdk/react`) | `useChat`, typed `UIMessage` parts, custom transport |
+| Chat UI | assistant-ui (`@assistant-ui/react`, `@assistant-ui/react-ai-sdk`) | Pre-built message list, composer, streaming indicators over AI SDK |
+| AI chat transport | Cursor ACP bridge | Interactive sessions with full codebase context; ACP projected to `UIMessage` server-side |
 | Networking | Tailscale | Private access from any device, zero config |
 
 ### Non-goals
@@ -96,6 +99,36 @@ Deliberately not built (revisit only when the need is real):
 - No workflow editor — pipelines are code
   ([ADR 0002](./docs/adr/0002-workflow-is-code-state-is-data.md))
 - No prototype step in the pipeline
+- No CopilotKit/AG-UI, LangChain/Mastra/CrewAI, or AI Elements — see
+  [ADR 0008](./docs/adr/0008-ai-sdk-assistant-ui-agent-runner.md)
+- No direct provider API calls (`generateObject`/`generateText`) — all inference via Cursor
+- No HarnessAgent as primary execution path until Cursor adapter exists and API stabilizes
+- No Vercel Sandbox/Workflows/AI Gateway hosted infra
+
+---
+
+## AI chat & execution layer
+
+Chat and execution share AI SDK stream types but use different backends today
+([ADR 0008](./docs/adr/0008-ai-sdk-assistant-ui-agent-runner.md)):
+
+```
+Browser                          Server
+  useChat + assistant-ui  ←WS→  AcpBridge  ⇄  agent acp (JSON-RPC)     [AI Chat steps]
+  StepExecution (run log)   ←SSE→ ExecutionEngine → AgentRunner           [AI Execution steps]
+                                                          └── Sandcastle + cursor("composer-2")
+```
+
+- **Chat:** `AcpBridge` owns the ACP→`UIMessage` projection. The client never sees ACP
+  types. Permission requests render as custom message parts; responses flow back through the
+  transport. Transcripts serialize as `UIMessage[]` for artifact persistence and replay.
+- **Execution:** `AgentRunner` (`run(prompt, options): AsyncIterable<RunEvent>`) is the inner
+  seam inside `ExecutionEngine`. Sandcastle is today's implementation; a future HarnessAgent
+  adapter would slot in without changing the board, queue, or chat UI.
+- **Structured skill outputs:** skills that must return parseable data (e.g. `/to-issues`)
+  write JSON to a known worktree path; the runner harvests and validates with Zod on the host,
+  with retry on parse failure — not `generateObject` (which would bypass Cursor context and
+  add a provider billing path).
 
 ---
 
@@ -110,8 +143,8 @@ them. Everything else (routes, React components) is a thin adapter.
 | `PipelineEngine` | `server/pipelines.ts` | pipeline lookup by `(kind, hasParent)`; `advance(card)` | all column/step transition rules, auto-advance, "workflow is code" |
 | `CardStore` | `server/db/` + card logic | CRUD, kind decision, fan-out, blocker edges, derived queries ("X of Y", queue candidates, Round N history) | SQLite/Drizzle, the unified draft/active/merged model, every derivation rule |
 | `ArtifactStore` | `server/routes/artifacts.ts` + storage logic | `save`, `harvest(worktree)`, `list(card)`, serve-path resolution | folder layout, frontmatter, manifest regeneration, lineage, rounds, supersession |
-| `ExecutionEngine` | `server/execution/` (`queue.ts`, `runner.ts`) | `enqueue(card, step)` + a run-event stream | Sandcastle, worktrees, branch strategy, sequential queue, blocker checks, restart recovery, eval-skill sequencing |
-| `AcpBridge` | `server/ws/chat.ts` | `openSession(skillPrompt)` → message stream | spawning `agent acp`, JSON-RPC piping, disconnect/summary handling |
+| `ExecutionEngine` | `server/execution/` (`queue.ts`, `runner.ts`) | `enqueue(card, step)` + a run-event stream | `AgentRunner` (today: Sandcastle + cursor), worktrees, branch strategy, sequential queue, blocker checks, restart recovery, eval-skill sequencing |
+| `AcpBridge` | `server/ws/chat.ts` | `openSession(skillPrompt)` → `UIMessage` stream | spawning `agent acp`, ACP→`UIMessage` projection, permission responses, JSON-RPC piping, disconnect/summary handling |
 
 The AI-execution skill prompts live in `.sandcastle/prompts/` and are self-describing; the
 `ExecutionEngine` decides which skill runs when.

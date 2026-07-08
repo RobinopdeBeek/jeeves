@@ -1,3 +1,54 @@
-node_modules
+# Dependencies
+node_modules/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Local scratch (agent drafts, spike notes)
+.scratch/
+
+# Sandcastle runtime (worktrees/logs are transient; prompts are committed)
+.sandcastle/worktrees/
+
+# Local data (SQLite + WAL sidecars)
 data/
+*.db
+*.db-wal
+*.db-shm
+
+# Build output
 client/dist/
+dist/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Test & coverage
+coverage/
+
+# TypeScript
+*.tsbuildinfo
+
+# Vite
+*.local
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editors (project rules in .cursor/ are committed intentionally)
+.idea/
+*.swp
+*.swo
+*~
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json

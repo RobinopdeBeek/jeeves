@@ -1,0 +1,27 @@
+---
+description: AI chat UI — assistant-ui over useChat, ACP stays server-side
+globs: client/**/*{Chat,Grill,Prd}*
+alwaysApply: false
+---
+
+# AI Chat UI
+
+Full rationale → [ADR 0008](../docs/adr/0008-ai-sdk-assistant-ui-agent-runner.md).
+
+## Stack
+
+- **State & streaming:** `useChat` from `@ai-sdk/react` via `useAcpChat` (custom WebSocket `ChatTransport`).
+- **UI primitives:** `assistant-ui` (`@assistant-ui/react`, `@assistant-ui/react-ai-sdk`) — `Thread`, `Composer`, message parts, streaming indicators.
+- **Do not** hand-roll message lists, composers, or streaming markdown from shadcn primitives (`ScrollArea`, `Card`, etc.).
+- **Do not** use CopilotKit, AI Elements, or raw ACP/JSON-RPC types in client code.
+
+## Seams
+
+- `AcpBridge` (server) owns ACP → `UIMessage` projection. The client only ever sees AI SDK `UIMessage` parts.
+- Step components (`StepGrill`, PRD side-chat) are thin adapters: wire `useAcpChat` into assistant-ui, layout with shadcn shell components around the thread.
+- Custom message parts only for gaps assistant-ui doesn't cover (e.g. ACP permission requests).
+
+## Styling
+
+- The shadcn styling rule still applies to surrounding UI (dialogs, buttons, page layout).
+- For assistant-ui theming, prefer assistant-ui's styling hooks / CSS variables — don't override chat bubble colors at call sites.

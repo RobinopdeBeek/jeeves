@@ -26,8 +26,11 @@ Environment variables (all optional):
 ## Development
 
 ```bash
-npm run dev:server   # Hono API with reload (tsx watch)
-npm run dev          # Vite dev server on :5173, proxies /api to :3000
+npm run dev          # API (:3000) + Vite (:5173) with hot reload
+npm run dev:server   # Hono API only (tsx watch)
+npm run dev:client   # Vite only, proxies /api to :3000
+
+Vite binds `0.0.0.0`, so with `npm run dev` you can open the board from phone/tablet over Tailscale at `<tailscale-ip>:5173`.
 npm test             # Vitest — tests live at the module seams (server/**)
 npm run db:generate  # generate a Drizzle migration after editing server/db/schema.ts
 ```

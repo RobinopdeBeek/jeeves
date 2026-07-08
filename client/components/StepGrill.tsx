@@ -1,9 +1,10 @@
 import { IconPaperclip } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import type { StepPanelProps } from "./step-panel-types";
 
-/** Grill tab layout shell — message area + composer chrome; live AI arrives in slice 5. */
-export function StepGrillShell() {
+/** Grill tab layout — message area + composer chrome; live AI arrives in slice 5. */
+export function StepGrill(_props: StepPanelProps) {
   return (
     <div className="flex flex-1 flex-col overflow-hidden rounded-lg border">
       <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-4">

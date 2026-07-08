@@ -4,7 +4,8 @@
   "description": "A personal workflow board that runs a Matt Pocock-inspired development pipeline visually.",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently -n server,client -c blue,green \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:client": "vite",
     "dev:server": "tsx watch server/index.ts",
     "build": "vite build",
     "start": "tsx server/index.ts",
@@ -36,6 +37,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
+    "concurrently": "^10.0.3",
     "drizzle-kit": "^0.31.10",
     "tailwindcss": "^4.3.2",
     "tsx": "^4.23.0",

@@ -14,6 +14,7 @@ export interface CardStep {
   status: StepStatus;
   label: string;
   stepKind: StepKind;
+  column: ColumnId;
 }
 
 export interface Card {

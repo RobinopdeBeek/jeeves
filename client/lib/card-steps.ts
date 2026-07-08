@@ -1,4 +1,4 @@
-import type { CardStep } from "./api";
+import type { Card, CardStep, ColumnId } from "./api";
 
 /** Work steps = everything except the always-present Info tab. */
 export function workSteps(steps: CardStep[]): CardStep[] {
@@ -6,7 +6,7 @@ export function workSteps(steps: CardStep[]): CardStep[] {
 }
 
 /**
- * Active step priority (issue #3):
+ * Active step priority (issue #1 / #4):
  * needs-user → ai-working → queued → pending → last work step.
  */
 export function activeStep(steps: CardStep[]): CardStep | undefined {
@@ -33,4 +33,25 @@ export function visibleSteps(steps: CardStep[]): CardStep[] {
 
 export function activeTabKey(steps: CardStep[]): string {
   return activeStep(steps)?.key ?? "info";
+}
+
+/** Post-decide cards show pipeline chrome on the board tile. */
+export function showsPipelineChrome(card: Pick<Card, "kind">): boolean {
+  return card.kind !== null;
+}
+
+/** Work steps in the card's current column (segmented bar segments). */
+export function columnWorkSteps(
+  steps: CardStep[],
+  column: ColumnId,
+): CardStep[] {
+  return workSteps(steps).filter((s) => s.column === column);
+}
+
+/** Needs-you border when any work step needs the user or the card is in Review. */
+export function needsUserAttention(card: Pick<Card, "column" | "steps">): boolean {
+  return (
+    workSteps(card.steps).some((s) => s.status === "needs-user") ||
+    card.column === "review"
+  );
 }

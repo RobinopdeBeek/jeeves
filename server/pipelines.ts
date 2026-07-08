@@ -40,6 +40,7 @@ export interface EnrichedStep {
   status: StepStatus;
   label: string;
   stepKind: StepKind;
+  column: ColumnId;
 }
 
 interface StepDef {
@@ -86,7 +87,13 @@ export function getPipeline(kind: CardKind, hasParent: boolean): ColumnId[] {
 
 export function enrichStep(key: StepKey, status: StepStatus): EnrichedStep {
   const def = STEP_DEFS[key];
-  return { key, status, label: def.label, stepKind: def.stepKind };
+  return {
+    key,
+    status,
+    label: def.label,
+    stepKind: def.stepKind,
+    column: def.column,
+  };
 }
 
 /** Step keys for a column, in display order. */

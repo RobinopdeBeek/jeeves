@@ -33,7 +33,13 @@ describe("CardStore", () => {
   it("creates an info step with needs-user on createCard", () => {
     const card = store.createCard(projectId);
     expect(card.steps).toEqual([
-      { key: "info", status: "needs-user", label: "Info", stepKind: "human" },
+      {
+        key: "info",
+        status: "needs-user",
+        label: "Info",
+        stepKind: "human",
+        column: "backlog",
+      },
     ]);
   });
 
@@ -74,7 +80,13 @@ describe("CardStore", () => {
     const fetched = store.getCard(card.id);
     expect(fetched?.id).toBe(card.id);
     expect(fetched?.steps).toEqual([
-      { key: "info", status: "needs-user", label: "Info", stepKind: "human" },
+      {
+        key: "info",
+        status: "needs-user",
+        label: "Info",
+        stepKind: "human",
+        column: "backlog",
+      },
     ]);
     expect(store.getCard("missing")).toBeUndefined();
   });
@@ -95,10 +107,10 @@ describe("CardStore", () => {
       expect(decided.kind).toBe("feature");
       expect(decided.column).toBe("define");
       expect(decided.steps).toEqual([
-        { key: "info", status: "done", label: "Info", stepKind: "human" },
-        { key: "grill", status: "needs-user", label: "Grill", stepKind: "ai-chat" },
-        { key: "prd", status: "pending", label: "PRD", stepKind: "ai-chat" },
-        { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-execution" },
+        { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
+        { key: "grill", status: "needs-user", label: "Grill", stepKind: "ai-chat", column: "define" },
+        { key: "prd", status: "pending", label: "PRD", stepKind: "ai-chat", column: "define" },
+        { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-execution", column: "define" },
       ]);
     });
 
@@ -110,10 +122,10 @@ describe("CardStore", () => {
       expect(decided.kind).toBe("task");
       expect(decided.column).toBe("implement");
       expect(decided.steps).toEqual([
-        { key: "info", status: "done", label: "Info", stepKind: "human" },
-        { key: "plan", status: "queued", label: "Plan", stepKind: "ai-execution" },
-        { key: "impl", status: "pending", label: "Implement", stepKind: "ai-execution" },
-        { key: "airev", status: "pending", label: "AI Review", stepKind: "ai-execution" },
+        { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
+        { key: "plan", status: "queued", label: "Plan", stepKind: "ai-execution", column: "implement" },
+        { key: "impl", status: "pending", label: "Implement", stepKind: "ai-execution", column: "implement" },
+        { key: "airev", status: "pending", label: "AI Review", stepKind: "ai-execution", column: "implement" },
       ]);
       // queued is persisted only — ExecutionEngine arrives in slice 3
       const rows = db.select().from(cardSteps).where(eq(cardSteps.cardId, card.id)).all();
@@ -154,10 +166,10 @@ describe("CardStore", () => {
     const listed = store.listCards(projectId);
     const found = listed.find((c) => c.id === card.id);
     expect(found?.steps).toEqual([
-      { key: "info", status: "done", label: "Info", stepKind: "human" },
-      { key: "grill", status: "needs-user", label: "Grill", stepKind: "ai-chat" },
-      { key: "prd", status: "pending", label: "PRD", stepKind: "ai-chat" },
-      { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-execution" },
+      { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
+      { key: "grill", status: "needs-user", label: "Grill", stepKind: "ai-chat", column: "define" },
+      { key: "prd", status: "pending", label: "PRD", stepKind: "ai-chat", column: "define" },
+      { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-execution", column: "define" },
     ]);
   });
 });

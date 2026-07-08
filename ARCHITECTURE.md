@@ -39,7 +39,7 @@ Laptop (always on)
 │                          │
 │                          ├── Docker container (or noSandbox on host)
 │                          ├── git worktree of the target repo  ← agent's cwd & whole world
-│                          └── cursor("composer-2") via Cursor CLI auth
+│                          └── cursor("composer-2.5") via Cursor CLI auth
 │
 ├── SQLite file  +  artifact folder (data/cards/<cardId>/<round>/)
 ├── Target repo(s) — the projects jeeves works on; stay git-clean, no artifacts committed
@@ -82,7 +82,7 @@ command" — no code changes.
 | Icons | Tabler Icons (`@tabler/icons-react`) | Project standard; shadcn `iconLibrary` is `tabler` |
 | Markdown editor | MDXEditor | True WYSIWYG that outputs clean markdown |
 | Execution sandbox | Sandcastle | Worktrees, branches, and merging already solved |
-| Agent | `cursor("composer-2")` | Existing subscription + Cursor's codebase intelligence |
+| Agent | `cursor("composer-2.5")` | Existing subscription + Cursor's codebase intelligence |
 | Chat state & streaming | Vercel AI SDK 5 (`ai`, `@ai-sdk/react`) | `useChat`, typed `UIMessage` parts, custom transport |
 | Chat UI | assistant-ui (`@assistant-ui/react`, `@assistant-ui/react-ai-sdk`) | Pre-built message list, composer, streaming indicators over AI SDK |
 | AI chat transport | Cursor ACP bridge | Interactive sessions with full codebase context; ACP projected to `UIMessage` server-side |
@@ -116,7 +116,7 @@ Chat and execution share AI SDK stream types but use different backends today
 Browser                          Server
   useChat + assistant-ui  ←WS→  AcpBridge  ⇄  agent acp (JSON-RPC)     [AI Chat steps]
   StepExecution (run log)   ←SSE→ ExecutionEngine → AgentRunner           [AI Execution steps]
-                                                          └── Sandcastle + cursor("composer-2")
+                                                          └── Sandcastle + cursor("composer-2.5")
 ```
 
 - **Chat:** `AcpBridge` owns the ACP→`UIMessage` projection. The client never sees ACP

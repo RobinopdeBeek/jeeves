@@ -23,7 +23,7 @@ Your laptop (always on, lid open)
   │     ├── Serves React board UI (responsive, all devices)
   │     ├── REST API  →  SQLite via Drizzle
   │     ├── /ws/chat  →  AcpBridge → AI SDK UIMessage stream (AI Chat steps)
-  │     └── Execution queue → AgentRunner → Sandcastle + cursor("composer-2")
+  │     └── Execution queue → AgentRunner → Sandcastle + cursor("composer-2.5")
   ├── Docker Desktop (Sandcastle sandbox requirement)
   ├── Cursor CLI (authenticated, your subscription)
   └── Your repo (Cursor-indexed, warm)
@@ -56,7 +56,7 @@ Later:  extract client to Cloudflare Pages if needed
 | Icons | Tabler Icons (`@tabler/icons-react`) | Project standard; shadcn `iconLibrary` is `tabler` |
 | Markdown editor | MDXEditor | True WYSIWYG, outputs clean markdown, no format conversion |
 | Execution engine | Sandcastle | Handles worktrees, branches, merging — already solved |
-| Agent | `cursor("composer-2")` | Your subscription, pick and combine models for different tasks, Cursor's codebase intelligence |
+| Agent | `cursor("composer-2.5")` | Your subscription, pick and combine models for different tasks, Cursor's codebase intelligence |
 | Chat state & streaming | Vercel AI SDK 5 (`ai`, `@ai-sdk/react`) | `useChat`, typed `UIMessage` parts, custom WebSocket transport |
 | Chat UI | assistant-ui (`@assistant-ui/react`, `@assistant-ui/react-ai-sdk`) | Pre-built message list, composer, streaming indicators over AI SDK |
 | AI chat transport | Cursor ACP bridge | Interactive sessions with full codebase context; ACP projected to `UIMessage` server-side |
@@ -80,7 +80,7 @@ path back through the transport. Chat transcripts persist as serialized `UIMessa
 
 **Execution (AI Execution steps — Plan, Implement, eval pipeline):** `ExecutionEngine` hides
 an `AgentRunner` interface (`run(prompt, options): AsyncIterable<RunEvent>`). Today's
-implementation is Sandcastle + `cursor("composer-2")`. This keeps the door open to swap in
+implementation is Sandcastle + `cursor("composer-2.5")`. This keeps the door open to swap in
 Vercel AI SDK's experimental `HarnessAgent` later without touching the board, queue, or chat
 UI. Harness streams project into AI SDK types, so the chat layer wouldn't change either.
 
@@ -936,7 +936,7 @@ trusting it to run automatically.
 
 ```bash
 npx @ai-hero/sandcastle init   # choose cursor, docker
-# edit .sandcastle/main.ts to use cursor("composer-2")
+# edit .sandcastle/main.ts to use cursor("composer-2.5")
 npx tsx .sandcastle/main.ts    # run on trivial task
 ```
 

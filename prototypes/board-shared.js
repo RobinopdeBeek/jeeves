@@ -266,7 +266,7 @@ function segBar(card) {
 function cardMeta(card) {
   return `<div class="ov-meta">
     ${card.branch ? `<span>⎇ ${card.branch}</span>` : '<span>no branch yet</span>'}
-    <span>tokens 184k</span><span>cost $2.41</span><span>composer-2</span></div>`;
+    <span>tokens 184k</span><span>cost $2.41</span><span>composer-2.5</span></div>`;
 }
 
 /* ---- Insights modal (replaces the old inline ov-meta line) ---- */
@@ -278,7 +278,7 @@ function insightsHtml(card) {
   const row = (label, val) => `<div class="ins-row"><span class="ins-k">${label}</span><span class="ins-v">${val}</span></div>`;
   return `<div class="ins-body">
     ${row('Branch', card.branch ? `⎇ ${esc(card.branch)}` : '<span class="muted">no branch yet</span>')}
-    ${row('Model', 'composer-2')}
+    ${row('Model', 'composer-2.5')}
     ${row('Tokens', '184k')}
     ${row('Cost', '$2.41')}
     ${row('Progress', `${done} / ${total} steps done`)}
@@ -382,7 +382,7 @@ Track consecutive-day workout streaks and surface them in the product.
   if (T === 'plan') return `<div class="panel doc"><h4>Implementation plan</h4><ul><li>Add <code>GET /api/streaks/:userId</code></li><li>Pure <code>computeStreak()</code> in domain layer</li><li>Unit tests for tz boundaries</li></ul></div>`;
   if (T === 'impl') return `<div class="runlog">
       <div class="t">[12:04:01] worktree ${esc(card.branch)} ready</div>
-      <div class="ok">[12:04:03] ✓ cursor("composer-2") session started</div>
+      <div class="ok">[12:04:03] ✓ cursor("composer-2.5") session started</div>
       <div>[12:04:31] writing domain/streak.ts</div>
       <div class="warn">[12:05:02] ⚠ adding date-fns-tz for DST handling</div>
       <div>[12:05:58] running vitest …</div>

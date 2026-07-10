@@ -80,9 +80,11 @@ path back through the transport. Chat transcripts persist as serialized `UIMessa
 
 **Execution (AI Execution steps — Plan, Implement, eval pipeline):** `ExecutionEngine` hides
 an `AgentRunner` interface (`run(prompt, options): AsyncIterable<RunEvent>`). Today's
-implementation is Sandcastle + `cursor("composer-2.5")`. This keeps the door open to swap in
-Vercel AI SDK's experimental `HarnessAgent` later without touching the board, queue, or chat
-UI. Harness streams project into AI SDK types, so the chat layer wouldn't change either.
+implementation is Sandcastle + `cursor("composer-2.5")` inside the **Docker** sandbox
+(`@ai-hero/sandcastle/sandboxes/docker`) — a build-time choice from the slice 3 spike gate, not
+a runtime fallback. This keeps the door open to swap in Vercel AI SDK's experimental
+`HarnessAgent` later without touching the board, queue, or chat UI. Harness streams project into
+AI SDK types, so the chat layer wouldn't change either.
 
 **Structured skill outputs:** skills that must return parseable data (notably `/to-issues`)
 write JSON to a known worktree path; the runner harvests it and validates with a Zod schema on
@@ -828,12 +830,13 @@ blocker relationship can be built in parallel or reordered.
 2. **Kind decision moves a card.** Info tab, "Grill me →" / "Implement now →",
    `PipelineEngine` lookup + `advance`. *Demo: a card walks its pipeline's columns.*
    (Blocked by 1.)
-3. **Tracer bullet: one real autonomous run.** `ExecutionEngine` in its thinnest form — an
-   `AgentRunner` with a Sandcastle implementation runs a single queued step on a trivial prompt
-   ("create hello.txt") in Docker, a `runs` row is written, the log streams live to the card.
-   **Resolves the plan's first unknown — Cursor auth in Docker — here, not five slices in.**
-   If Docker auth fails, swap to `noSandbox()` (one line). *Demo: watch hello.txt get created
-   from the board.* (Blocked by 2.)
+3. **Tracer bullet: one real autonomous run.** *(Done — issue #6.)* `ExecutionEngine` in its
+   thinnest form — `SandcastleAgentRunner` (`docker()` + `cursor("composer-2.5")`) runs a
+   single queued Plan step on the tracer prompt (`slice-3-tracer`: create + commit `hello.txt`
+   in an isolated branch worktree), a `runs` row is written, the log streams live over SSE.
+   **First unknown resolved:** Cursor auth in Docker works on this host. Shipped Docker only —
+   no `noSandbox()` fallback in the runner. *Demo: Implement now →, watch Plan go
+   ai-working → done from the board.* (Blocked by 2.)
 4. **Artifact round-trip.** `ArtifactStore`: a host-written artifact + a harvest out of the
    worktree + served over HTTP + rendered read-only in the card view. *Demo: a run's output
    viewable from the phone.* (Blocked by 3.)
@@ -930,25 +933,30 @@ trusting it to run automatically.
 
 ---
 
-## First Unknown to Resolve
+## Resolved: Cursor auth in Docker (slice 3)
 
-**Cursor auth in Docker (slice 3 of the [Build Order](#build-order)):**
+**Decision:** ship **Docker only** in `SandcastleAgentRunner` — no runtime fallback to
+`noSandbox()` or WSL. The spike was a one-time gate, not a built-in alternate path.
+
+**Verified on this host (slice 3 spike + jeeves E2E):**
+
+- `@ai-hero/sandcastle@0.12.0` + `docker()` + `cursor("composer-2.5")` with `CURSOR_API_KEY`
+- Explicit `branchStrategy: { type: "branch", branch: "…" }` — never Docker's default `head`
+  (bind-mount would write to the host working tree)
+- Tracer creates + commits `hello.txt`; Sandcastle removes the clean worktree; jeeves deletes
+  the leftover branch
+- Full path through `ExecutionEngine`: decide → enqueue → Plan `ai-working` → `done`, run log
+  over SSE
+
+**One-time setup on a fresh machine:**
 
 ```bash
-npx @ai-hero/sandcastle init   # choose cursor, docker
-# edit .sandcastle/main.ts to use cursor("composer-2.5")
-npx tsx .sandcastle/main.ts    # run on trivial task
+# Sandcastle scaffold is in .sandcastle/ (Dockerfile committed)
+npx @ai-hero/sandcastle docker build-image   # produces sandcastle:jeeves
+# CURSOR_API_KEY in repo-root .env (server loads it) or .sandcastle/.env
 ```
 
-If it works: done. If Docker auth fails:
-
-```typescript
-// runner.ts — one line change
-import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox"
-sandbox: noSandbox()   // runs directly on host, no container
-```
-
-No architectural consequences either way.
+Re-run the manual spike any time: `npx tsx .scratch/spike-hello.ts`
 
 ---
 
@@ -973,7 +981,9 @@ No architectural consequences either way.
 
 1. **Data model redesign** — *resolved:* see [Data Model](#data-model); vocabulary in
    [`CONTEXT.md`](./CONTEXT.md)
-2. **Cursor Docker auth** — resolved in Build Order slice 3, fallback is clear
+2. **Cursor Docker auth** — *resolved:* Docker is the shipped sandbox provider (slice 3 spike
+   gate passed). `SandcastleAgentRunner` imports `@ai-hero/sandcastle/sandboxes/docker` only.
+   Requires Docker Desktop + `sandcastle:jeeves` image + `CURSOR_API_KEY`.
 3. **Parallel child card execution** — add concurrency to queue once sequential is proven
 4. **Playwright screenshot capture** — needs dev server running in worktree; may need a
    port-allocation strategy if multiple cards run in parallel later

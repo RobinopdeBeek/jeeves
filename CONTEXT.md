@@ -83,14 +83,17 @@ The runner copying sandbox-produced artifacts out of the worktree into the artif
 Activating a feature's draft tasks into child cards on the board.
 
 **QA gate**:
-The Approve-button gating driven by the evaluation's QA checklist. Checkbox state is ephemeral (browser-local); only the decision's QA-complete snapshot persists.
+The Approve-button gating driven by the evaluation's QA checklist. Checkbox state is ephemeral in the parent board's browser-local storage and synchronized with the sandboxed evaluation by validated messages; only the decision's QA-complete snapshot persists.
+
+**Preview**:
+A temporary Docker-isolated development server for manually testing a card in Human Review at the evaluation's exact Git SHA. One preview is lazy-retained at a time; its worktree and container are removed on Stop or review exit. Launch policy belongs to the project in Jeeves, never to the reviewed branch.
 
 **Blocker**:
 A card that must merge before another may start. Stored as card-to-card edges.
 _Avoid_: Dependency (ambiguous with package dependencies)
 
 **Project**:
-A target repository jeeves works on. Every card belongs to exactly one project.
+A target repository jeeves works on. Every card belongs to exactly one project. The project owns its explicit local default branch and trusted preview configuration.
 
 **Manifest**:
 The per-card `manifest.json` in the artifact folder — a regenerable projection of the database index that sandboxed agents read instead of the database.

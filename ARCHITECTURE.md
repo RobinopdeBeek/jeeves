@@ -35,10 +35,11 @@ Laptop (always on)
 │     ├── HTTP        → React board UI + REST API + SSE board updates
 │     ├── /artifacts  → serves the artifact folder (eval iframe, screenshots)
 │     ├── /ws/chat    → AcpBridge ⇄ `agent acp` subprocess (JSON-RPC)   [AI Chat steps]
-│     └── queue       → ExecutionEngine → Sandcastle run                [AI Execution steps]
+│     ├── queue       → ExecutionEngine → Sandcastle run                [AI Execution steps]
+│     └── preview     → ExecutionEngine → Docker preview                 [Human Review testing]
 │                          │
-│                          ├── Docker container (or noSandbox on host)
-│                          ├── git worktree of the target repo  ← agent's cwd & whole world
+│                          ├── Docker container
+│                          ├── fresh per-run git worktree of the target repo
 │                          └── cursor("composer-2.5") via Cursor CLI auth
 │
 ├── SQLite file  +  artifact folder (data/cards/<cardId>/<round>/)
@@ -48,22 +49,26 @@ Laptop (always on)
 
 What crosses each boundary:
 
-- **Browser ⇄ server:** REST for CRUD and transitions, SSE for live board state, WebSocket
-  for streaming AI chat (AI SDK `UIMessage` stream via custom `ChatTransport`), plain HTTP
-  for artifact files. The evaluation renders in a sandboxed iframe and reports QA progress
-  to the board via `postMessage` — the board never reaches into the iframe.
+- **Browser ⇄ server:** REST for CRUD, transitions, and preview lifecycle; SSE for live board
+  state; WebSocket for streaming AI chat; plain HTTP for root-confined artifact files. The
+  evaluation renders in an opaque-origin `sandbox="allow-scripts"` iframe. The parent owns
+  browser-local QA state and synchronizes it through source-validated `postMessage`.
 - **Server ⇄ ACP agent:** the server spawns `agent acp` per chat session, pipes JSON-RPC, and
   projects events into AI SDK `UIMessage` parts inside `AcpBridge` (including permission
-  requests). Host-produced artifacts (grill summary, PRD, plan, chat transcripts) are written
+  requests). Host-produced artifacts (grill summary, PRD, chat transcripts) are written
   by the server directly into the artifact folder.
 - **Server ⇄ sandbox:** the sandboxed agent can only see its worktree. It has no database
   access — it reads the injected inputs and the per-card `manifest.json`. Sandbox-produced
-  artifacts (eval HTML, screenshots, `notifications.json`) are written to known paths inside
-  the worktree and **harvested** out by the runner before worktree teardown. This harvest
-  works identically under Docker and `noSandbox()`.
-- **Sandbox ⇄ target repo:** Sandcastle manages worktrees and branches. Features branch off
-  `main`; child tasks branch off the feature branch and merge back into it; standalone tasks
-  branch off `main` and PR at Finalize.
+  artifacts (Plan, eval HTML, screenshots, structured sidecars) are written to known exchange
+  paths. A generic finalization callback harvests and validates them before teardown; failure
+  preserves diagnostics.
+- **Sandbox ⇄ target repo:** each run gets a fresh worktree on one durable card branch. Features
+  and standalone tasks branch from the project's explicit local default ref; child tasks branch
+  from their feature branch. Every base is resolved and recorded by SHA—never inferred from the
+  host checkout or updated from remote implicitly.
+- **Preview ⇄ target repo:** Human Review testing recreates the exact evaluated `git_sha` and
+  runs Jeeves-owned project commands in a Docker preview container with an environment allowlist,
+  readiness check, published port, and one lazy-retained slot.
 
 Migration path: moving to a VPS is "copy the SQLite file + `data/` and run the same
 command" — no code changes.
@@ -123,8 +128,10 @@ Browser                          Server
   types. Permission requests render as custom message parts; responses flow back through the
   transport. Transcripts serialize as `UIMessage[]` for artifact persistence and replay.
 - **Execution:** `AgentRunner` (`run(prompt, options): AsyncIterable<RunEvent>`) is the inner
-  seam inside `ExecutionEngine`. Sandcastle is today's implementation; a future HarnessAgent
-  adapter would slot in without changing the board, queue, or chat UI.
+  seam inside `ExecutionEngine`. One call owns one temporary worktree and invokes a generic
+  finalization callback before cleanup so `ExecutionEngine` can harvest and enforce the Plan,
+  Implement, or AI Review postcondition. Sandcastle is today's implementation; a future
+  HarnessAgent adapter would slot in without changing the board, queue, or chat UI.
 - **Structured skill outputs:** skills that must return parseable data (e.g. `/to-issues`)
   write JSON to a known worktree path; the runner harvests and validates with Zod on the host,
   with retry on parse failure — not `generateObject` (which would bypass Cursor context and
@@ -142,8 +149,8 @@ them. Everything else (routes, React components) is a thin adapter.
 |---|---|---|---|
 | `PipelineEngine` | `server/pipelines.ts` | pipeline lookup by `(kind, hasParent)`; `advance(card)` | all column/step transition rules, auto-advance, "workflow is code" |
 | `CardStore` | `server/db/` + card logic | CRUD, kind decision, fan-out, blocker edges, derived queries ("X of Y", queue candidates, Round N history) | SQLite/Drizzle, the unified draft/active/merged model, every derivation rule |
-| `ArtifactStore` | `server/routes/artifacts.ts` + storage logic | `save`, `harvest(worktree)`, `list(card)`, serve-path resolution | folder layout, frontmatter, manifest regeneration, lineage, rounds, supersession |
-| `ExecutionEngine` | `server/execution/` (`engine.ts`, `runner.ts`, `sandcastle-runner.ts`, `run-store.ts`, `events.ts`) | `enqueue(card, step)` + a run-event stream | `AgentRunner` (today: Sandcastle + cursor), worktrees, branch strategy, sequential queue, blocker checks, restart recovery, eval-skill sequencing |
+| `ArtifactStore` | `server/routes/artifacts.ts` + storage logic | `save`, `harvest(worktree, declarations)`, `list(card)`, serve-path resolution | atomic/versioned files, metadata, root containment, manifest regeneration, lineage, rounds, supersession |
+| `ExecutionEngine` | `server/execution/` (`engine.ts`, `runner.ts`, `sandcastle-runner.ts`, `run-store.ts`, `events.ts`) | `enqueue(card, step)` + run events; `startPreview(card, gitSha)` / `stopPreview()` | `AgentRunner`, per-run worktrees/finalization, branch strategy, Docker preview lifecycle, sequential queue, blockers, restart recovery, eval sequencing |
 | `AcpBridge` | `server/ws/chat.ts` | `openSession(skillPrompt)` → `UIMessage` stream | spawning `agent acp`, ACP→`UIMessage` projection, permission responses, JSON-RPC piping, disconnect/summary handling |
 
 The AI-execution skill prompts live in `.sandcastle/prompts/` and are self-describing; the
@@ -156,7 +163,8 @@ The AI-execution skill prompts live in `.sandcastle/prompts/` and are self-descr
 Entity definitions live in [`CONTEXT.md`](./CONTEXT.md); columns live in
 `server/db/schema.ts`. What belongs here is how the entities relate.
 
-- A **project** (a target repository) has many **cards**.
+- A **project** (a target repository) has many **cards** and owns its explicit local default
+  branch plus validated preview configuration; reviewed branches cannot alter launch policy.
 - A **card** is the one entity for features, tasks, *and* drafts. A card with a
   `parent_card_id` is a child task of that feature; blocked-by relationships are
   card-to-card edges (`card_blockers`).
@@ -183,8 +191,9 @@ Column-level only; step mechanics live in `server/pipelines.ts` and the skill pr
    feature is broken into draft tasks with blocked-by edges.
 3. **Fan-out**: the drafts activate as child task cards on the board.
 4. Each child task runs **Implement Task** (Plan → Implement → AI Review) autonomously,
-   then waits in **Human Review** with its Task Evaluation; on approval it merges into the
-   feature branch and leaves the board.
+   then waits in **Human Review** with its Task Evaluation. Blocked tasks wait for blocker
+   merge; independent tasks may wait concurrently. Approval validates a temporary merge and
+   integration check against the current feature tip before merging and leaving the board.
 5. When all children are merged, the feature auto-advances to **Human Review** with its
    Feature Evaluation.
 6. On approval, **Finalize** runs Document and Deploy, opening a PR from the feature branch

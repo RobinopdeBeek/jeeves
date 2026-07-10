@@ -290,6 +290,49 @@ slice is reviewed against the cumulative state of its predecessors (slices merge
 The feature-level acceptance eval runs on the feature branch after all slices are merged, in the
 Human Review column, just before Finalize.
 
+### Worktree lifecycle: branches are durable, worktrees are ephemeral
+
+> Full rationale → [ADR 0009](./docs/adr/0009-branches-durable-worktrees-ephemeral.md).
+
+The **branch** is durable (it persists until merge); each run's **worktree** is disposable.
+Consequences that shape the code:
+
+- **One branch per task, one fresh worktree per run.** Plan → Implement → AI Review are separate
+  runs on `jeeves/card-<id>`, never per-step branches. Plan is harvested and injected into
+  Implement; Implement commits source changes; AI Review reads that commit. No legitimate state
+  lives only in a worktree, so every run closes its worktree and a restart simply recreates it.
+- `AgentRunner.run()` invokes an `ExecutionEngine` finalization callback after the agent exits
+  but before cleanup. The callback harvests required outputs and enforces the step contract:
+  Plan requires an artifact and no source changes; Implement requires commits and a clean tree;
+  AI Review requires artifacts and forbids source changes. Failure preserves diagnostics; Retry
+  captures the failed diff, discards the contaminated tree, and recreates from the pre-run SHA.
+- **Branch bases are explicit.** Projects configure a local `default_branch`; feature and
+  standalone branches record its resolved SHA, while child branches record the parent feature
+  branch SHA. Jeeves never uses the host checkout and never fetches or updates refs implicitly.
+
+Explicitly blocked child tasks wait for blocker merge. Independent tasks may reach Human Review
+concurrently; approval first tests a temporary merge against the feature branch's current tip.
+Conflict or integration failure returns the task for rework instead of merging. The Feature
+Evaluation remains the final assembled integration gate.
+
+### Testing a card in Human Review
+
+Cards waiting in Human Review are tested at the evaluation's exact `git_sha`, never an assumed
+branch tip:
+
+- The evaluation HTML sends a validated **Start Server** request to its parent; the parent binds
+  it to the displayed card and calls `POST /api/cards/:id/dev-server`.
+- The preview manager recreates a worktree at that SHA and starts a **Docker-isolated** server
+  with an allocated published port. Jeeves-owned project configuration supplies image/Dockerfile,
+  setup/dev commands, container port, readiness path/timeout, and an environment allowlist;
+  reviewed code cannot change this policy and never inherits Jeeves credentials.
+- **Lazy-retain, single slot:** Start Server → Starting… → Open in Browser + Stop Server.
+  Readiness must pass before Open is offered. Starting another preview confirms replacement;
+  Stop, approve, request changes, delete, shutdown, or boot-time orphan cleanup removes it.
+  The URL uses the Jeeves/Tailscale hostname, never `127.0.0.1`.
+- Preview configuration and port allocation are shared with Playwright screenshot capture. The
+  preview manager lands with evaluation/Human Review work, not slice 4.
+
 ---
 
 ## Data Model
@@ -312,6 +355,9 @@ projects
   id            pk
   name          text
   repo_path     text        -- worktree base for the runner
+  default_branch text       -- explicit local base ref; never inferred from host HEAD
+  preview_config text/json, nullable
+                              -- Jeeves-owned validated Docker/setup/dev/port/readiness/env policy
   created_at
 
 cards                        -- one entity for features, tasks, AND drafts
@@ -365,6 +411,8 @@ runs                         -- one row per SKILL INVOCATION (not per step)
   cost          real
   error         text, nullable  -- short message; full context in the log file
   log_path      text            -- log lives in the artifact folder, never in the DB
+  base_sha      text, nullable  -- exact ref resolved before the run
+  head_sha      text, nullable  -- workspace HEAD when finalization completed
 
 artifacts                    -- metadata + pointer, never content
   id            pk
@@ -373,7 +421,7 @@ artifacts                    -- metadata + pointer, never content
   round         int
   kind          'grill' | 'prd' | 'tasks-breakdown' | 'plan' | 'eval'
                 | 'screenshot' | 'runlog' | 'attachment'
-  path          text         -- into the artifact folder; one row per file
+  path          text         -- root-relative; unique immutable destination per version
   git_sha       text, nullable  -- mandatory for evals: the only link to the reviewed diff
   schema_version int
   created_at
@@ -426,7 +474,7 @@ discriminator could contradict the link. The pipeline constant is looked up by `
 | Session metadata (tokens/cost/duration) | SUM over `runs` — per step, per round, or per card |
 | "Implementing Task X of Y" | COUNT over the feature's active/merged children of the current round |
 | Artifact superseded/stale | Latest `created_at` per `(card, step, round, kind)` wins; staleness = an upstream artifact in `artifact_lineage` has a newer version |
-| QA checkbox state | Ephemeral `localStorage` in the eval HTML + `postMessage`; only `decisions.qa_complete` persists |
+| QA checkbox state | Ephemeral parent-board `localStorage`, synchronized with the sandboxed eval iframe by validated `postMessage`; only `decisions.qa_complete` persists |
 | Round history / review history | The sequence of `decisions` rows; requests of a `changes_requested` decision = `change_requests` at that round |
 | "Changes added later" (Info tab) | `change_requests WHERE status = 'consumed'` |
 
@@ -476,12 +524,12 @@ data/
     └── <cardId>/
         ├── manifest.json            # regenerated projection of the DB index
         └── <round>/
-            ├── grill.md             # written by the server (ACP bridge)
-            ├── prd.md               # written by the server (MDXEditor)
-            ├── plan.md
-            ├── eval.html            # harvested from the worktree (see below)
+            ├── grill/<artifactId>.md # immutable versions; latest is derived in the index
+            ├── prd/<artifactId>.md
+            ├── plan/<artifactId>.md
+            ├── eval/<artifactId>.html
             ├── screenshots/         # harvested from the worktree
-            └── runlog.txt
+            └── runlog/<runId>.log
 ```
 
 This folder lives with the jeeves app, **outside the repo under review** — no `.gitignore`
@@ -489,16 +537,19 @@ juggling, and the VPS migration is "copy the SQLite file + `data/`". Keep the pa
 
 ### Invariants
 
-- **Immutability by round.** Re-running a step creates a new `(card, step, round)` version, never
-  an overwrite. This is the storage-level formalisation of the rework loop (Round N task history,
-  persisted read-only evaluations). Supersession is derived — latest `created_at` per
-  `(card, step, round, kind)` wins — not stored as a status flag.
+- **Immutability by round and version.** Re-running a step creates a unique destination (for
+  example `plan/<artifactId>.md`), never an overwrite—even within the same round. Known worktree
+  paths such as `.jeeves/plan.md` are exchange paths only. Supersession is derived — latest
+  `created_at` per `(card, step, round, kind)` wins — not stored as a status flag.
 - **`git_sha` on every evaluation.** The evaluation is not committed to the branch, so the SHA
-  recorded in its `artifacts` row / frontmatter is the *only* link back to the exact diff it
-  reviewed. Without it an evaluation in the artifact folder is an orphan.
-- **YAML frontmatter on every prose artifact** (`card_id, step, round, kind, source_skill,
-  derived_from, git_sha, schema_version, created_at`) so files are self-describing and the index
-  is rebuildable from disk if the DB is lost.
+  recorded in its artifact row and HTML metadata is the *only* link back to the exact diff it
+  reviewed. Workspace-produced non-evaluation artifacts record HEAD when known.
+- **Self-describing files.** Markdown gets YAML frontmatter; self-contained HTML gets equivalent
+  `<meta>` elements or an HTML comment so metadata cannot break the document. Metadata includes
+  `card_id, step, round, kind, source_skill, derived_from, git_sha, schema_version, created_at`.
+- **Root-relative, file-first storage.** Only `ArtifactStore` resolves paths, with containment
+  checks. It writes and validates a temporary file, atomically renames it, then inserts the DB
+  row. A crash can leave a recoverable self-describing file, never a row pointing at no file.
 - **Explicit provenance.** `artifact_lineage` records the real lineage graph
   (grill → prd → tasks → plan → impl → eval) as a join table, queryable in both directions.
   This is the audit trail *and* staleness detection: re-grill and the downstream PRD is
@@ -508,7 +559,7 @@ juggling, and the VPS migration is "copy the SQLite file + `data/`". Keep the pa
 
 ### Discoverability for the AI
 
-- **Deterministic paths + per-card `manifest.json`** (regenerable from the DB) listing every
+- **Deterministic exchange paths + per-card `manifest.json`** (regenerable from the DB) listing every
   artifact with step, round, kind, path, git_sha. Agents read the manifest first instead
   of globbing; the sandbox needs no DB access.
 - **The runner injects inputs — the AI never hunts.** Each skill invocation gets the resolved
@@ -520,45 +571,44 @@ juggling, and the VPS migration is "copy the SQLite file + `data/`". Keep the pa
 
 Two production contexts, two flows:
 
-- **Host-produced** (grill summary, PRD, plan, chat transcripts): written by the Hono server
-  itself (ACP bridge, MDXEditor save), which writes straight into `data/cards/<id>/<round>/`.
-  Nothing to do.
-- **Sandbox-produced** (eval HTML, screenshots, run logs, structured JSON sidecars): generated
+- **Host-produced** (grill summary, PRD, chat transcripts, finalized run logs): written or
+  finalized by the Hono server. A live log belongs to its mutable `run`; on success or failure
+  it is closed and registered as an immutable `runlog` artifact.
+- **Sandbox-produced** (Plan, eval HTML, screenshots, structured JSON sidecars): generated
   *inside* the Sandcastle run, whose cwd is the worktree — and in Docker mode the container
-  can only see the worktree, so the agent physically cannot write to the artifact folder. After
-  the run completes, the host-side runner **harvests** the known paths (e.g. `.jeeves/eval.html`,
-  `.jeeves/screenshots/`, `.jeeves/notifications.json`, `.jeeves/to-issues.json`) out of the
-  worktree into `data/cards/<id>/<round>/` *before* Sandcastle tears the worktree down.
-  Structured sidecars are Zod-validated on the host before creating database rows (see
-  [ADR 0008](./docs/adr/0008-ai-sdk-assistant-ui-agent-runner.md)). A bind-mount alternative
-  exists but breaks under `noSandbox()` and adds moving parts; the harvest step works
-  identically in both sandbox modes.
+  can only see the worktree. `AgentRunner` invokes an `ExecutionEngine` finalization callback
+  before cleanup; it harvests declared paths (e.g. `.jeeves/plan.md`, `.jeeves/eval.html`,
+  `.jeeves/screenshots/`, `.jeeves/notifications.json`, `.jeeves/to-issues.json`), validates
+  them, records metadata, and removes exchange sidecars. A missing required artifact fails the
+  run and preserves diagnostics. Structured sidecars are Zod-validated before DB mutations.
 
 ### Serving artifacts
 
 - Hono serves the artifact folder over HTTP (`/artifacts/<cardId>/…`). The eval iframe loads from
   there, and the screenshot gallery's relative image paths resolve for free — including from
   phone/tablet over Tailscale.
+- Database paths are root-relative; callers identify artifacts/cards, never arbitrary filesystem
+  paths, and every resolved path is checked to remain inside the artifact root.
 - The UI has a subtle **"open artifacts folder"** button per card. Remote (phone/tablet) it
   links to the HTTP directory listing; on the host it can additionally reveal the folder in
   Finder/Explorer.
-- The eval iframe gets the `sandbox` attribute — it renders AI-generated HTML; low risk for
-  personal use, but free.
+- The eval iframe uses `sandbox="allow-scripts"`—no `allow-same-origin`—because it renders
+  AI-generated HTML.
 
-### QA state: localStorage + postMessage, one audit boolean
+### QA state: parent localStorage + postMessage, one audit boolean
 
 QA checkbox state is ephemeral UX, not the audit record, so there is **no `qa_items` table**:
 
-- The eval HTML persists checkbox state in `localStorage` (survives reload; QA is done in one
-  browser in practice).
-- The eval HTML emits its status to the board on load and on every change:
+- The parent board persists checkbox state in its own `localStorage`, keyed by artifact/card/round,
+  and sends initial state to the iframe. The opaque-origin iframe cannot access storage.
+- The iframe emits checkbox changes and aggregate status to the board:
 
 ```js
 parent.postMessage({ type: 'qa-status', finished, checked, total }, '*');
 ```
 
-- The board listens and drives the QA gate (outline vs celebratory Approve button) live from
-  the message — it never reads the iframe's localStorage.
+- The board validates `event.source` and message shape, binds actions to the displayed card
+  instead of trusting a card ID from HTML, persists state, and drives the QA gate live.
 - **At decision-time**, the board snapshots one boolean, `qa_complete`, onto the decision row
   in SQLite (for both approve and request-changes). That answers the audit question *"was QA
   complete when this merged?"* without per-item persistence.
@@ -615,11 +665,11 @@ rework tasks via the normal "Create tasks →" loop rather than a separate auton
 
 ### Why HTML, not markdown
 
-The evaluation needs interactive checkboxes with persistence, syntax-highlighted
-diffs, a sticky TOC, file links that open in Cursor, and an embedded screenshot gallery.
-A self-contained HTML file with inline CSS and `localStorage` for checkbox state handles
-all of this with no dependencies. It opens in any browser, works offline, and lives in the
-artifact folder pinned to the reviewed commit via its recorded `git_sha`.
+The evaluation needs interactive checkboxes, syntax-highlighted diffs, a sticky TOC, file links
+that open in Cursor, and an embedded screenshot gallery. A self-contained HTML file with inline
+CSS handles the document with no dependencies; the parent board provides browser-local checkbox
+persistence over `postMessage` so the AI-generated iframe can remain opaque-origin sandboxed. It
+opens in any browser and lives in the artifact folder pinned to the reviewed commit by `git_sha`.
 
 ### Sections — Task Evaluation
 
@@ -650,8 +700,8 @@ Categorised findings (Critical / Major / Minor / Suggestion). Each finding can b
 "Request changes" panel with `+`. Surface-everything pass, not a blocker list.
 
 **QA checklist**
-Actionable, behaviour-specific checkbox items with `localStorage` persistence — check them off on
-your phone as you test. This checklist **gates the Approve button**.
+Actionable, behaviour-specific checkbox items persisted by the parent board in browser-local
+storage—check them off on your phone as you test. This checklist **gates the Approve button**.
 
 **Metadata** *(session meta)*
 Duration, token usage, model, branch, commit, files changed, LOC, estimated cost.
@@ -745,13 +795,15 @@ jeeves/                             # repo root — also the app root
 │   ├── routes/
 │   │   ├── cards.ts                # CRUD, kind decision, column/step transitions, fan-out
 │   │   ├── artifacts.ts            # read/write per-step markdown + serve artifact folder over HTTP
-│   │   └── runs.ts                 # execution run log
+│   │   ├── runs.ts                 # execution run log
+│   │   └── previews.ts             # Start/Stop/status thin adapter
 │   ├── ws/
 │   │   └── chat.ts                 # AcpBridge: ACP → UIMessage projection, WebSocket transport
 │   └── execution/
 │       ├── queue.ts                # sequential in-memory queue + blocked-by/dependency check
 │       ├── agent-runner.ts         # AgentRunner interface + RunEvent types
-│       └── runner.ts               # Sandcastle AgentRunner impl, eval pipeline, log streaming
+│       ├── runner.ts               # Sandcastle AgentRunner impl, finalization, log streaming
+│       └── preview-manager.ts      # single-slot Docker preview + readiness/orphan cleanup
 │
 ├── client/
 │   ├── index.html
@@ -767,7 +819,7 @@ jeeves/                             # repo root — also the app root
 │   │   ├── StepExecution.tsx       # live RunLog + mini eval pipeline progress (Plan/Impl/AIReview)
 │   │   ├── ReviewTask.tsx          # Task Evaluation + Request-changes panel + QA gate
 │   │   ├── ReviewFeature.tsx       # Feature Evaluation + Refactor opportunities + QA gate
-│   │   └── Evaluation.tsx          # sandboxed iframe of the evaluation HTML + qa-status listener
+│   │   └── Evaluation.tsx          # opaque-origin iframe + validated QA/preview messages
 │   └── hooks/
 │       ├── useBoard.ts             # cards + column/step state, SSE for live updates
 │       └── useAcpChat.ts           # useChat (@ai-sdk/react) + custom WebSocket ChatTransport
@@ -815,8 +867,8 @@ modules, not modules of their own.
 |---|---|---|
 | `PipelineEngine` | pipeline lookup by `(kind, hasParent)`; `advance(card)` | all column/step transition rules, auto-advance, "workflow is code" |
 | `CardStore` | CRUD, kind decision, fan-out, blocker edges, derived queries ("X of Y", queue candidates, Round N history) | SQLite/Drizzle, the unified draft/active/merged model, every derivation rule |
-| `ArtifactStore` | `save`, `harvest(worktree)`, `list(card)`, serve-path resolution | folder layout, frontmatter, manifest regeneration, lineage, rounds, supersession |
-| `ExecutionEngine` | `enqueue(card, step)` + a run-event stream | `AgentRunner` (today: Sandcastle + cursor), worktrees, branch strategy, sequential queue, blocker checks, restart recovery, eval-skill sequencing |
+| `ArtifactStore` | `save`, `harvest(worktree, declarations)`, `list(card)`, serve-path resolution | atomic/versioned files, metadata, containment, manifest regeneration, lineage, rounds, supersession |
+| `ExecutionEngine` | `enqueue(card, step)` + run events; `startPreview(card, gitSha)` / `stopPreview()` | `AgentRunner` (today: Sandcastle + cursor), per-run worktrees/finalization, branch strategy, sequential queue, Docker preview lifecycle, blocker checks, restart recovery, eval-skill sequencing |
 | `AcpBridge` | `openSession(skillPrompt)` → `UIMessage` stream | spawning `agent acp`, ACP→`UIMessage` projection, permission responses, JSON-RPC piping, disconnect/summary handling |
 
 ### The slice sequence
@@ -837,9 +889,14 @@ blocker relationship can be built in parallel or reordered.
    **First unknown resolved:** Cursor auth in Docker works on this host. Shipped Docker only —
    no `noSandbox()` fallback in the runner. *Demo: Implement now →, watch Plan go
    ai-working → done from the board.* (Blocked by 2.)
-4. **Artifact round-trip.** `ArtifactStore`: a host-written artifact + a harvest out of the
-   worktree + served over HTTP + rendered read-only in the card view. *Demo: a run's output
-   viewable from the phone.* (Blocked by 3.)
+4. **Artifact round-trip.** `ArtifactStore`: finalize the host-written run log plus harvest a
+   required uncommitted `.jeeves/plan.md`; store immutable, root-relative indexed versions;
+   serve over HTTP; render formatted read-only Plan beneath a collapsible run log. Completed
+   logs load collapsed but do not collapse while watched. Markdown uses GFM without raw HTML.
+   *Demo: a run's Plan and frozen log viewable from the phone.* (Blocked by 3.) The runner uses
+   a fresh `createWorktree()` per run and a pre-cleanup finalization callback; harvest failure
+   fails atomically. The branch becomes `jeeves/card-<id>` (no per-step suffix), with explicit
+   local default branch/base SHA. See [ADR 0009](./docs/adr/0009-branches-durable-worktrees-ephemeral.md).
 5. **Grill end-to-end.** Establish the chat stack: `useChat` + assistant-ui over a custom
    WebSocket `ChatTransport`; `AcpBridge` projects ACP JSON-RPC into AI SDK `UIMessage` parts
    server-side (including permission-request custom parts). `StepGrill` renders streaming
@@ -864,15 +921,21 @@ This will be used as input to /to-prd.
    feature shows "Implementing Task X of Y". *Demo: a feature becomes child cards on the
    board.* (Blocked by 6.)
 8. **Full task pipeline.** Plan → Implement → AI Review sequencing inside `ExecutionEngine`;
-   blocker-aware queue rebuilt from `card_steps` on restart; orphaned `running` runs marked
-   `failed` at boot; branch strategy onto the feature branch (or `main` for standalone).
+   each run gets a fresh worktree on the same durable card branch and receives prior artifacts
+   explicitly; blocker-aware queue rebuilt from `card_steps` on restart; orphaned `running` runs
+   marked `failed` at boot; branch strategy onto the feature branch (or configured default for
+   standalone), with step-specific postconditions.
    *Demo: a child task runs all three steps unattended.* (Blocked by 4 and 7.)
 9. **Evaluation walking skeleton.** `eval-assemble` only — a minimal HTML evaluation (Tests +
-   QA checklist), `notifications.json` sidecar, harvested, rendered in the sandboxed iframe
-   with the `qa-status` postMessage and the QA-gated Approve button. *Demo: review a real
-   slice from your phone; the gate flips when QA completes.* (Blocked by 8.)
-10. **Approve & merge.** `decisions` rows with the `qa_complete` snapshot; child task merges
-    into the feature branch and leaves the board; feature auto-advances when all children are
+   QA checklist), `notifications.json` sidecar, harvested, rendered with
+   `sandbox="allow-scripts"`. Parent-owned browser storage synchronizes QA through validated
+   `postMessage` and drives the QA-gated Approve button. A preview-manager sub-slice wires
+   Start Server → readiness → Open in Browser + Stop against the evaluation's exact SHA using
+   Jeeves-owned Docker configuration. *Demo: start and review a real slice from your phone; the
+   gate flips when QA completes.* (Blocked by 8.)
+10. **Approve & merge.** `decisions` rows with the `qa_complete` snapshot; child approval first
+    validates a temporary merge against the current feature tip, then merges and leaves the
+    board (conflict/failure returns it for rework); feature auto-advances when all children are
     merged; standalone/feature enter Finalize. *Demo: the full happy path, Backlog → merged.*
     (Blocked by 9.)
 11. **Evaluation filled out.** The remaining eval skills — `eval-summary`,
@@ -985,12 +1048,19 @@ Re-run the manual spike any time: `npx tsx .scratch/spike-hello.ts`
    gate passed). `SandcastleAgentRunner` imports `@ai-hero/sandcastle/sandboxes/docker` only.
    Requires Docker Desktop + `sandcastle:jeeves` image + `CURSOR_API_KEY`.
 3. **Parallel child card execution** — add concurrency to queue once sequential is proven
-4. **Playwright screenshot capture** — needs dev server running in worktree; may need a
-   port-allocation strategy if multiple cards run in parallel later
+4. **Playwright screenshot capture** — *resolved for sequential v1:* reuse the Jeeves-owned
+   Docker preview configuration, readiness check, and port allocator used by manual Start Server.
+   Revisit only when parallel execution requires a port pool.
 5. **Colleague access** — move server to VPS, no code changes required
 6. **Feature auto-advance trigger** — needs an "all children merged" event; implement as a check in
    the queue after each child card's Human Review approval
 7. **Evaluation: inline vs standalone HTML** — *resolved:* the prototype inlines it; production
    generates a self-contained HTML file, harvested into the artifact folder and rendered in a
-   sandboxed iframe (see [Artifact Strategy](#artifact-strategy)). Confirm the handoff before
-   Build Order slice 9 (the evaluation walking skeleton).
+   `sandbox="allow-scripts"` iframe; the parent owns browser-local QA state and validates
+   `postMessage` (see [Artifact Strategy](#artifact-strategy)).
+8. **Worktree lifecycle + manual testing** — *resolved:* branches are durable, worktrees are
+   fresh per run and recreated from explicit refs/SHAs; Implement steps share a task branch and
+   explicit artifacts, not a physical worktree. Human Review previews recreate the exact evaluated
+   SHA and run with Jeeves-owned configuration in Docker (see
+   [Worktree lifecycle](#worktree-lifecycle-branches-are-durable-worktrees-are-ephemeral) and
+   [ADR 0009](./docs/adr/0009-branches-durable-worktrees-ephemeral.md)).

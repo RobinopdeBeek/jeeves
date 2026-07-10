@@ -761,6 +761,57 @@ function refreshReviewActions(cardId) {
   if (el) el.innerHTML = reviewActionsInner(card);
 }
 
+/* Human Review: start the card's dev server on its branch (single slot — see
+   ADR 0009). Prototype mocks the host worktree + port; production uses
+   POST /api/cards/:id/dev-server and returns a Tailscale-reachable URL. */
+const DEV_SERVER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>`;
+const DEV_OPEN_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`;
+
+function devServerForCard(cardId) {
+  const ds = state.devServer;
+  return ds && ds.cardId === cardId ? ds : null;
+}
+
+function reviewDevServerBtn(card) {
+  const running = devServerForCard(card.id);
+  if (running) {
+    return `<button class="btn btn-primary issue-action-btn" type="button"
+      onclick="openDevServer('${esc(card.id)}')" title="Open ${esc(running.url)}">
+      ${DEV_OPEN_SVG} Open in Browser</button>`;
+  }
+  return `<button class="btn btn-outline issue-action-btn" type="button"
+    onclick="startDevServer('${esc(card.id)}')" title="Start dev server on ${esc(card.branch || 'card branch')}">
+    ${DEV_SERVER_SVG} Start Server</button>`;
+}
+
+function refreshReviewDevServer(cardId) {
+  const card = cardById(cardId); if (!card) return;
+  const el = document.getElementById('review-dev-server');
+  if (el) el.innerHTML = reviewDevServerBtn(card);
+}
+
+function stopDevServer() {
+  state.devServer = null;
+}
+
+function startDevServer(cardId) {
+  const card = cardById(cardId); if (!card) return;
+  const port = 5173;
+  state.devServer = {
+    cardId,
+    port,
+    url: `http://127.0.0.1:${port}`,
+    branch: card.branch || `jeeves/card-${cardId}`,
+  };
+  refreshReviewDevServer(cardId);
+}
+
+function openDevServer(cardId) {
+  const ds = devServerForCard(cardId);
+  if (!ds) return;
+  window.open(ds.url, '_blank', 'noopener,noreferrer');
+}
+
 /* =========================================================================
    HUMAN REVIEW · TASK EVALUATION PLAN
    In production this is a separate self-contained HTML doc rendered in an
@@ -1207,6 +1258,7 @@ function confirmApprove(cardId) {
    standalone tasks and features advance to Finalize. */
 function approveCard(cardId) {
   closeInsights();
+  stopDevServer();
   const card = cardById(cardId); if (!card) return;
   if (card.kind === 'task-child') {
     const idx = CARDS.findIndex(c => c.id === cardId);
@@ -1235,6 +1287,7 @@ function approveCard(cardId) {
    requests are consumed into drafts (the sidebar empties). */
 function implementChanges(cardId) {
   const card = cardById(cardId); if (!card) return;
+  stopDevServer();
   card.evalReady = false;
   if (card.kind === 'task-child' || card.kind === 'task-standalone') {
     // Record the requested changes on the card (shown in the Info tab under
@@ -1490,6 +1543,7 @@ function dialogFooter(card, i, step) {
       return `<div class="wizard-foot">${del}</div>`;
     }
     return `<div class="wizard-foot">${del}<div style="flex:1"></div>
+      <span id="review-dev-server">${reviewDevServerBtn(card)}</span>
       <span id="review-actions">${reviewActionsInner(card)}</span></div>`;
   }
   // A task card (child or standalone) mid-Implement → simulate the AI finishing
@@ -1624,7 +1678,7 @@ const App = {
 };
 
 /* Shared view state (issue page drives it; board doesn't need it). */
-const state = { currentId: null, step: 0, editingCR: null };
+const state = { currentId: null, step: 0, editingCR: null, devServer: null };
 
 function openCard(id) { App.openCard(id); }
 

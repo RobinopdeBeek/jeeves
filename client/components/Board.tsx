@@ -21,15 +21,19 @@ export function Board() {
     api.getProject().then(setProject).catch(console.error);
   }, []);
 
-  useJeevesEvents((event) => {
-    if (event.type !== "card.updated") return;
-    setCards((prev) => {
-      const exists = prev.some((c) => c.id === event.card.id);
-      return exists
-        ? prev.map((c) => (c.id === event.card.id ? event.card : c))
-        : [...prev, event.card];
-    });
-  });
+  useJeevesEvents(
+    (event) => {
+      if (event.type !== "card.updated") return;
+      setCards((prev) => {
+        const exists = prev.some((c) => c.id === event.card.id);
+        return exists
+          ? prev.map((c) => (c.id === event.card.id ? event.card : c))
+          : [...prev, event.card];
+      });
+    },
+    // SSE reconnect may have missed card.updated events during the gap.
+    () => api.listCards().then(setCards).catch(console.error),
+  );
 
   async function addCard() {
     const card = await api.createCard();

@@ -36,11 +36,17 @@ export function CardView() {
       .catch(() => setMissing(true));
   }, [id]);
 
-  useJeevesEvents((event) => {
-    if (event.type === "card.updated" && event.card.id === id) {
-      setCard(event.card);
-    }
-  });
+  useJeevesEvents(
+    (event) => {
+      if (event.type === "card.updated" && event.card.id === id) {
+        setCard(event.card);
+      }
+    },
+    () => {
+      if (!id) return;
+      api.getCard(id).then(setCard).catch(() => setMissing(true));
+    },
+  );
 
   useEffect(() => {
     if (!card || tabOverride === null) return;

@@ -236,8 +236,20 @@ describe("ExecutionEngine", () => {
     await engine.whenIdle();
     expect(stepStatus(card.id, "plan")).toBe("needs-user");
 
+    received.length = 0;
     const retried = engine.retry(card.id, "plan");
     expect(retried.steps.find((s) => s.key === "plan")?.status).toBe("queued");
+    expect(received[0]).toEqual(
+      expect.objectContaining({
+        type: "card.updated",
+        card: expect.objectContaining({
+          id: card.id,
+          steps: expect.arrayContaining([
+            expect.objectContaining({ key: "plan", status: "queued" }),
+          ]),
+        }),
+      }),
+    );
     await engine.whenIdle();
 
     expect(stepStatus(card.id, "plan")).toBe("done");

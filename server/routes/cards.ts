@@ -3,6 +3,7 @@ import { CardStoreError, type KindPath } from "../cards/store.js";
 import type { CardStore } from "../cards/store.js";
 import type { Project } from "../db/schema.js";
 import type { ExecutionEngine } from "../execution/engine.js";
+import type { EventBus } from "../execution/events.js";
 import type { RunStore } from "../execution/run-store.js";
 
 function isKindPath(value: unknown): value is KindPath {
@@ -12,6 +13,7 @@ function isKindPath(value: unknown): value is KindPath {
 export interface CardRouteDeps {
   engine: ExecutionEngine;
   runs: RunStore;
+  events: EventBus;
 }
 
 /** Thin HTTP adapter over the CardStore seam. */
@@ -44,6 +46,8 @@ export function cardRoutes(
     }
     try {
       const card = store.decideKind(c.req.param("id"), body.path);
+      // Board tabs open elsewhere only see decide via SSE — not the HTTP response.
+      deps.events.emit({ type: "card.updated", card });
       // Orchestration lives here, not in CardStore (ADR 0006): the
       // standalone path leaves Plan queued — hand it to the engine.
       if (card.steps.some((s) => s.key === "plan" && s.status === "queued")) {

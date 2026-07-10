@@ -41,7 +41,7 @@ const engine = new ExecutionEngine({
 const app = new Hono();
 
 app.get("/api/project", (c) => c.json(project));
-app.route("/api/cards", cardRoutes(store, project, { engine, runs }));
+app.route("/api/cards", cardRoutes(store, project, { engine, runs, events }));
 app.route("/api/runs", runRoutes(runs));
 app.route("/api/events", eventRoutes(events));
 

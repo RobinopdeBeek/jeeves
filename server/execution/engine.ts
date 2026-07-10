@@ -168,6 +168,7 @@ export class ExecutionEngine {
     }
 
     const updated = store.setStepStatus(cardId, stepKey, "queued");
+    this.deps.events.emit({ type: "card.updated", card: updated });
     this.enqueue(cardId, stepKey);
     return updated;
   }

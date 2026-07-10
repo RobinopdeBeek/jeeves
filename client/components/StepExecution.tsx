@@ -15,12 +15,15 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
   const [latestRun, setLatestRun] = useState<Run | null>(null);
   const [retrying, setRetrying] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const activeRunIdRef = useRef<string | null>(null);
 
   // Latest run + persisted log tail — initial load and reconnect catch-up.
   async function loadLatest() {
     const runs = await api.listRuns(card.id);
     const run = runs.find((r) => r.stepKey === stepKey);
     setLatestRun(run ?? null);
+    activeRunIdRef.current =
+      run?.status === "running" ? run.id : (run?.id ?? null);
     if (run) {
       const withLog = await api.getRun(run.id);
       setLines(withLog.log ? withLog.log.split(/\r?\n/) : []);
@@ -29,17 +32,34 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
     }
   }
 
+  function acceptsRunEvent(runId: string): boolean {
+    if (activeRunIdRef.current && runId !== activeRunIdRef.current) return false;
+    if (!activeRunIdRef.current) activeRunIdRef.current = runId;
+    return true;
+  }
+
   useEffect(() => {
     loadLatest().catch(console.error);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [card.id, stepKey]);
 
+  const prevStepStatus = useRef(step?.status);
+  useEffect(() => {
+    if (prevStepStatus.current !== step?.status && step?.status === "ai-working") {
+      activeRunIdRef.current = null;
+    }
+    prevStepStatus.current = step?.status;
+  }, [step?.status]);
+
   useJeevesEvents(
     (event) => {
-      if (event.type === "run.log" && event.cardId === card.id) {
+      if (event.cardId !== card.id) return;
+      if (event.type === "run.log") {
+        if (!acceptsRunEvent(event.runId)) return;
         setLines((prev) => [...prev, event.line]);
       }
-      if (event.type === "run.finished" && event.cardId === card.id) {
+      if (event.type === "run.finished") {
+        if (!acceptsRunEvent(event.runId)) return;
         loadLatest().catch(console.error);
       }
     },
@@ -56,6 +76,7 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
     try {
       const updated = await api.retryStep(card.id, stepKey);
       onCardChange(updated);
+      activeRunIdRef.current = null;
       setLines([]);
       setLatestRun(null);
     } catch (err) {

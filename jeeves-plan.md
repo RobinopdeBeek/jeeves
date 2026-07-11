@@ -23,9 +23,9 @@ Your laptop (always on, lid open)
   │     ├── Serves React board UI (responsive, all devices)
   │     ├── REST API  →  SQLite via Drizzle
   │     ├── /ws/chat  →  AcpBridge → AI SDK UIMessage stream (AI Chat steps)
-  │     └── Execution queue → AgentRunner → Sandcastle + cursor("composer-2.5")
-  ├── Docker Desktop (Sandcastle sandbox requirement)
-  ├── Cursor CLI (authenticated, your subscription)
+  │     └── Execution queue → AgentRunner → @cursor/sdk local (composer-2.5)
+  ├── Git (worktree create/remove for agent runs)
+  ├── Cursor CLI + CURSOR_API_KEY (ACP chat + SDK local runs)
   └── Your repo (Cursor-indexed, warm)
 
 Tailscale
@@ -55,8 +55,8 @@ Later:  extract client to Cloudflare Pages if needed
 | Base components | shadcn/ui | Card, Badge, Button, Dialog, Sheet, Progress |
 | Icons | Tabler Icons (`@tabler/icons-react`) | Project standard; shadcn `iconLibrary` is `tabler` |
 | Markdown editor | MDXEditor | True WYSIWYG, outputs clean markdown, no format conversion |
-| Execution engine | Sandcastle | Handles worktrees, branches, merging — already solved |
-| Agent | `cursor("composer-2.5")` | Your subscription, pick and combine models for different tasks, Cursor's codebase intelligence |
+| Execution engine | Self-managed worktrees + `@cursor/sdk` | Jeeves owns git worktree lifecycle; SDK local runs on host ([ADR 0010](./docs/adr/0010-self-managed-worktrees-cursor-sdk.md)) |
+| Agent | `@cursor/sdk` local (`composer-2.5`) | Your subscription; no Docker for agent runs |
 | Chat state & streaming | Vercel AI SDK 5 (`ai`, `@ai-sdk/react`) | `useChat`, typed `UIMessage` parts, custom WebSocket transport |
 | Chat UI | assistant-ui (`@assistant-ui/react`, `@assistant-ui/react-ai-sdk`) | Pre-built message list, composer, streaming indicators over AI SDK |
 | AI chat transport | Cursor ACP bridge | Interactive sessions with full codebase context; ACP projected to `UIMessage` server-side |
@@ -80,11 +80,13 @@ path back through the transport. Chat transcripts persist as serialized `UIMessa
 
 **Execution (AI Execution steps — Plan, Implement, eval pipeline):** `ExecutionEngine` hides
 an `AgentRunner` interface (`run(prompt, options): AsyncIterable<RunEvent>`). Today's
-implementation is Sandcastle + `cursor("composer-2.5")` inside the **Docker** sandbox
-(`@ai-hero/sandcastle/sandboxes/docker`) — a build-time choice from the slice 3 spike gate, not
-a runtime fallback. This keeps the door open to swap in Vercel AI SDK's experimental
-`HarnessAgent` later without touching the board, queue, or chat UI. Harness streams project into
-AI SDK types, so the chat layer wouldn't change either.
+implementation is **`@cursor/sdk` local** — `WorktreeManager` creates an ephemeral worktree per
+run on the durable card branch; `CursorSdkAgentRunner` runs `composer-2.5` with `cwd` set to that
+worktree. No Docker for agent runs. SDK native sandbox is optional when the host supports it and
+unavailable on native Windows ([ADR 0010](./docs/adr/0010-self-managed-worktrees-cursor-sdk.md)).
+This keeps the door open to swap in Vercel AI SDK's experimental `HarnessAgent` later without
+touching the board, queue, or chat UI. Harness streams project into AI SDK types, so the chat
+layer wouldn't change either.
 
 **Structured skill outputs:** skills that must return parseable data (notably `/to-issues`)
 write JSON to a known worktree path; the runner harvests it and validates with a Zod schema on
@@ -322,16 +324,46 @@ branch tip:
 
 - The evaluation HTML sends a validated **Start Server** request to its parent; the parent binds
   it to the displayed card and calls `POST /api/cards/:id/dev-server`.
-- The preview manager recreates a worktree at that SHA and starts a **Docker-isolated** server
-  with an allocated published port. Jeeves-owned project configuration supplies image/Dockerfile,
-  setup/dev commands, container port, readiness path/timeout, and an environment allowlist;
-  reviewed code cannot change this policy and never inherits Jeeves credentials.
+- The preview manager recreates a worktree at that SHA and starts a **host-process** dev server
+  with an allocated published port (`0.0.0.0` for Tailscale). Jeeves-owned project
+  `preview_config` supplies setup/dev commands, port, readiness path/timeout, and an environment
+  allowlist — no `image` or `dockerfile` fields; reviewed code cannot change this policy and
+  never inherits Jeeves credentials.
 - **Lazy-retain, single slot:** Start Server → Starting… → Open in Browser + Stop Server.
   Readiness must pass before Open is offered. Starting another preview confirms replacement;
-  Stop, approve, request changes, delete, shutdown, or boot-time orphan cleanup removes it.
-  The URL uses the Jeeves/Tailscale hostname, never `127.0.0.1`.
+  Stop, approve, request changes, delete, shutdown, or boot-time orphan cleanup kills the process
+  tree and removes the worktree. The URL uses the Jeeves/Tailscale hostname, never `127.0.0.1`.
 - Preview configuration and port allocation are shared with Playwright screenshot capture. The
-  preview manager lands with evaluation/Human Review work, not slice 4.
+  preview manager lands with evaluation/Human Review work (slice 9), not slice 4.
+
+#### `projects.preview_config` (host-process)
+
+Jeeves-owned JSON on the `projects` row. Implementation in slice 9; schema defined now per
+[ADR 0010](./docs/adr/0010-self-managed-worktrees-cursor-sdk.md):
+
+```json
+{
+  "setupCommand": "npm install",
+  "devCommand": "npm run dev",
+  "port": 5173,
+  "readinessPath": "/",
+  "readinessTimeoutMs": 30000,
+  "envAllowlist": ["NODE_ENV", "PORT"]
+}
+```
+
+| Field | Purpose |
+|---|---|
+| `setupCommand` | One-shot install/build before dev server (optional) |
+| `devCommand` | Long-running dev server command |
+| `port` | Port the dev server listens on |
+| `readinessPath` | HTTP path for readiness probe |
+| `readinessTimeoutMs` | Max wait before preview fails |
+| `envAllowlist` | Explicit env vars for setup/dev; never inherit ambient secrets |
+
+Docker-isolated preview containers were considered and **rejected for now** — stronger isolation
+for AI-written scripts, but would reintroduce Docker as a dev dependency solely for previews. Same
+`startPreview` / `stopPreview` seam can adopt Docker later without touching agent execution.
 
 ---
 
@@ -357,7 +389,7 @@ projects
   repo_path     text        -- worktree base for the runner
   default_branch text       -- explicit local base ref; never inferred from host HEAD
   preview_config text/json, nullable
-                              -- Jeeves-owned validated Docker/setup/dev/port/readiness/env policy
+                              -- Jeeves-owned host-process setup/dev/port/readiness/env policy
   created_at
 
 cards                        -- one entity for features, tasks, AND drafts
@@ -561,7 +593,7 @@ juggling, and the VPS migration is "copy the SQLite file + `data/`". Keep the pa
 
 - **Deterministic exchange paths + per-card `manifest.json`** (regenerable from the DB) listing every
   artifact with step, round, kind, path, git_sha. Agents read the manifest first instead
-  of globbing; the sandbox needs no DB access.
+  of globbing; the agent worktree needs no DB access.
 - **The runner injects inputs — the AI never hunts.** Each skill invocation gets the resolved
   paths/contents of its inputs explicitly (e.g. `/to-prd` receives the grill summary), resolved
   from the lineage graph by the runner. Discoverability for humans = manifest + frontmatter;
@@ -574,13 +606,13 @@ Two production contexts, two flows:
 - **Host-produced** (grill summary, PRD, chat transcripts, finalized run logs): written or
   finalized by the Hono server. A live log belongs to its mutable `run`; on success or failure
   it is closed and registered as an immutable `runlog` artifact.
-- **Sandbox-produced** (Plan, eval HTML, screenshots, structured JSON sidecars): generated
-  *inside* the Sandcastle run, whose cwd is the worktree — and in Docker mode the container
-  can only see the worktree. `AgentRunner` invokes an `ExecutionEngine` finalization callback
-  before cleanup; it harvests declared paths (e.g. `.jeeves/plan.md`, `.jeeves/eval.html`,
-  `.jeeves/screenshots/`, `.jeeves/notifications.json`, `.jeeves/to-issues.json`), validates
-  them, records metadata, and removes exchange sidecars. A missing required artifact fails the
-  run and preserves diagnostics. Structured sidecars are Zod-validated before DB mutations.
+- **Worktree-produced** (Plan, eval HTML, screenshots, structured JSON sidecars): generated
+  inside the agent's worktree via `@cursor/sdk` local. `AgentRunner` invokes an `ExecutionEngine`
+  finalization callback before cleanup; it harvests declared paths from the host worktree path
+  (e.g. `.jeeves/plan.md`, `.jeeves/eval.html`, `.jeeves/screenshots/`, `.jeeves/notifications.json`,
+  `.jeeves/to-issues.json`), validates them, records metadata, and removes exchange sidecars. A
+  missing required artifact fails the run and preserves diagnostics. Structured sidecars are
+  Zod-validated before DB mutations.
 
 ### Serving artifacts
 
@@ -800,10 +832,31 @@ jeeves/                             # repo root — also the app root
 │   ├── ws/
 │   │   └── chat.ts                 # AcpBridge: ACP → UIMessage projection, WebSocket transport
 │   └── execution/
-│       ├── queue.ts                # sequential in-memory queue + blocked-by/dependency check
-│       ├── agent-runner.ts         # AgentRunner interface + RunEvent types
-│       ├── runner.ts               # Sandcastle AgentRunner impl, finalization, log streaming
-│       └── preview-manager.ts      # single-slot Docker preview + readiness/orphan cleanup
+│       ├── engine.ts               # ExecutionEngine: queue, worktree orchestration, finalization
+│       ├── runner.ts               # AgentRunner interface + RunEvent types
+│       ├── worktree-manager.ts     # git worktree create/remove, diagnostics, orphan cleanup
+│       ├── cursor-sdk-runner.ts    # @cursor/sdk local impl, log tee, cancel, dispose
+│       ├── run-store.ts
+│       ├── events.ts
+│       └── preview-manager.ts      # single-slot host-process preview + readiness/orphan cleanup
+│
+├── prompts/
+│   └── execution/
+│       ├── slice-3-tracer.md
+│       ├── grill-with-docs.md
+│       ├── to-prd.md
+│       ├── to-issues.md             # writes structured JSON sidecar (harvested + Zod-validated)
+│       ├── plan-implementation.md
+│       ├── implement-issue.md
+│       ├── eval-summary.md
+│       ├── eval-screenshots.md
+│       ├── eval-diff-narrative.md
+│       ├── eval-tests.md
+│       ├── eval-qa-plan.md
+│       ├── eval-assemble.md         # produces final HTML, collects Notifications
+│       ├── eval-acceptance.md       # feature-level eval, incl. refactor opportunities
+│       ├── document.md              # Finalize: update README/ADRs
+│       └── deploy.md
 │
 ├── client/
 │   ├── index.html
@@ -823,29 +876,11 @@ jeeves/                             # repo root — also the app root
 │   └── hooks/
 │       ├── useBoard.ts             # cards + column/step state, SSE for live updates
 │       └── useAcpChat.ts           # useChat (@ai-sdk/react) + custom WebSocket ChatTransport
-│
-└── .sandcastle/
-    ├── prompts/
-    │   ├── grill-with-docs.md
-    │   ├── to-prd.md
-    │   ├── to-issues.md             # writes structured JSON sidecar (harvested + Zod-validated)
-    │   ├── plan-implementation.md
-    │   ├── implement-issue.md
-    │   ├── eval-summary.md
-    │   ├── eval-screenshots.md
-    │   ├── eval-diff-narrative.md
-    │   ├── eval-tests.md
-    │   ├── eval-qa-plan.md
-    │   ├── eval-assemble.md         # produces final HTML, collects Notifications
-    │   ├── eval-acceptance.md       # feature-level eval, incl. refactor opportunities
-    │   ├── document.md              # Finalize: update README/ADRs
-    │   └── deploy.md
-    └── main.ts                      # Sandcastle entry point (used by runner.ts)
 ```
 
 > Dropped from v1: `/prototype` (no prototype step in the flow) and `improve-architecture.md` as a
 > standalone stage (folded into `eval-acceptance.md` as the refactor-opportunities pass).
-> Added: `document.md`.
+> Added: `document.md`. Retired: `.sandcastle/` scaffold (Sandcastle + Docker agent path).
 
 ---
 
@@ -868,7 +903,7 @@ modules, not modules of their own.
 | `PipelineEngine` | pipeline lookup by `(kind, hasParent)`; `advance(card)` | all column/step transition rules, auto-advance, "workflow is code" |
 | `CardStore` | CRUD, kind decision, fan-out, blocker edges, derived queries ("X of Y", queue candidates, Round N history) | SQLite/Drizzle, the unified draft/active/merged model, every derivation rule |
 | `ArtifactStore` | `save`, `harvest(worktree, declarations)`, `list(card)`, serve-path resolution | atomic/versioned files, metadata, containment, manifest regeneration, lineage, rounds, supersession |
-| `ExecutionEngine` | `enqueue(card, step)` + run events; `startPreview(card, gitSha)` / `stopPreview()` | `AgentRunner` (today: Sandcastle + cursor), per-run worktrees/finalization, branch strategy, sequential queue, Docker preview lifecycle, blocker checks, restart recovery, eval-skill sequencing |
+| `ExecutionEngine` | `enqueue(card, step)` + run events; `startPreview(card, gitSha)` / `stopPreview()` | `AgentRunner` (today: `@cursor/sdk` local), `WorktreeManager`, per-run worktrees/finalization, branch strategy, sequential queue, host-process preview lifecycle, blocker checks, restart recovery, eval-skill sequencing |
 | `AcpBridge` | `openSession(skillPrompt)` → `UIMessage` stream | spawning `agent acp`, ACP→`UIMessage` projection, permission responses, JSON-RPC piping, disconnect/summary handling |
 
 ### The slice sequence
@@ -882,13 +917,14 @@ blocker relationship can be built in parallel or reordered.
 2. **Kind decision moves a card.** Info tab, "Grill me →" / "Implement now →",
    `PipelineEngine` lookup + `advance`. *Demo: a card walks its pipeline's columns.*
    (Blocked by 1.)
-3. **Tracer bullet: one real autonomous run.** *(Done — issue #6.)* `ExecutionEngine` in its
-   thinnest form — `SandcastleAgentRunner` (`docker()` + `cursor("composer-2.5")`) runs a
-   single queued Plan step on the tracer prompt (`slice-3-tracer`: create + commit `hello.txt`
-   in an isolated branch worktree), a `runs` row is written, the log streams live over SSE.
-   **First unknown resolved:** Cursor auth in Docker works on this host. Shipped Docker only —
-   no `noSandbox()` fallback in the runner. *Demo: Implement now →, watch Plan go
-   ai-working → done from the board.* (Blocked by 2.)
+3. **Tracer bullet: one real autonomous run.** *(Done — issue #6; execution path migrating per
+   [ADR 0010](./docs/adr/0010-self-managed-worktrees-cursor-sdk.md).)* `ExecutionEngine` in its
+   thinnest form — originally `SandcastleAgentRunner` (Docker); target is `CursorSdkAgentRunner`
+   + `WorktreeManager` running a single queued Plan step on the tracer prompt (`slice-3-tracer`:
+   create + commit `hello.txt` in an isolated branch worktree), a `runs` row is written, the log
+   streams live over SSE. **Spike validated:** `@cursor/sdk` local + self-managed worktrees on
+   native Windows (PARTIAL GO — sandbox unavailable, runs without it). *Demo: Implement now →,
+   watch Plan go ai-working → done from the board.* (Blocked by 2.)
 4. **Artifact round-trip.** `ArtifactStore`: finalize the host-written run log plus harvest a
    required uncommitted `.jeeves/plan.md`; store immutable, root-relative indexed versions;
    serve over HTTP; render formatted read-only Plan beneath a collapsible run log. Completed
@@ -931,8 +967,8 @@ This will be used as input to /to-prd.
    `sandbox="allow-scripts"`. Parent-owned browser storage synchronizes QA through validated
    `postMessage` and drives the QA-gated Approve button. A preview-manager sub-slice wires
    Start Server → readiness → Open in Browser + Stop against the evaluation's exact SHA using
-   Jeeves-owned Docker configuration. *Demo: start and review a real slice from your phone; the
-   gate flips when QA completes.* (Blocked by 8.)
+   Jeeves-owned host-process `preview_config`. *Demo: start and review a real slice from your
+   phone; the gate flips when QA completes.* (Blocked by 8.)
 10. **Approve & merge.** `decisions` rows with the `qa_complete` snapshot; child approval first
     validates a temporary merge against the current feature tip, then merges and leaves the
     board (conflict/failure returns it for rework); feature auto-advances when all children are
@@ -996,30 +1032,31 @@ trusting it to run automatically.
 
 ---
 
-## Resolved: Cursor auth in Docker (slice 3)
+## Resolved: execution runtime (slice 3 → ADR 0010)
 
-**Decision:** ship **Docker only** in `SandcastleAgentRunner` — no runtime fallback to
-`noSandbox()` or WSL. The spike was a one-time gate, not a built-in alternate path.
+**Decision:** replace Sandcastle + Docker agent execution with **self-managed git worktrees** +
+**`@cursor/sdk` local**. No Docker for agent runs. Supersedes the slice-3 Docker-only gate.
 
-**Verified on this host (slice 3 spike + jeeves E2E):**
+**Verified on this host (`.scratch/spike-sdk-worktree.ts`, `npm run spike:sdk`):**
 
-- `@ai-hero/sandcastle@0.12.0` + `docker()` + `cursor("composer-2.5")` with `CURSOR_API_KEY`
-- Explicit `branchStrategy: { type: "branch", branch: "…" }` — never Docker's default `head`
-  (bind-mount would write to the host working tree)
-- Tracer creates + commits `hello.txt`; Sandcastle removes the clean worktree; jeeves deletes
-  the leftover branch
-- Full path through `ExecutionEngine`: decide → enqueue → Plan `ai-working` → `done`, run log
-  over SSE
+- `WorktreeManager` pattern: `git worktree add -B …` / `remove --force`, isolation from host checkout
+- `@cursor/sdk` local with `composer-2.5`, `CURSOR_API_KEY` from repo-root `.env`
+- Log streaming via `run.stream()` tee to file; uncommitted `.jeeves/plan.md` harvest on host path
+- Cancel via `run.cancel()`; dispose treats `[canceled]` as success
+- SDK native sandbox **unavailable** on native Windows — runs proceed without `sandboxOptions.enabled`
+
+**Verdict:** PARTIAL GO (worktree + run + cancel pass; sandbox probe fails on Windows).
 
 **One-time setup on a fresh machine:**
 
 ```bash
-# Sandcastle scaffold is in .sandcastle/ (Dockerfile committed)
-npx @ai-hero/sandcastle docker build-image   # produces sandcastle:jeeves
-# CURSOR_API_KEY in repo-root .env (server loads it) or .sandcastle/.env
+# Git + CURSOR_API_KEY in repo-root .env — no Docker Desktop required
+npm run spike:sdk              # full regression gate
+npm run spike:sdk -- --phase run   # plan harvest smoke only
 ```
 
-Re-run the manual spike any time: `npx tsx .scratch/spike-hello.ts`
+See [ADR 0010](./docs/adr/0010-self-managed-worktrees-cursor-sdk.md) for preview policy and
+`preview_config` schema.
 
 ---
 
@@ -1044,12 +1081,12 @@ Re-run the manual spike any time: `npx tsx .scratch/spike-hello.ts`
 
 1. **Data model redesign** — *resolved:* see [Data Model](#data-model); vocabulary in
    [`CONTEXT.md`](./CONTEXT.md)
-2. **Cursor Docker auth** — *resolved:* Docker is the shipped sandbox provider (slice 3 spike
-   gate passed). `SandcastleAgentRunner` imports `@ai-hero/sandcastle/sandboxes/docker` only.
-   Requires Docker Desktop + `sandcastle:jeeves` image + `CURSOR_API_KEY`.
+2. **Cursor Docker auth / execution runtime** — *resolved:* Sandcastle + Docker superseded by
+   self-managed worktrees + `@cursor/sdk` local ([ADR 0010](./docs/adr/0010-self-managed-worktrees-cursor-sdk.md)).
+   Requires git + `CURSOR_API_KEY`; no Docker Desktop for agent runs.
 3. **Parallel child card execution** — add concurrency to queue once sequential is proven
 4. **Playwright screenshot capture** — *resolved for sequential v1:* reuse the Jeeves-owned
-   Docker preview configuration, readiness check, and port allocator used by manual Start Server.
+   host-process `preview_config`, readiness check, and port allocator used by manual Start Server.
    Revisit only when parallel execution requires a port pool.
 5. **Colleague access** — move server to VPS, no code changes required
 6. **Feature auto-advance trigger** — needs an "all children merged" event; implement as a check in
@@ -1061,6 +1098,7 @@ Re-run the manual spike any time: `npx tsx .scratch/spike-hello.ts`
 8. **Worktree lifecycle + manual testing** — *resolved:* branches are durable, worktrees are
    fresh per run and recreated from explicit refs/SHAs; Implement steps share a task branch and
    explicit artifacts, not a physical worktree. Human Review previews recreate the exact evaluated
-   SHA and run with Jeeves-owned configuration in Docker (see
-   [Worktree lifecycle](#worktree-lifecycle-branches-are-durable-worktrees-are-ephemeral) and
+   SHA and run with Jeeves-owned host-process configuration (see
+   [Worktree lifecycle](#worktree-lifecycle-branches-are-durable-worktrees-are-ephemeral),
+   [Testing a card in Human Review](#testing-a-card-in-human-review), and
    [ADR 0009](./docs/adr/0009-branches-durable-worktrees-ephemeral.md)).

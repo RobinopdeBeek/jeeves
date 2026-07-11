@@ -9,8 +9,8 @@ node_modules/
 # Local scratch (agent drafts, spike notes)
 .scratch/
 
-# Sandcastle runtime (worktrees/logs are transient; prompts are committed)
-.sandcastle/worktrees/
+# Ephemeral git worktrees (under data/; listed explicitly for clarity)
+data/worktrees/
 
 # Local data (SQLite + WAL sidecars)
 data/

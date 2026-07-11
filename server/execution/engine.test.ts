@@ -8,6 +8,7 @@ import { EventBus, type JeevesEvent } from "./events.js";
 import { ExecutionEngine } from "./engine.js";
 import { RunStore } from "./run-store.js";
 import type { AgentRunner, RunAgentOptions, RunEvent } from "./runner.js";
+import type { WorktreeLifecycle } from "./worktree-manager.js";
 
 /**
  * Scripted fake AgentRunner. Each run() call consumes the next script in
@@ -38,9 +39,30 @@ function fakeRunner(scripts: Script[]) {
   return { runner, calls };
 }
 
-const ok = (commits = 1): RunEvent[] => [
+function fakeWorktrees(root: string): WorktreeLifecycle {
+  return {
+    worktreePathFor(cardId) {
+      return path.join(root, "worktrees", cardId);
+    },
+    async resolveRef() {
+      return "abc123def456";
+    },
+    async create(_branch, _baseSha, worktreePath) {
+      fs.mkdirSync(worktreePath, { recursive: true });
+    },
+    async remove(worktreePath) {
+      fs.rmSync(worktreePath, { recursive: true, force: true });
+    },
+    async captureDiagnostics() {
+      return { status: "", diff: "", diffCached: "", headSha: "abc123def456" };
+    },
+    async cleanupOrphans() {},
+  };
+}
+
+const ok = (): RunEvent[] => [
   { type: "log", line: "working…" },
-  { type: "result", commits },
+  { type: "result", status: "finished" },
 ];
 
 describe("ExecutionEngine", () => {
@@ -50,6 +72,7 @@ describe("ExecutionEngine", () => {
   let events: EventBus;
   let received: JeevesEvent[];
   let artifactRoot: string;
+  const repoRoot = path.join(os.tmpdir(), "jeeves-repo-root");
 
   beforeEach(() => {
     db = openDb(":memory:");
@@ -59,10 +82,12 @@ describe("ExecutionEngine", () => {
     received = [];
     events.subscribe((e) => received.push(e));
     artifactRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-engine-"));
+    fs.mkdirSync(repoRoot, { recursive: true });
   });
 
   afterEach(() => {
     fs.rmSync(artifactRoot, { recursive: true, force: true });
+    fs.rmSync(repoRoot, { recursive: true, force: true });
   });
 
   function makeEngine(scripts: Script[]) {
@@ -71,8 +96,10 @@ describe("ExecutionEngine", () => {
       store,
       runs: runStore,
       runner,
+      worktrees: fakeWorktrees(artifactRoot),
       events,
       artifactRoot,
+      repoRoot,
     });
     return { engine, calls };
   }
@@ -88,7 +115,7 @@ describe("ExecutionEngine", () => {
     return store.getCard(cardId)!.steps.find((s) => s.key === stepKey)?.status;
   }
 
-  it("runs a queued Plan to done when the agent commits", async () => {
+  it("runs a queued Plan to done when the agent succeeds", async () => {
     const card = queuedCard();
     const { engine, calls } = makeEngine([{ events: ok() }]);
 
@@ -105,14 +132,18 @@ describe("ExecutionEngine", () => {
     expect(run?.logPath).toContain(path.join("cards", card.id, "0"));
 
     expect(calls).toHaveLength(1);
-    expect(calls[0].promptFile).toContain("slice-3-tracer.md");
+    expect(calls[0].promptFile).toContain(
+      path.join("prompts", "execution", "slice-3-tracer.md"),
+    );
     expect(calls[0].options.cwd).toBe("C:/target-repo");
-    expect(calls[0].options.branch).toBe(`jeeves/card-${card.id}/plan`);
+    expect(calls[0].options.branch).toBe(`jeeves/card-${card.id}`);
+    expect(calls[0].options.worktreePath).toContain(path.join("worktrees", card.id));
+    expect(calls[0].options.baseSha).toBe("abc123def456");
   });
 
   it("moves Plan to needs-user with a failed run when the agent errors", async () => {
     const card = queuedCard();
-    const { engine } = makeEngine([{ error: new Error("docker exploded") }]);
+    const { engine } = makeEngine([{ error: new Error("sdk exploded") }]);
 
     engine.enqueue(card.id, "plan");
     await engine.whenIdle();
@@ -120,12 +151,19 @@ describe("ExecutionEngine", () => {
     expect(stepStatus(card.id, "plan")).toBe("needs-user");
     const run = runStore.latestForStep(card.id, "plan");
     expect(run?.status).toBe("failed");
-    expect(run?.error).toBe("docker exploded");
+    expect(run?.error).toBe("sdk exploded");
   });
 
-  it("treats a resolved run with zero commits as failed", async () => {
+  it("treats a cancelled run as failed", async () => {
     const card = queuedCard();
-    const { engine } = makeEngine([{ events: ok(0) }]);
+    const { engine } = makeEngine([
+      {
+        events: [
+          { type: "log", line: "working…" },
+          { type: "result", status: "cancelled" },
+        ],
+      },
+    ]);
 
     engine.enqueue(card.id, "plan");
     await engine.whenIdle();
@@ -133,7 +171,7 @@ describe("ExecutionEngine", () => {
     expect(stepStatus(card.id, "plan")).toBe("needs-user");
     const run = runStore.latestForStep(card.id, "plan");
     expect(run?.status).toBe("failed");
-    expect(run?.error).toMatch(/commit/i);
+    expect(run?.error).toMatch(/cancel/i);
   });
 
   it("runs one card at a time — second stays queued until the first finishes", async () => {
@@ -272,7 +310,7 @@ describe("ExecutionEngine", () => {
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
-/** Rejects when the signal aborts — mirrors how Sandcastle cancels a run. */
+/** Rejects when the signal aborts — mirrors how the SDK cancels a run. */
 function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return promise;
   return new Promise<T>((resolve, reject) => {

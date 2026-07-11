@@ -35,12 +35,12 @@ Laptop (always on)
 │     ├── HTTP        → React board UI + REST API + SSE board updates
 │     ├── /artifacts  → serves the artifact folder (eval iframe, screenshots)
 │     ├── /ws/chat    → AcpBridge ⇄ `agent acp` subprocess (JSON-RPC)   [AI Chat steps]
-│     ├── queue       → ExecutionEngine → Sandcastle run                [AI Execution steps]
-│     └── preview     → ExecutionEngine → Docker preview                 [Human Review testing]
+│     ├── queue       → ExecutionEngine → @cursor/sdk local run          [AI Execution steps]
+│     └── preview     → ExecutionEngine → host-process preview           [Human Review testing]
 │                          │
-│                          ├── Docker container
-│                          ├── fresh per-run git worktree of the target repo
-│                          └── cursor("composer-2.5") via Cursor CLI auth
+│                          ├── self-managed git worktree (WorktreeManager)
+│                          ├── fresh per-run worktree of the target repo
+│                          └── @cursor/sdk local (composer-2.5) via CURSOR_API_KEY
 │
 ├── SQLite file  +  artifact folder (data/cards/<cardId>/<round>/)
 ├── Target repo(s) — the projects jeeves works on; stay git-clean, no artifacts committed
@@ -57,18 +57,12 @@ What crosses each boundary:
   projects events into AI SDK `UIMessage` parts inside `AcpBridge` (including permission
   requests). Host-produced artifacts (grill summary, PRD, chat transcripts) are written
   by the server directly into the artifact folder.
-- **Server ⇄ sandbox:** the sandboxed agent can only see its worktree. It has no database
-  access — it reads the injected inputs and the per-card `manifest.json`. Sandbox-produced
-  artifacts (Plan, eval HTML, screenshots, structured sidecars) are written to known exchange
-  paths. A generic finalization callback harvests and validates them before teardown; failure
-  preserves diagnostics.
-- **Sandbox ⇄ target repo:** each run gets a fresh worktree on one durable card branch. Features
+- **Server ⇄ agent worktree:** the agent runs in a self-managed git worktree via `@cursor/sdk` local. It has no database access — it reads the injected inputs and the per-card `manifest.json`. Worktree-produced artifacts (Plan, eval HTML, screenshots, structured sidecars) are written to known exchange paths. A generic finalization callback harvests and validates them on the host before teardown; failure preserves diagnostics.
+- **Worktree ⇄ target repo:** each run gets a fresh worktree on one durable card branch. Features
   and standalone tasks branch from the project's explicit local default ref; child tasks branch
   from their feature branch. Every base is resolved and recorded by SHA—never inferred from the
   host checkout or updated from remote implicitly.
-- **Preview ⇄ target repo:** Human Review testing recreates the exact evaluated `git_sha` and
-  runs Jeeves-owned project commands in a Docker preview container with an environment allowlist,
-  readiness check, published port, and one lazy-retained slot.
+- **Preview ⇄ target repo:** Human Review testing recreates the exact evaluated `git_sha` in a worktree and runs Jeeves-owned project commands as a host child process with an environment allowlist, readiness check, published port, and one lazy-retained slot.
 
 Migration path: moving to a VPS is "copy the SQLite file + `data/` and run the same
 command" — no code changes.
@@ -86,8 +80,8 @@ command" — no code changes.
 | Base components | shadcn/ui | Card, Badge, Button, Dialog, Sheet, Progress |
 | Icons | Tabler Icons (`@tabler/icons-react`) | Project standard; shadcn `iconLibrary` is `tabler` |
 | Markdown editor | MDXEditor | True WYSIWYG that outputs clean markdown |
-| Execution sandbox | Sandcastle | Worktrees, branches, and merging already solved |
-| Agent | `cursor("composer-2.5")` | Existing subscription + Cursor's codebase intelligence |
+| Execution engine | Self-managed worktrees + `@cursor/sdk` | Jeeves owns git worktree lifecycle; SDK local runs on host ([ADR 0010](./docs/adr/0010-self-managed-worktrees-cursor-sdk.md)) |
+| Agent | `@cursor/sdk` local (`composer-2.5`) | Existing subscription + Cursor's codebase intelligence; no Docker for agent runs |
 | Chat state & streaming | Vercel AI SDK 5 (`ai`, `@ai-sdk/react`) | `useChat`, typed `UIMessage` parts, custom transport |
 | Chat UI | assistant-ui (`@assistant-ui/react`, `@assistant-ui/react-ai-sdk`) | Pre-built message list, composer, streaming indicators over AI SDK |
 | AI chat transport | Cursor ACP bridge | Interactive sessions with full codebase context; ACP projected to `UIMessage` server-side |
@@ -121,7 +115,7 @@ Chat and execution share AI SDK stream types but use different backends today
 Browser                          Server
   useChat + assistant-ui  ←WS→  AcpBridge  ⇄  agent acp (JSON-RPC)     [AI Chat steps]
   StepExecution (run log)   ←SSE→ ExecutionEngine → AgentRunner           [AI Execution steps]
-                                                          └── Sandcastle + cursor("composer-2.5")
+                                                          └── @cursor/sdk local (composer-2.5)
 ```
 
 - **Chat:** `AcpBridge` owns the ACP→`UIMessage` projection. The client never sees ACP
@@ -130,7 +124,7 @@ Browser                          Server
 - **Execution:** `AgentRunner` (`run(prompt, options): AsyncIterable<RunEvent>`) is the inner
   seam inside `ExecutionEngine`. One call owns one temporary worktree and invokes a generic
   finalization callback before cleanup so `ExecutionEngine` can harvest and enforce the Plan,
-  Implement, or AI Review postcondition. Sandcastle is today's implementation; a future
+  Implement, or AI Review postcondition. `@cursor/sdk` local is today's implementation; a future
   HarnessAgent adapter would slot in without changing the board, queue, or chat UI.
 - **Structured skill outputs:** skills that must return parseable data (e.g. `/to-issues`)
   write JSON to a known worktree path; the runner harvests and validates with Zod on the host,
@@ -150,10 +144,10 @@ them. Everything else (routes, React components) is a thin adapter.
 | `PipelineEngine` | `server/pipelines.ts` | pipeline lookup by `(kind, hasParent)`; `advance(card)` | all column/step transition rules, auto-advance, "workflow is code" |
 | `CardStore` | `server/db/` + card logic | CRUD, kind decision, fan-out, blocker edges, derived queries ("X of Y", queue candidates, Round N history) | SQLite/Drizzle, the unified draft/active/merged model, every derivation rule |
 | `ArtifactStore` | `server/routes/artifacts.ts` + storage logic | `save`, `harvest(worktree, declarations)`, `list(card)`, serve-path resolution | atomic/versioned files, metadata, root containment, manifest regeneration, lineage, rounds, supersession |
-| `ExecutionEngine` | `server/execution/` (`engine.ts`, `runner.ts`, `sandcastle-runner.ts`, `run-store.ts`, `events.ts`) | `enqueue(card, step)` + run events; `startPreview(card, gitSha)` / `stopPreview()` | `AgentRunner`, per-run worktrees/finalization, branch strategy, Docker preview lifecycle, sequential queue, blockers, restart recovery, eval sequencing |
+| `ExecutionEngine` | `server/execution/` (`engine.ts`, `runner.ts`, `worktree-manager.ts`, `cursor-sdk-runner.ts`, `run-store.ts`, `events.ts`) | `enqueue(card, step)` + run events; `startPreview(card, gitSha)` / `stopPreview()` | `AgentRunner`, per-run worktrees/finalization, branch strategy, host-process preview lifecycle, sequential queue, blockers, restart recovery, eval sequencing |
 | `AcpBridge` | `server/ws/chat.ts` | `openSession(skillPrompt)` → `UIMessage` stream | spawning `agent acp`, ACP→`UIMessage` projection, permission responses, JSON-RPC piping, disconnect/summary handling |
 
-The AI-execution skill prompts live in `.sandcastle/prompts/` and are self-describing; the
+The AI-execution skill prompts live in `prompts/execution/` and are self-describing; the
 `ExecutionEngine` decides which skill runs when.
 
 ---

@@ -1,24 +1,14 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const IMAGE = "sandcastle:jeeves";
 
-async function dockerRunning(): Promise<boolean> {
+async function gitAvailable(): Promise<boolean> {
   try {
-    await execFileAsync("docker", ["info"]);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function imageExists(): Promise<boolean> {
-  try {
-    await execFileAsync("docker", ["image", "inspect", IMAGE]);
+    await execFileAsync("git", ["--version"]);
     return true;
   } catch {
     return false;
@@ -38,31 +28,6 @@ function warnIfMissingCursorKey(): void {
   }
 }
 
-async function buildImage(): Promise<void> {
-  console.log(
-    `Building ${IMAGE} (first time, or after Dockerfile changes — may take several minutes)…`,
-  );
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(
-      "npx",
-      [
-        "sandcastle",
-        "docker",
-        "build-image",
-        "--image-name",
-        IMAGE,
-        "--dockerfile",
-        ".sandcastle/Dockerfile",
-      ],
-      { cwd: rootDir, stdio: "inherit", shell: process.platform === "win32" },
-    );
-    child.on("error", reject);
-    child.on("close", (code) =>
-      code === 0 ? resolve() : reject(new Error(`sandcastle docker build-image exited ${code}`)),
-    );
-  });
-}
-
 async function main(): Promise<void> {
   if (process.env.JEEVES_SKIP_DEV_GUARD) {
     console.log("Skipping dev guard (JEEVES_SKIP_DEV_GUARD is set).");
@@ -71,20 +36,20 @@ async function main(): Promise<void> {
 
   warnIfMissingCursorKey();
 
-  if (!(await dockerRunning())) {
+  if (!(await gitAvailable())) {
     console.error(
       [
-        "Docker is not running.",
-        "  Start Docker Desktop, then run npm run dev again.",
-        '  Tip: enable "Start Docker Desktop when you sign in" so reboots are painless.',
+        "git is not available on PATH.",
+        "  Install Git and ensure `git --version` works, then run npm run dev again.",
       ].join("\n"),
     );
     process.exit(1);
   }
 
-  if (!(await imageExists())) {
-    await buildImage();
-  }
+  console.log(
+    "Dev guard OK — agent runs use @cursor/sdk with self-managed git worktrees.",
+  );
+  console.log("  Regression gate: npm run spike:sdk -- --phase run");
 }
 
 main().catch((err) => {

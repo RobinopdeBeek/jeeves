@@ -4,20 +4,22 @@
   "description": "A personal workflow board that runs a Matt Pocock-inspired development pipeline visually.",
   "type": "module",
   "scripts": {
-    "dev": "npm run dev:guard && concurrently -n server,client -c blue,green \"npm run dev:server\" \"npm run dev:client\"",
+    "dev": "npm run dev:guard && npm run dev:ports && concurrently -n server,client -c blue,green \"npm run dev:server\" \"npm run dev:client\"",
     "dev:guard": "tsx scripts/dev-guard.ts",
+    "dev:ports": "tsx scripts/ensure-ports.ts",
     "dev:client": "vite",
-    "dev:server": "tsx watch server/index.ts",
+    "dev:server": "node --watch --import tsx server/index.ts",
     "build": "vite build",
     "start": "tsx server/index.ts",
     "test": "vitest run",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "spike:sdk": "tsx .scratch/spike-sdk-worktree.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@ai-hero/sandcastle": "^0.12.0",
+    "@cursor/sdk": "^1.0.18",
     "@hono/node-server": "^2.0.8",
     "@tabler/icons-react": "^3.44.0",
     "better-sqlite3": "^12.11.1",

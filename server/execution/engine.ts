@@ -6,22 +6,29 @@ import type { StepKey } from "../pipelines.js";
 import { EventBus } from "./events.js";
 import type { RunStore } from "./run-store.js";
 import type { AgentRunner, RunEvent } from "./runner.js";
+import type { WorktreeLifecycle } from "./worktree-manager.js";
+import { WorktreeManager } from "./worktree-manager.js";
 
 /** Which skill an ai-execution step runs (slice 3: Plan → tracer only). */
 const STEP_SKILLS: Partial<Record<StepKey, { skill: string; promptFile: string }>> = {
   plan: {
     skill: "slice-3-tracer",
-    promptFile: path.join(".sandcastle", "prompts", "slice-3-tracer.md"),
+    promptFile: path.join("prompts", "execution", "slice-3-tracer.md"),
   },
 };
+
+const DEFAULT_BASE_REF = "main";
 
 export interface ExecutionEngineDeps {
   store: CardStore;
   runs: RunStore;
   runner: AgentRunner;
+  worktrees: WorktreeLifecycle;
   events: EventBus;
   /** The artifact folder root — run logs land under `cards/<id>/<round>/`. */
   artifactRoot: string;
+  /** Repo root — prompt files resolve relative to this. */
+  repoRoot: string;
 }
 
 /**
@@ -44,10 +51,12 @@ export class ExecutionEngine {
   /**
    * Boot hooks, in order: (1) orphaned `running` runs from a previous
    * process are failed and their steps parked at needs-user; (2) steps left
-   * `queued` (never picked up, or restart before start) are re-enqueued.
+   * `queued` (never picked up, or restart before start) are re-enqueued;
+   * (3) stale worktree directories are cleaned up.
    */
   boot(): void {
-    const { store, runs, events } = this.deps;
+    const { store, runs, events, worktrees } = this.deps;
+    void worktrees.cleanupOrphans();
     for (const orphan of runs.failOrphans()) {
       events.emit({
         type: "card.updated",
@@ -91,7 +100,8 @@ export class ExecutionEngine {
   }
 
   private async execute(cardId: string, stepKey: StepKey): Promise<void> {
-    const { store, runs, runner, events, artifactRoot } = this.deps;
+    const { store, runs, runner, worktrees, events, artifactRoot, repoRoot } =
+      this.deps;
     const skill = STEP_SKILLS[stepKey];
     const card = store.getCard(cardId);
     if (!skill || !card) return;
@@ -115,18 +125,31 @@ export class ExecutionEngine {
       card: store.setStepStatus(cardId, stepKey, "ai-working"),
     });
 
+    const repoPath = store.getRepoPath(cardId);
+    const branch = WorktreeManager.cardBranch(cardId);
+    const worktreePath = worktrees.worktreePathFor(cardId);
+    let baseSha = "";
+
     const fail = (message: string) => {
       runs.finish(run.id, { status: "failed", error: message });
       this.finishStep(cardId, stepKey, "needs-user", run.id, "failed", message);
     };
 
     try {
+      baseSha = await worktrees.resolveRef(DEFAULT_BASE_REF);
+      await worktrees.create(branch, baseSha, worktreePath);
+
       let result: Extract<RunEvent, { type: "result" }> | undefined;
-      const iterable = runner.run(path.resolve(skill.promptFile), {
-        cwd: store.getRepoPath(cardId),
-        branch: `jeeves/card-${cardId}/${stepKey}`,
+      const iterable = runner.run(path.resolve(repoRoot, skill.promptFile), {
+        cwd: repoPath,
+        branch,
+        worktreePath,
+        baseSha,
         logPath,
         signal: this.abort.signal,
+        onFinalize: async (ctx) => {
+          await this.finalizeStep(cardId, stepKey, ctx);
+        },
       });
       for await (const event of iterable) {
         if (event.type === "log") {
@@ -135,7 +158,7 @@ export class ExecutionEngine {
           result = event;
         }
       }
-      if (result && result.commits > 0) {
+      if (result?.status === "finished" && checkStepPostconditions(stepKey, result)) {
         runs.finish(run.id, {
           status: "succeeded",
           model: result.model,
@@ -143,12 +166,32 @@ export class ExecutionEngine {
           tokensOut: result.tokensOut,
         });
         this.finishStep(cardId, stepKey, "done", run.id, "succeeded");
+      } else if (result?.status === "cancelled") {
+        fail("run cancelled");
       } else {
-        fail("run resolved without any commits");
+        fail("step postconditions not met");
       }
     } catch (e) {
       fail(e instanceof Error ? e.message : String(e));
+    } finally {
+      try {
+        await worktrees.remove(worktreePath);
+      } catch {
+        // Non-fatal: orphan cleanup runs on next boot.
+      }
     }
+  }
+
+  /**
+   * Post-run finalization on the host worktree path (slice 4: harvest
+   * exchange sidecars via ArtifactStore).
+   */
+  private async finalizeStep(
+    _cardId: string,
+    _stepKey: StepKey,
+    _ctx: { workspacePath: string; headSha: string; baseSha: string },
+  ): Promise<void> {
+    // slice 4 — ArtifactStore.harvest from workspacePath
   }
 
   /**
@@ -188,4 +231,12 @@ export class ExecutionEngine {
       card: store.setStepStatus(cardId, stepKey, stepStatus),
     });
   }
+}
+
+/** Slice 4 — per-step success checks beyond runner terminal status. */
+function checkStepPostconditions(
+  _stepKey: StepKey,
+  _result: Extract<RunEvent, { type: "result" }>,
+): boolean {
+  return true;
 }

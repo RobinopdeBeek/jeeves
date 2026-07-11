@@ -24,16 +24,17 @@ Explicitly blocked child tasks wait until their blocker is approved and merged. 
 
 Manual testing always targets the evaluation artifact's exact `git_sha`, never an assumed branch tip. The evaluation iframe requests **Start Server** through a validated `postMessage`; the parent binds the action to the displayed card and calls `POST /api/cards/:id/dev-server`.
 
-The preview manager recreates a worktree at that SHA and starts the project's explicitly configured dev server in a **Docker container**, publishing an allocated host port. Preview configuration is Jeeves-owned—not executable configuration from the reviewed branch—and includes the image/Dockerfile, setup command, dev command, container port, readiness path/timeout, and an explicit environment allowlist or separate preview env file. It never inherits Jeeves' ambient environment or credentials.
+The preview manager recreates a worktree at that SHA and starts the project's explicitly configured **dev server as a host child process**, binding an allocated port on `0.0.0.0` for Tailscale access. Preview configuration is Jeeves-owned—not executable configuration from the reviewed branch—and includes setup command, dev command, port, readiness path/timeout, and an explicit environment allowlist. It never inherits Jeeves' ambient environment or credentials. See [ADR 0010](./0010-self-managed-worktrees-cursor-sdk.md) for the `preview_config` schema.
 
-There is one lazy-retained preview slot initially. The UI moves through **Start Server → Starting… → Open in Browser + Stop Server**; “running” requires a successful readiness check, and failure exposes recent preview logs plus Retry. URLs use the Jeeves/Tailscale hostname, never `127.0.0.1`. Starting another preview confirms replacement. Stop, approval, request changes, card deletion, or Jeeves shutdown removes the container and preview worktree. Labeled orphan containers/worktrees are cleaned on boot.
+There is one lazy-retained preview slot initially. The UI moves through **Start Server → Starting… → Open in Browser + Stop Server**; “running” requires a successful readiness check, and failure exposes recent preview logs plus Retry. URLs use the Jeeves/Tailscale hostname, never `127.0.0.1`. Starting another preview confirms replacement. Stop, approval, request changes, card deletion, or Jeeves shutdown kills the process tree and removes the preview worktree. Labeled orphan processes/worktrees are cleaned on boot.
 
 ## Considered options
 
 - **One worktree spanning all three steps** — rejected: once artifacts and commits are the durable hand-offs, a long-lived in-memory workspace adds restart complexity without preserving necessary state.
 - **Per-step branches** (the slice-3 stopgap `jeeves/card-<id>/<step>`) — rejected: Plan, Implement, and AI Review belong to one task history.
 - **Keep every worktree alive through review** — rejected: idle worktrees consume disk and are reconstructable from branch/SHA.
-- **Run previews directly on the host** — rejected: target code and dependency lifecycle scripts are AI-written; Docker preserves the execution trust boundary.
+- **Run previews directly on the host** — **accepted (v1):** target code runs in a recreated worktree at the evaluated SHA with Jeeves-owned setup/dev commands and a strict env allowlist; process tree killed on Stop. Acceptable trade-off for a personal tool reviewing your own AI's output on your own repos.
+- **Docker-isolated preview containers** — **rejected for now:** stronger isolation for AI-written dependency scripts, but reintroduces Docker Desktop, image maintenance, and container lifecycle as a permanent dev dependency after removing Docker from agent runs. Documented as a deferred escape hatch in [ADR 0010](./0010-self-managed-worktrees-cursor-sdk.md) — same `startPreview` / `stopPreview` seam, no agent-run changes.
 - **Use repository `HEAD` or auto-fetch a base** — rejected: both make branch provenance implicit or mutate refs unexpectedly.
 
 ## Consequences
@@ -41,4 +42,5 @@ There is one lazy-retained preview slot initially. The UI moves through **Start 
 - Slice 4 adopts the per-run `createWorktree()` lifecycle and a pre-cleanup finalization callback, and drops the step suffix from branch names.
 - `projects` needs an explicit local `default_branch`; each run/workspace records its resolved `base_sha`.
 - Preview configuration and lifecycle are Jeeves-owned project concerns shared with Playwright screenshot capture.
-- A preview manager lands with the evaluation/Human Review work; it is not part of slice 4.
+- A preview manager lands with the evaluation/Human Review work (slice 9); it is not part of slice 4.
+- Agent execution uses self-managed worktrees + `@cursor/sdk` local per [ADR 0010](./0010-self-managed-worktrees-cursor-sdk.md).

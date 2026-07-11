@@ -5,10 +5,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CardStore } from "./cards/store.js";
 import { openDb } from "./db/index.js";
+import { CursorSdkAgentRunner } from "./execution/cursor-sdk-runner.js";
 import { ExecutionEngine } from "./execution/engine.js";
 import { EventBus } from "./execution/events.js";
 import { RunStore } from "./execution/run-store.js";
-import { SandcastleAgentRunner } from "./execution/sandcastle-runner.js";
+import { WorktreeManager } from "./execution/worktree-manager.js";
 import { cardRoutes } from "./routes/cards.js";
 import { eventRoutes } from "./routes/events.js";
 import { runRoutes } from "./routes/runs.js";
@@ -22,7 +23,9 @@ try {
 const dataDir = path.join(rootDir, "data");
 const dbPath = process.env.JEEVES_DB_PATH ?? path.join(dataDir, "jeeves.db");
 const repoPath = process.env.JEEVES_REPO_PATH ?? rootDir;
-const port = Number(process.env.JEEVES_PORT ?? 3000);
+const worktreeRoot =
+  process.env.JEEVES_WORKTREE_ROOT ?? path.join(dataDir, "worktrees");
+const port = Number(process.env.JEEVES_PORT ?? 3939);
 
 const db = openDb(dbPath);
 const store = new CardStore(db);
@@ -30,12 +33,15 @@ const project = store.ensureDefaultProject(path.basename(repoPath), repoPath);
 
 const events = new EventBus();
 const runs = new RunStore(db);
+const worktrees = new WorktreeManager({ repoPath, worktreeRoot });
 const engine = new ExecutionEngine({
   store,
   runs,
-  runner: new SandcastleAgentRunner(),
+  runner: new CursorSdkAgentRunner(),
+  worktrees,
   events,
   artifactRoot: dataDir,
+  repoRoot: rootDir,
 });
 
 const app = new Hono();

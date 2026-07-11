@@ -19,7 +19,7 @@ todos:
     status: completed
   - id: tests-demo
     content: Update engine.test.ts; run npm test; manual board demo + spike:sdk regression
-    status: pending
+    status: completed
   - id: github-issues
     content: "Create migration issue; update #8–#12; comment on closed #5/#6"
     status: completed

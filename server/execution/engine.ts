@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { CardStoreError, type CardWithSteps } from "../cards/store.js";
 import type { CardStore } from "../cards/store.js";
+import type { ArtifactStore } from "../artifacts/store.js";
 import type { StepKey } from "../pipelines.js";
 import { EventBus } from "./events.js";
 import type { RunStore } from "./run-store.js";
@@ -24,6 +25,7 @@ export interface ExecutionEngineDeps {
   runs: RunStore;
   runner: AgentRunner;
   worktrees: WorktreeLifecycle;
+  artifacts: ArtifactStore;
   events: EventBus;
   /** The artifact folder root — run logs land under `cards/<id>/<round>/`. */
   artifactRoot: string;
@@ -100,7 +102,7 @@ export class ExecutionEngine {
   }
 
   private async execute(cardId: string, stepKey: StepKey): Promise<void> {
-    const { store, runs, runner, worktrees, events, artifactRoot, repoRoot } =
+    const { store, runs, runner, worktrees, artifacts, events, artifactRoot, repoRoot } =
       this.deps;
     const skill = STEP_SKILLS[stepKey];
     const card = store.getCard(cardId);
@@ -148,7 +150,7 @@ export class ExecutionEngine {
         logPath,
         signal: this.abort.signal,
         onFinalize: async (ctx) => {
-          await this.finalizeStep(cardId, stepKey, ctx);
+          await this.finalizeStep(cardId, stepKey, round, skill.skill, ctx);
         },
       });
       for await (const event of iterable) {
@@ -158,7 +160,7 @@ export class ExecutionEngine {
           result = event;
         }
       }
-      if (result?.status === "finished" && checkStepPostconditions(stepKey, result)) {
+      if (result?.status === "finished" && checkStepPostconditions(stepKey, artifacts, cardId, round)) {
         runs.finish(run.id, {
           status: "succeeded",
           model: result.model,
@@ -182,16 +184,19 @@ export class ExecutionEngine {
     }
   }
 
-  /**
-   * Post-run finalization on the host worktree path (slice 4: harvest
-   * exchange sidecars via ArtifactStore).
-   */
   private async finalizeStep(
-    _cardId: string,
-    _stepKey: StepKey,
-    _ctx: { workspacePath: string; headSha: string; baseSha: string },
+    cardId: string,
+    stepKey: StepKey,
+    round: number,
+    sourceSkill: string,
+    ctx: { workspacePath: string; headSha: string; baseSha: string },
   ): Promise<void> {
-    // slice 4 — ArtifactStore.harvest from workspacePath
+    if (stepKey !== "plan") return;
+    this.deps.artifacts.harvest(
+      ctx.workspacePath,
+      [{ exchangePath: ".jeeves/plan.md", kind: "plan", stepKey: "plan" }],
+      { cardId, round, sourceSkill, gitSha: ctx.headSha },
+    );
   }
 
   /**
@@ -235,8 +240,15 @@ export class ExecutionEngine {
 
 /** Slice 4 — per-step success checks beyond runner terminal status. */
 function checkStepPostconditions(
-  _stepKey: StepKey,
-  _result: Extract<RunEvent, { type: "result" }>,
+  stepKey: StepKey,
+  artifacts: ArtifactStore,
+  cardId: string,
+  round: number,
 ): boolean {
+  if (stepKey === "plan") {
+    return (
+      artifacts.latest(cardId, { stepKey: "plan", round, kind: "plan" }) !== undefined
+    );
+  }
   return true;
 }

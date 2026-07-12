@@ -82,7 +82,34 @@ export const runs = sqliteTable("runs", {
   logPath: text("log_path"),
 });
 
+export const artifactKinds = [
+  "grill",
+  "prd",
+  "tasks-breakdown",
+  "plan",
+  "eval",
+  "screenshot",
+  "runlog",
+  "attachment",
+] as const;
+
+export const artifacts = sqliteTable("artifacts", {
+  id: text("id").primaryKey(),
+  cardId: text("card_id")
+    .notNull()
+    .references(() => cards.id, { onDelete: "cascade" }),
+  stepKey: text("step_key").notNull(),
+  round: integer("round").notNull(),
+  kind: text("kind", { enum: artifactKinds }).notNull(),
+  path: text("path").notNull(),
+  gitSha: text("git_sha"),
+  schemaVersion: integer("schema_version").notNull().default(1),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+});
+
 export type Project = typeof projects.$inferSelect;
 export type Card = typeof cards.$inferSelect;
 export type CardStep = typeof cardSteps.$inferSelect;
 export type Run = typeof runs.$inferSelect;
+export type Artifact = typeof artifacts.$inferSelect;
+export type ArtifactKind = (typeof artifactKinds)[number];

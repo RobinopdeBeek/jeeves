@@ -3,6 +3,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ArtifactStore } from "./artifacts/store.js";
 import { CardStore } from "./cards/store.js";
 import { openDb } from "./db/index.js";
 import { CursorSdkAgentRunner } from "./execution/cursor-sdk-runner.js";
@@ -33,12 +34,14 @@ const project = store.ensureDefaultProject(path.basename(repoPath), repoPath);
 
 const events = new EventBus();
 const runs = new RunStore(db);
+const artifacts = new ArtifactStore(db, dataDir);
 const worktrees = new WorktreeManager({ repoPath, worktreeRoot });
 const engine = new ExecutionEngine({
   store,
   runs,
   runner: new CursorSdkAgentRunner(),
   worktrees,
+  artifacts,
   events,
   artifactRoot: dataDir,
   repoRoot: rootDir,

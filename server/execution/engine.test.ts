@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { ArtifactStore } from "../artifacts/store.js";
 import { openDb, type Db } from "../db/index.js";
 import { CardStore, type CardWithSteps } from "../cards/store.js";
 import { EventBus, type JeevesEvent } from "./events.js";
@@ -33,7 +34,19 @@ function fakeRunner(scripts: Script[]) {
           ? await abortable(script.gate, options.signal)
           : script.events;
       options.signal?.throwIfAborted();
-      yield* events;
+      for (const event of events) {
+        if (event.type === "result" && event.status === "finished" && options.onFinalize) {
+          const planDir = path.join(options.worktreePath, ".jeeves");
+          fs.mkdirSync(planDir, { recursive: true });
+          fs.writeFileSync(path.join(planDir, "plan.md"), "# Plan\n\nTracer plan.\n");
+          await options.onFinalize({
+            workspacePath: options.worktreePath,
+            headSha: options.baseSha,
+            baseSha: options.baseSha,
+          });
+        }
+        yield event;
+      }
     },
   };
   return { runner, calls };
@@ -69,6 +82,7 @@ describe("ExecutionEngine", () => {
   let db: Db;
   let store: CardStore;
   let runStore: RunStore;
+  let artifactStore: ArtifactStore;
   let events: EventBus;
   let received: JeevesEvent[];
   let artifactRoot: string;
@@ -78,10 +92,11 @@ describe("ExecutionEngine", () => {
     db = openDb(":memory:");
     store = new CardStore(db);
     runStore = new RunStore(db);
+    artifactRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-engine-"));
+    artifactStore = new ArtifactStore(db, artifactRoot);
     events = new EventBus();
     received = [];
     events.subscribe((e) => received.push(e));
-    artifactRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-engine-"));
     fs.mkdirSync(repoRoot, { recursive: true });
   });
 
@@ -97,6 +112,7 @@ describe("ExecutionEngine", () => {
       runs: runStore,
       runner,
       worktrees: fakeWorktrees(artifactRoot),
+      artifacts: artifactStore,
       events,
       artifactRoot,
       repoRoot,
@@ -139,6 +155,47 @@ describe("ExecutionEngine", () => {
     expect(calls[0].options.branch).toBe(`jeeves/card-${card.id}`);
     expect(calls[0].options.worktreePath).toContain(path.join("worktrees", card.id));
     expect(calls[0].options.baseSha).toBe("abc123def456");
+    expect(calls[0].options.onFinalize).toBeTypeOf("function");
+
+    const plan = artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" });
+    expect(plan).toBeDefined();
+    expect(artifactStore.readContent(plan!)).toContain("Tracer plan.");
+  });
+
+  it("fails Plan when the exchange sidecar is missing at finalize", async () => {
+    const card = queuedCard();
+    const runnerWithoutSidecar: AgentRunner = {
+      async *run(_promptFile, options) {
+        yield { type: "log", line: "working…" };
+        if (options.onFinalize) {
+          await options.onFinalize({
+            workspacePath: options.worktreePath,
+            headSha: options.baseSha,
+            baseSha: options.baseSha,
+          });
+        }
+        yield { type: "result", status: "finished" };
+      },
+    };
+    const engine = new ExecutionEngine({
+      store,
+      runs: runStore,
+      runner: runnerWithoutSidecar,
+      worktrees: fakeWorktrees(artifactRoot),
+      artifacts: artifactStore,
+      events,
+      artifactRoot,
+      repoRoot,
+    });
+
+    engine.enqueue(card.id, "plan");
+    await engine.whenIdle();
+
+    expect(stepStatus(card.id, "plan")).toBe("needs-user");
+    expect(runStore.latestForStep(card.id, "plan")?.status).toBe("failed");
+    expect(
+      artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" }),
+    ).toBeUndefined();
   });
 
   it("moves Plan to needs-user with a failed run when the agent errors", async () => {

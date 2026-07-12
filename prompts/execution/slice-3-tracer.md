@@ -1,17 +1,17 @@
 # Slice 3 tracer
 
-You are proving that autonomous execution works end-to-end. Do exactly this,
-nothing more:
+You are proving that autonomous Plan execution works end-to-end. Do exactly
+this, nothing more:
 
-1. Create a file named `hello.txt` in the repository root containing the
-   single line:
+1. Create the directory `.jeeves` in the repository root if it does not exist.
 
-   ```
-   hello from jeeves
-   ```
+2. Write a Markdown plan to `.jeeves/plan.md` with a short title and at
+   least one bullet describing the work.
 
-2. Commit it with the message `chore: jeeves slice-3 tracer`.
+Rules:
+- Do not modify any file other than `.jeeves/plan.md`.
+- Do not run `git commit`.
+- Do not create any other files or directories.
 
-The commit is required — do not leave the file uncommitted.
-
-When the commit exists, output `<promise>COMPLETE</promise>` and stop.
+When `.jeeves/plan.md` exists with non-empty content, output
+`<promise>COMPLETE</promise>` and stop.

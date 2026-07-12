@@ -109,7 +109,7 @@ describe("CardStore", () => {
       expect(decided.steps).toEqual([
         { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
         { key: "grill", status: "needs-user", label: "Grill", stepKind: "ai-chat", column: "define" },
-        { key: "prd", status: "pending", label: "PRD", stepKind: "ai-chat", column: "define" },
+        { key: "spec", status: "pending", label: "Spec", stepKind: "ai-chat", column: "define" },
         { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-execution", column: "define" },
       ]);
     });
@@ -168,7 +168,7 @@ describe("CardStore", () => {
     expect(found?.steps).toEqual([
       { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
       { key: "grill", status: "needs-user", label: "Grill", stepKind: "ai-chat", column: "define" },
-      { key: "prd", status: "pending", label: "PRD", stepKind: "ai-chat", column: "define" },
+      { key: "spec", status: "pending", label: "Spec", stepKind: "ai-chat", column: "define" },
       { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-execution", column: "define" },
     ]);
   });

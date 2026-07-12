@@ -18,7 +18,7 @@ Full rationale → [ADR 0008](../docs/adr/0008-ai-sdk-assistant-ui-agent-runner.
 ## Seams
 
 - `AcpBridge` (server) owns ACP → `UIMessage` projection. The client only ever sees AI SDK `UIMessage` parts.
-- Step components (`StepGrill`, PRD side-chat) are thin adapters: wire `useAcpChat` into assistant-ui, layout with shadcn shell components around the thread.
+- Step components (`StepGrill`, Spec side-chat) are thin adapters: wire `useAcpChat` into assistant-ui, layout with shadcn shell components around the thread.
 - Custom message parts only for gaps assistant-ui doesn't cover (e.g. ACP permission requests).
 
 ## Styling

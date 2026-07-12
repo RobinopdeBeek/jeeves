@@ -1,6 +1,6 @@
 # Thin adapters over five deep modules
 
-All behaviour lives in five deep modules — `PipelineEngine`, `CardStore`, `ArtifactStore`, `ExecutionEngine`, `AcpBridge` — and the HTTP routes and React client are thin adapters over their interfaces, containing no transition rules, derivation logic, or storage knowledge. The module interfaces are pre-agreed seams: every PRD sketches its testing against them and all TDD happens at them, which only works if the seams are fixed before the slices that build against them.
+All behaviour lives in five deep modules — `PipelineEngine`, `CardStore`, `ArtifactStore`, `ExecutionEngine`, `AcpBridge` — and the HTTP routes and React client are thin adapters over their interfaces, containing no transition rules, derivation logic, or storage knowledge. The module interfaces are pre-agreed seams: every spec sketches its testing against them and all TDD happens at them, which only works if the seams are fixed before the slices that build against them.
 
 ## Consequences
 

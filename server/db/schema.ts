@@ -40,7 +40,7 @@ export const cardSteps = sqliteTable(
       enum: [
         "info",
         "grill",
-        "prd",
+        "spec",
         "tasks",
         "plan",
         "impl",
@@ -84,7 +84,7 @@ export const runs = sqliteTable("runs", {
 
 export const artifactKinds = [
   "grill",
-  "prd",
+  "spec",
   "tasks-breakdown",
   "plan",
   "eval",

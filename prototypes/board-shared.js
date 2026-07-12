@@ -20,7 +20,7 @@ function seedCards() {
     {
       id: 's1', col: 'shape', kind: 'feature', title: 'Add workout streaks', desc: 'Habit hook: streak counter on home + profile.',
       branch: 'feat/streaks', implProgress: { cur: 3, total: 5 },
-      steps: mk('feature', 'shape', { grill: 'done', prd: 'done', tasks: 'ai-working' })
+      steps: mk('feature', 'shape', { grill: 'done', spec: 'done', tasks: 'ai-working' })
     },
     // s2: task list generated, awaiting user confirm. Tasks blue.
     {
@@ -31,7 +31,7 @@ function seedCards() {
         { title: 'Share sheet integration', desc: 'Hook into OS share sheet + copy link.' },
         { title: 'Deep-link inbound routing', desc: 'Land on the PR from a shared link.' },
       ],
-      steps: mk('feature', 'shape', { grill: 'done', prd: 'done', tasks: 'needs-user' })
+      steps: mk('feature', 'shape', { grill: 'done', spec: 'done', tasks: 'needs-user' })
     },
 
     // ---- Child tasks of s1 (Implement column) ----
@@ -71,7 +71,7 @@ function seedCards() {
     {
       id: 'fr1', col: 'review', kind: 'feature', title: 'Onboarding revamp', desc: 'Trim signup to 2 steps, add progress hint.',
       branch: 'feat/onboarding', flags: 3, evalReady: true, childCount: 4,
-      steps: mk('feature', 'review', { grill: 'done', prd: 'done', tasks: 'done', review: 'needs-user' }),
+      steps: mk('feature', 'review', { grill: 'done', spec: 'done', tasks: 'done', review: 'needs-user' }),
       qa: [true, false, false],
       draftTasks: [
         { title: 'Signup form collapse', desc: 'Reduce the signup form from 5 steps to 2.' },
@@ -80,7 +80,7 @@ function seedCards() {
         { title: 'Onboarding copy revision', desc: 'Rewrite copy for the 2-step flow.' },
       ],
       changeRequests: [
-        { id: 'cr-fr1a', text: 'Step 2 still asks for phone — PRD said email-only signup.' },
+        { id: 'cr-fr1a', text: 'Step 2 still asks for phone — Spec said email-only signup.' },
       ],
     },
 
@@ -111,7 +111,7 @@ function resetCards() {
 /* ---------- data ---------- */
 const COLUMNS = [
   { id: 'backlog',    name: 'Backlog',         short: 'Backlog',    sub: 'Captured ideas, not started' },
-  { id: 'shape',      name: 'Define Feature',  short: 'Define',     sub: 'Features: Grill → PRD → Tasks' },
+  { id: 'shape',      name: 'Define Feature',  short: 'Define',     sub: 'Features: Grill → Spec → Tasks' },
   { id: 'implement',  name: 'Implement Task',  short: 'Implement',  sub: 'Tasks: Plan → Implement → AI Review' },
   { id: 'review',     name: 'Human Review',    short: 'Review',     sub: 'Your call before merge' },
   { id: 'finalize',   name: 'Finalize',        short: 'Finalize',   sub: 'Document → Deploy' },
@@ -129,7 +129,7 @@ const pipelineOf = card => card.kind ? PIPELINES[card.kind] : ['backlog'];
 
 const STAGE_STEPS = {
   backlog: [['info', 'Info', 'info']],
-  shape: [['grill', 'Grill', 'chat'], ['prd', 'PRD', 'ai'], ['tasks', 'Tasks', 'ai']],
+  shape: [['grill', 'Grill', 'chat'], ['spec', 'Spec', 'ai'], ['tasks', 'Tasks', 'ai']],
   implement: [['plan', 'Plan', 'ai'], ['impl', 'Implement', 'ai'], ['airev', 'AI Review', 'ai']],
   review: [['review', 'Human Review', 'human']],
   finalize: [['document', 'Document', 'ai'], ['deploy', 'Deploy', 'ai']],
@@ -337,8 +337,8 @@ function workArea(card, step) {
         oninput="autoGrow(this)" onkeydown="composerKey(event)"></textarea>
     </div>`}</div>`;
   }
-  if (T === 'prd') {
-    const prd = card.prd || `# ${esc(card.title || 'Untitled')}
+  if (T === 'spec') {
+    const specDoc = card.spec || `# ${esc(card.title || 'Untitled')}
 
 ## Overview
 Track consecutive-day workout streaks and surface them in the product.
@@ -355,14 +355,14 @@ Track consecutive-day workout streaks and surface them in the product.
 - DST transition day handling?
 - Logout-everywhere behaviour?
 `;
-    const prdDone = (card.steps.find(s => s.key === 'prd') || {}).status === 'done';
-    return `<div class="prd-layout">
-      <div class="prd-editor">
-        <textarea class="ed prd-ed" id="prd-doc" oninput="autoSavePrd()"
-          ${prdDone ? 'readonly' : ''}
-          placeholder="Write the PRD in markdown…">${esc(prd)}</textarea>
+    const specDone = (card.steps.find(s => s.key === 'spec') || {}).status === 'done';
+    return `<div class="spec-layout">
+      <div class="spec-editor">
+        <textarea class="ed spec-ed" id="spec-doc" oninput="autoSaveSpec()"
+          ${specDone ? 'readonly' : ''}
+          placeholder="Write the spec in markdown…">${esc(specDoc)}</textarea>
       </div>
-      ${prdDone ? '' : `<aside class="prd-side">
+      ${specDone ? '' : `<aside class="spec-side">
         <div class="chat">
           <div class="bub ai">Want me to draft acceptance criteria from your grill notes?</div>
           <div class="bub me">Yes — and flag any edge cases around timezones.</div>
@@ -498,7 +498,7 @@ function tasksArea(card) {
   // is happening on the child task cards, not in this chat. Hide it so the
   // task list gets the full width. Also hide it once tasks are done — there's
   // nothing to ask the AI about until the feature is re-reviewed.
-  const side = (step.status === 'ai-working' || step.status === 'done') ? '' : `<aside class="prd-side">
+  const side = (step.status === 'ai-working' || step.status === 'done') ? '' : `<aside class="spec-side">
       <div class="chat">
         ${aiBubble}
         ${rework ? '' : `<div class="bub me">Make the API slice cover the DST edge case too.</div>
@@ -512,8 +512,8 @@ function tasksArea(card) {
           oninput="autoGrow(this)" onkeydown="composerKey(event)"></textarea>
       </div>
     </aside>`;
-  return `<div class="prd-layout">
-    <div class="prd-editor tasks-left">
+  return `<div class="spec-layout">
+    <div class="spec-editor tasks-left">
       <div class="tasks-scroll">${tasksLeft(card, step)}</div>
       ${fab}
     </div>
@@ -680,7 +680,7 @@ function deleteDraftTask(cardId, idx) {
 
 /* ---- Human Review: one coherent eval plan for a feature, per-task for a task ---- */
 /* Two-column split: the review content on the left, a "Request changes"
-   sidepanel on the right (instead of the AI chat the PRD/Tasks tabs use).
+   sidepanel on the right (instead of the AI chat the Spec/Tasks tabs use).
    Each change request is a simple editable/deletable text block.
    When a feature's review tab is opened from ANOTHER column (i.e. after
    "Create tasks" sent it back to Define), the eval plan is an artifact —
@@ -706,8 +706,8 @@ function reviewLayout(card, mainHtml) {
       ${mainHtml}
     </div>`;
   }
-  return `<div class="prd-layout">
-    <div class="prd-editor review-left">${mainHtml}</div>
+  return `<div class="spec-layout">
+    <div class="spec-editor review-left">${mainHtml}</div>
     ${changeRequestsArea(card)}
   </div>`;
 }
@@ -927,7 +927,7 @@ const TASK_EVAL = {
    (those live on each child's eval plan, linked from the Tasks section).
    Instead it covers only what emerges once the slices are assembled. */
 const FEATURE_EVAL = {
-  desc: "Trims signup from 5 steps to 2 and adds a progress hint. All four child slices (signup-form collapse, progress hint, signup analytics, onboarding copy) are merged into feat/onboarding; this eval validates the feature as a whole against the PRD.",
+  desc: "Trims signup from 5 steps to 2 and adds a progress hint. All four child slices (signup-form collapse, progress hint, signup analytics, onboarding copy) are merged into feat/onboarding; this eval validates the feature as a whole against the spec.",
   shots: [
     { cap: 'Signup — before', sub: '5 steps, 38% drop-off at step 3' },
     { cap: 'Signup — after',  sub: '2 steps + progress hint' },
@@ -939,7 +939,7 @@ const FEATURE_EVAL = {
   notices: [
     { type: 'warning',  title: 'Cross-slice inconsistency', body: 'progress-hint and copy tasks diverged on step wording — "Step 1 of 2" vs "1/2"' },
     { type: 'critical', title: 'Regression',                body: 'signup analytics fires twice on the final step — passed in the child eval, doubled after merge' },
-    { type: 'info',     title: 'Non-goal check',            body: 'social sharing hook was not added (correct — deferred in PRD non-goals)' }
+    { type: 'info',     title: 'Non-goal check',            body: 'social sharing hook was not added (correct — deferred in spec non-goals)' }
   ],
   tasks: [
     { id: 't-signup',    title: 'Signup form collapse',  flags: 1 },
@@ -964,10 +964,10 @@ const FEATURE_EVAL = {
       { name: 'a11y: hint announced by screen reader',    status: 'skip' }
     ]
   },
-  /* PRD acceptance criteria — in production auto-seeded from the PRD's own
+  /* Spec acceptance criteria — in production auto-seeded from the spec's own
      checkbox list authored during the Define stage, so the criteria written
      then are the exact same checkboxes checked here. */
-  prdCriteria: [
+  specCriteria: [
     'Signup is 2 steps maximum',
     'Email-only — no phone field',
     'Progress hint visible on every step',
@@ -1188,13 +1188,13 @@ function epRefactorHtml(items, ro) {
 }
 
 /* Feature QA = two labelled sub-groups sharing one checkbox workflow and one
-   Approve gate. PRD acceptance (spec-derived, top-down) + E2E journeys
+   Approve gate. Spec acceptance (spec-derived, top-down) + E2E journeys
    (behaviour-derived, bottom-up). Both back the single `card.qa` array so
    `qaComplete` / `toggleQa` / `refreshReviewActions` work unchanged. */
 function featureQaHtml(card) {
-  const prd = FEATURE_EVAL.prdCriteria;
+  const specItems = FEATURE_EVAL.specCriteria;
   const journeys = FEATURE_EVAL.qaJourneys;
-  const items = prd.concat(journeys);
+  const items = specItems.concat(journeys);
   if (!Array.isArray(card.qa) || card.qa.length !== items.length) {
     card.qa = items.map((_, i) => !!(card.qa && card.qa[i]));
   }
@@ -1204,8 +1204,8 @@ function featureQaHtml(card) {
       <ul class="qa">${list.map((label2, j) =>
         `<li><input type="checkbox" ${card.qa[offset + j] ? 'checked' : ''} ${ro ? 'disabled' : `onchange="toggleQa('${card.id}',${offset + j})"`}> ${esc(label2)}</li>`).join('')}</ul>
     </div>`;
-  return group('PRD acceptance criteria', '(spec-derived)', prd, 0)
-       + group('End-to-end user journeys', '(behaviour-derived)', journeys, prd.length);
+  return group('Spec acceptance criteria', '(spec-derived)', specItems, 0)
+       + group('End-to-end user journeys', '(behaviour-derived)', journeys, specItems.length);
 }
 
 function featureReviewArea(card) {
@@ -1333,7 +1333,7 @@ function implementChanges(cardId) {
     card.col = 'shape';
     // Mutate steps in place so the Human Review tab PERSISTS (a from-scratch
     // mk('feature','shape',…) would drop it). tasks → editable, review → done
-    // artifact, grill/prd stay done.
+    // artifact, grill/spec stay done.
     const tasksStep = card.steps.find(s => s.key === 'tasks');
     if (tasksStep) tasksStep.status = 'needs-user';
     const reviewStep = card.steps.find(s => s.key === 'review');
@@ -1396,7 +1396,7 @@ function changeRequestsArea(card) {
     ? `<div class="cr-empty">No change requests yet. Add one below.</div>` : '';
   const addBtn = editing !== 'new'
     ? `<button class="btn btn-outline btn-sm cr-add-btn" type="button" onclick="startNewChangeRequest()">+ Add change</button>` : '';
-  return `<aside class="prd-side cr-side">
+  return `<aside class="spec-side cr-side">
     <div class="cr-head"><b>Request changes</b><span class="cr-count">${list.length}</span></div>
     <div class="cr-scroll">${empty}${blocks}${addBlock}</div>
     <div class="cr-foot">${addBtn}</div>
@@ -1461,11 +1461,11 @@ function crEditKey(e, id) {
    ISSUE VIEW  — header tabs / body / footer (rendered by issue.html)
    ========================================================================= */
 /* Tabs that haven't been unlocked yet are hidden from the tab row.
-   Info is always visible; PRD and Tasks only appear once the prior step
+   Info is always visible; Spec and Tasks only appear once the prior step
    hands off to them (their status flips from 'pending' to 'needs-user'). */
 function isTabVisible(step) {
   if (step.kind === 'info') return true;
-  if ((step.key === 'prd' || step.key === 'tasks') && step.status === 'pending') return false;
+  if ((step.key === 'spec' || step.key === 'tasks') && step.status === 'pending') return false;
   return true;
 }
 
@@ -1513,13 +1513,13 @@ function dialogFooter(card, i, step) {
       <button class="btn btn-outline issue-action-btn" onclick="advance('implement')">Implement now →</button>
       <button class="btn btn-primary issue-action-btn" onclick="advance('define')">Grill me →</button></div>`;
   }
-  // Grill tab → hand off to the PRD step.
+  // Grill tab → hand off to the Spec step.
   if (step.key === 'grill' && step.status !== 'done') {
     return `<div class="wizard-foot">${del}<div style="flex:1"></div>
-      <button class="btn btn-primary issue-action-btn" onclick="createPrd()">Create PRD →</button></div>`;
+      <button class="btn btn-primary issue-action-btn" onclick="createSpec()">Create Spec →</button></div>`;
   }
-  // PRD tab → hand off to the Tasks step.
-  if (step.key === 'prd' && step.status !== 'done') {
+  // Spec tab → hand off to the Tasks step.
+  if (step.key === 'spec' && step.status !== 'done') {
     return `<div class="wizard-foot">${del}<div style="flex:1"></div>
       <button class="btn btn-primary issue-action-btn" onclick="createTasks()">Create Tasks →</button></div>`;
   }
@@ -1737,7 +1737,7 @@ function advance(action) {
   if (action === 'define') {
     card.kind = 'feature';
     card.col = 'shape';
-    card.steps = mk('feature', 'shape', { grill: 'needs-user', prd: 'pending', tasks: 'pending' });
+    card.steps = mk('feature', 'shape', { grill: 'needs-user', spec: 'pending', tasks: 'pending' });
   } else if (action === 'implement') {
     card.kind = 'task-standalone';
     card.col = 'implement';
@@ -1749,35 +1749,35 @@ function advance(action) {
   App.repaintIssue();
 }
 
-/* Grill → PRD hand-off: mark the grill step done and jump to the PRD tab. */
-function createPrd() {
+/* Grill → Spec hand-off: mark the grill step done and jump to the Spec tab. */
+function createSpec() {
   const card = cardById(state.currentId);
   if (!card) return;
   const grill = card.steps.find(s => s.key === 'grill');
   if (grill) grill.status = 'done';
-  const prd = card.steps.find(s => s.key === 'prd');
-  if (prd && prd.status === 'pending') prd.status = 'needs-user';
-  const prdIdx = card.steps.findIndex(s => s.key === 'prd');
-  if (prdIdx >= 0) state.step = prdIdx;
+  const spec = card.steps.find(s => s.key === 'spec');
+  if (spec && spec.status === 'pending') spec.status = 'needs-user';
+  const specIdx = card.steps.findIndex(s => s.key === 'spec');
+  if (specIdx >= 0) state.step = specIdx;
   saveCards();
   App.repaintIssue();
 }
 
-/* Persist manual PRD edits without a full repaint (keeps the textarea focused). */
-function autoSavePrd() {
+/* Persist manual spec edits without a full repaint (keeps the textarea focused). */
+function autoSaveSpec() {
   const card = cardById(state.currentId);
   if (!card) return;
-  card.prd = document.getElementById('prd-doc')?.value || '';
+  card.spec = document.getElementById('spec-doc')?.value || '';
   saveCards();
 }
 
-/* PRD → Tasks hand-off: mark the PRD step done, prime Tasks for user confirm, jump to it. */
+/* Spec → Tasks hand-off: mark the Spec step done, prime Tasks for user confirm, jump to it. */
 function createTasks() {
   const card = cardById(state.currentId);
   if (!card) return;
-  autoSavePrd();
-  const prd = card.steps.find(s => s.key === 'prd');
-  if (prd) prd.status = 'done';
+  autoSaveSpec();
+  const spec = card.steps.find(s => s.key === 'spec');
+  if (spec) spec.status = 'done';
   const tasks = card.steps.find(s => s.key === 'tasks');
   if (tasks && tasks.status === 'pending') tasks.status = 'needs-user';
   if (!card.draftTasks) card.draftTasks = defaultDraftTasks(card);
@@ -1824,7 +1824,7 @@ function completeTasks(featureId) {
   card.evalReady = true;
   card.flags = card.flags || 2;
   card.changeRequests = [];
-  card.steps = mk('feature', 'review', { grill: 'done', prd: 'done', tasks: 'done', review: 'needs-user' });
+  card.steps = mk('feature', 'review', { grill: 'done', spec: 'done', tasks: 'done', review: 'needs-user' });
   card.qa = []; // reset: featureQaHtml re-initialises to all-unchecked on render
   state.step = dialogStartIndex(card);
   saveCards();

@@ -55,7 +55,7 @@ What crosses each boundary:
   browser-local QA state and synchronizes it through source-validated `postMessage`.
 - **Server ⇄ ACP agent:** the server spawns `agent acp` per chat session, pipes JSON-RPC, and
   projects events into AI SDK `UIMessage` parts inside `AcpBridge` (including permission
-  requests). Host-produced artifacts (grill summary, PRD, chat transcripts) are written
+  requests). Host-produced artifacts (grill summary, spec, chat transcripts) are written
   by the server directly into the artifact folder.
 - **Server ⇄ agent worktree:** the agent runs in a self-managed git worktree via `@cursor/sdk` local. It has no database access — it reads the injected inputs and the per-card `manifest.json`. Worktree-produced artifacts (Plan, eval HTML, screenshots, structured sidecars) are written to known exchange paths. A generic finalization callback harvests and validates them on the host before teardown; failure preserves diagnostics.
 - **Worktree ⇄ target repo:** each run gets a fresh worktree on one durable card branch. Features
@@ -136,7 +136,7 @@ Browser                          Server
 ## Module map
 
 Five deep modules, each a small interface hiding a lot of behaviour. These interfaces are
-the **pre-agreed seams**: PRDs sketch their testing against them and all TDD happens at
+the **pre-agreed seams**: specs sketch their testing against them and all TDD happens at
 them. Everything else (routes, React components) is a thin adapter.
 
 | Module | Lives in | Interface (the seam) | What it hides |
@@ -170,7 +170,7 @@ Entity definitions live in [`CONTEXT.md`](./CONTEXT.md); columns live in
   changes-requested decision at round N begets round N+1.
 - An **artifact** row is metadata plus a path — the file itself lives in the artifact
   folder (`data/cards/<cardId>/<round>/`). **Artifact lineage** links each artifact to what
-  it was derived from (grill → prd → tasks → plan → impl → eval).
+  it was derived from (grill → spec → tasks → plan → impl → eval).
 
 ---
 
@@ -181,7 +181,7 @@ Column-level only; step mechanics live in `server/pipelines.ts` and the skill pr
 ### Feature (happy path)
 
 1. A card is captured in **Backlog**; the user picks **"Grill me →"**, making it a feature.
-2. **Define Feature**: a grill chat session, then collaborative PRD authoring, then the
+2. **Define Feature**: a grill chat session, then collaborative spec authoring, then the
    feature is broken into draft tasks with blocked-by edges.
 3. **Fan-out**: the drafts activate as child task cards on the board.
 4. Each child task runs **Implement Task** (Plan → Implement → AI Review) autonomously,

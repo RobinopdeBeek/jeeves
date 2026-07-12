@@ -264,7 +264,7 @@ Update `[jeeves-plan.md](jeeves-plan.md)` Human Review preview section according
 
 | Issue                                                       | Key replacements                                                                                                   |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| [#8](https://github.com/RobinopdeBeek/jeeves/issues/8) PRD  | Remove Sandcastle/finalization-via-Sandcastle language; host worktree harvest; no Docker manual demo               |
+| [#8](https://github.com/RobinopdeBeek/jeeves/issues/8) Spec  | Remove Sandcastle/finalization-via-Sandcastle language; host worktree harvest; no Docker manual demo               |
 | [#9](https://github.com/RobinopdeBeek/jeeves/issues/9) 4A   | `CursorSdkAgentRunner`; `WorktreeManager.createWorktree()`; prompt path; fake runner creates temp dir as workspace |
 | [#10](https://github.com/RobinopdeBeek/jeeves/issues/10) 4B | Remove "real Sandcastle outside CI" wording → "real SDK outside CI"                                                |
 | [#11](https://github.com/RobinopdeBeek/jeeves/issues/11) 4C | Finalization owned by ExecutionEngine on host path (not Sandcastle callback)                                       |

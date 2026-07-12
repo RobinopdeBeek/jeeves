@@ -9,6 +9,6 @@ Committing evaluations to the reviewed branch was rejected: it pollutes the targ
 ## Consequences
 
 - `git_sha` is mandatory on evaluation artifacts, optional elsewhere.
-- Workspace-produced non-evaluation artifacts record the producing HEAD SHA when known; host-only chat/PRD artifacts may leave it null.
+- Workspace-produced non-evaluation artifacts record the producing HEAD SHA when known; host-only chat/spec artifacts may leave it null.
 - Manual preview testing checks out the evaluation's exact `git_sha`, never the mutable branch tip.
 - Sandbox-produced artifacts must be harvested out of the worktree before teardown, since the worktree is not their home.

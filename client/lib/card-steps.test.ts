@@ -13,7 +13,7 @@ import type { CardStep } from "./api";
 const featureAfterDecide: CardStep[] = [
   { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
   { key: "grill", status: "needs-user", label: "Grill", stepKind: "ai-chat", column: "define" },
-  { key: "prd", status: "pending", label: "PRD", stepKind: "ai-chat", column: "define" },
+  { key: "spec", status: "pending", label: "Spec", stepKind: "ai-chat", column: "define" },
   { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-execution", column: "define" },
 ];
 
@@ -64,7 +64,7 @@ describe("card-steps", () => {
     it("filters segmented bar to current-column work steps", () => {
       expect(columnWorkSteps(featureAfterDecide, "define").map((s) => s.key)).toEqual([
         "grill",
-        "prd",
+        "spec",
         "tasks",
       ]);
       expect(columnWorkSteps(standaloneAfterDecide, "implement").map((s) => s.key)).toEqual([
@@ -83,7 +83,7 @@ describe("card-steps", () => {
       const idleDefine: CardStep[] = [
         { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
         { key: "grill", status: "done", label: "Grill", stepKind: "ai-chat", column: "define" },
-        { key: "prd", status: "ai-working", label: "PRD", stepKind: "ai-chat", column: "define" },
+        { key: "spec", status: "ai-working", label: "Spec", stepKind: "ai-chat", column: "define" },
         { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-execution", column: "define" },
       ];
       expect(needsUserAttention({ column: "define", steps: idleDefine })).toBe(false);

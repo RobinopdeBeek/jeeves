@@ -16,7 +16,7 @@ The one-time, irreversible Backlog exit where a card's kind is chosen: "Grill me
 _Avoid_: Advance (that's any pipeline transition; this is specifically the first one)
 
 **Feature**:
-A card that is defined collaboratively (Grill → PRD → Tasks), fans out into child tasks, and is reviewed and finalized as a whole.
+A card that is defined collaboratively (Grill → Spec → Tasks), fans out into child tasks, and is reviewed and finalized as a whole.
 
 **Task**:
 A card that implements one vertical slice autonomously (Plan → Implement → AI Review). A **child task** has a parent feature and merges into its branch; a **standalone task** has no parent and finalizes itself. Child vs standalone is derived from the parent link, never stored.
@@ -33,7 +33,7 @@ _Avoid_: Stage, phase, "shape" (legacy id for Define)
 The ordered list of columns a card kind passes through. Defined in code per kind, not in the database.
 
 **Evaluation**:
-The generated, self-contained HTML report a review works from, pinned to the commit it evaluated. Comes in two scopes: a **Task Evaluation** (deep: diff narrative, tests, AI findings, QA checklist) and a **Feature Evaluation** (integration-focused: regression, journeys, PRD criteria, refactor opportunities).
+The generated, self-contained HTML report a review works from, pinned to the commit it evaluated. Comes in two scopes: a **Task Evaluation** (deep: diff narrative, tests, AI findings, QA checklist) and a **Feature Evaluation** (integration-focused: regression, journeys, spec criteria, refactor opportunities).
 _Avoid_: Evaluation plan, eval plan, acceptance eval, review doc
 
 **Review**:

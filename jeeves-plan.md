@@ -70,7 +70,7 @@ Later:  extract client to Cloudflare Pages if needed
 
 All inference runs on the Cursor subscription — no separate provider API keys.
 
-**Chat (AI Chat steps — Grill, PRD side-chat):** Vercel AI SDK 5 provides message state and
+**Chat (AI Chat steps — Grill, Spec side-chat):** Vercel AI SDK 5 provides message state and
 streaming (`useChat`, typed `UIMessage` parts). assistant-ui layers pre-built chat primitives
 (message list, composer, streaming indicators) on top. The real work is in `AcpBridge`: it
 projects ACP JSON-RPC into `UIMessage` parts server-side and streams them over WebSocket via
@@ -112,7 +112,7 @@ progress bar; in the issue view they show as tabs.
 | Column | What lives here |
 |---|---|
 | **Backlog** | Captured ideas, kind not yet decided |
-| **Define Feature** | Features only: Grill → PRD → Tasks |
+| **Define Feature** | Features only: Grill → Spec → Tasks |
 | **Implement Task** | Tasks only: Plan → Implement → AI Review |
 | **Human Review** | Your call before merge (per-task or feature-level eval) |
 | **Finalize** | Document → Deploy |
@@ -139,7 +139,7 @@ standalone task  Backlog → Implement Task → Human Review → Finalize   (no 
 | Column | Steps (type) |
 |---|---|
 | Backlog | Info · human (title + description) |
-| Define Feature | Grill · ai-chat → PRD · ai-chat → Tasks · ai-execution |
+| Define Feature | Grill · ai-chat → Spec · ai-chat → Tasks · ai-execution |
 | Implement Task | Plan · ai-execution → Implement · ai-execution → AI Review · ai-execution |
 | Human Review | Review · human |
 | Finalize | Document · ai-execution → Deploy · ai-execution |
@@ -157,9 +157,9 @@ kind. From the Info tab you choose one of two paths:
 Three steps, human-collaborative rather than fully autonomous:
 
 1. **Grill** (`ai-chat`) — a `/grill-with-docs` chat session with full codebase context. Surfaces
-   constraints and edge cases. Hands off to the PRD step.
-2. **PRD** (`ai-chat`) — a WYSIWYG markdown editor for the PRD **with an AI side-chat** to draft
-   and refine acceptance criteria. The PRD's acceptance-criteria checklist authored here is the
+   constraints and edge cases. Hands off to the Spec step.
+2. **Spec** (`ai-chat`) — a WYSIWYG markdown editor for the spec **with an AI side-chat** to draft
+   and refine acceptance criteria. The spec's acceptance-criteria checklist authored here is the
    exact list that reappears in the feature-level QA gate later. Hands off to Tasks.
 3. **Tasks** (`ai-execution` + human editing, with an AI side-chat) — the feature is broken into
    **end-to-end vertical slices**. Each slice is a real card in **draft status**: inspectable and
@@ -411,7 +411,7 @@ cards                        -- one entity for features, tasks, AND drafts
 card_steps                   -- CURRENT state only; one row per (card, step), mutated in place
   id            pk
   card_id       fk → cards
-  step_key      'info' | 'grill' | 'prd' | 'tasks' | 'plan' | 'impl' | 'airev'
+  step_key      'info' | 'grill' | 'spec' | 'tasks' | 'plan' | 'impl' | 'airev'
                 | 'review' | 'document' | 'deploy'
   status        'pending' | 'queued' | 'ai-working' | 'needs-user' | 'done'
   started_at, completed_at   -- overwritten on rework; per-round timing lives in runs
@@ -451,14 +451,14 @@ artifacts                    -- metadata + pointer, never content
   card_id       fk → cards
   step_key      text
   round         int
-  kind          'grill' | 'prd' | 'tasks-breakdown' | 'plan' | 'eval'
+  kind          'grill' | 'spec' | 'tasks-breakdown' | 'plan' | 'eval'
                 | 'screenshot' | 'runlog' | 'attachment'
   path          text         -- root-relative; unique immutable destination per version
   git_sha       text, nullable  -- mandatory for evals: the only link to the reviewed diff
   schema_version int
   created_at
 
-artifact_lineage             -- provenance graph (grill → prd → tasks → plan → impl → eval)
+artifact_lineage             -- provenance graph (grill → spec → tasks → plan → impl → eval)
   artifact_id              fk → artifacts
   derived_from_artifact_id fk → artifacts
 
@@ -529,7 +529,7 @@ there are four classes, and storage follows from the class:
 
 | Class | Examples | Primary consumer | Wants to be… |
 |---|---|---|---|
-| **Human/AI prose** | Grill summary, PRD, Plan | Humans + next AI step | Editable, diffable, greppable markdown |
+| **Human/AI prose** | Grill summary, Spec, Plan | Humans + next AI step | Editable, diffable, greppable markdown |
 | **Structured state** | Draft cards + blockers, change requests, rework round, decisions, session meta (tokens/cost) | The UI and the queue | Queryable SQLite rows |
 | **Composite review doc** | Task Evaluation, Feature Evaluation | Human review; linked from other evaluations | Self-contained HTML pinned to a commit SHA |
 | **Media / raw** | Screenshots/GIFs, run logs, chat transcripts (`UIMessage[]`) | Occasional human, gallery | Plain files, possibly large |
@@ -557,7 +557,7 @@ data/
         ├── manifest.json            # regenerated projection of the DB index
         └── <round>/
             ├── grill/<artifactId>.md # immutable versions; latest is derived in the index
-            ├── prd/<artifactId>.md
+            ├── spec/<artifactId>.md
             ├── plan/<artifactId>.md
             ├── eval/<artifactId>.html
             ├── screenshots/         # harvested from the worktree
@@ -583,8 +583,8 @@ juggling, and the VPS migration is "copy the SQLite file + `data/`". Keep the pa
   checks. It writes and validates a temporary file, atomically renames it, then inserts the DB
   row. A crash can leave a recoverable self-describing file, never a row pointing at no file.
 - **Explicit provenance.** `artifact_lineage` records the real lineage graph
-  (grill → prd → tasks → plan → impl → eval) as a join table, queryable in both directions.
-  This is the audit trail *and* staleness detection: re-grill and the downstream PRD is
+  (grill → spec → tasks → plan → impl → eval) as a join table, queryable in both directions.
+  This is the audit trail *and* staleness detection: re-grill and the downstream spec is
   detectably stale (an upstream artifact has a newer version). It's also what lets the Feature
   Evaluation link back to each Task Evaluation.
 - **`schema_version`** on artifacts so old evaluations still render after skill prompts evolve.
@@ -595,7 +595,7 @@ juggling, and the VPS migration is "copy the SQLite file + `data/`". Keep the pa
   artifact with step, round, kind, path, git_sha. Agents read the manifest first instead
   of globbing; the agent worktree needs no DB access.
 - **The runner injects inputs — the AI never hunts.** Each skill invocation gets the resolved
-  paths/contents of its inputs explicitly (e.g. `/to-prd` receives the grill summary), resolved
+  paths/contents of its inputs explicitly (e.g. `/to-spec` receives the grill summary), resolved
   from the lineage graph by the runner. Discoverability for humans = manifest + frontmatter;
   discoverability for the pipeline = injection.
 
@@ -603,7 +603,7 @@ juggling, and the VPS migration is "copy the SQLite file + `data/`". Keep the pa
 
 Two production contexts, two flows:
 
-- **Host-produced** (grill summary, PRD, chat transcripts, finalized run logs): written or
+- **Host-produced** (grill summary, spec, chat transcripts, finalized run logs): written or
   finalized by the Hono server. A live log belongs to its mutable `run`; on success or failure
   it is closed and registered as an immutable `runlog` artifact.
 - **Worktree-produced** (Plan, eval HTML, screenshots, structured JSON sidecars): generated
@@ -679,7 +679,7 @@ emerges once everything is integrated:
 | Focused diff narrative for the slice | **No** diff narrative — links back to each Task Evaluation instead |
 | The slice's tests | Full regression run across the whole feature |
 | QA checklist for that slice's behaviour | End-to-end user journeys that span multiple slices |
-| `/thermo-nuclear-review` of that diff | PRD acceptance-criteria checklist |
+| `/thermo-nuclear-review` of that diff | Spec acceptance-criteria checklist |
 | Screenshots of that slice | Holistic screenshot walkthrough of the finished feature |
 | *(n/a)* | **Refactor opportunities** (formerly `/improve-architecture`) |
 
@@ -688,7 +688,7 @@ evaluation on the feature branch would throw away the reason we slice vertically
 narrative across all slices becomes an unreadable blob, failures are only found after they've
 been built on and merged (the most expensive time), and notifications lose their per-slice
 owner. Cumulative per-task testing already catches most integration issues; the feature-level
-pass only needs to cover the final slice's integration and holistic PRD acceptance.
+pass only needs to cover the final slice's integration and holistic spec acceptance.
 
 **Where `/improve-architecture` went.** In v1 this was a standalone stage 10. In v2 it is surfaced
 as the **"Refactor opportunities"** section of the Feature Evaluation. Each opportunity has a `+`
@@ -743,7 +743,7 @@ Duration, token usage, model, branch, commit, files changed, LOC, estimated cost
 **Summary** (with holistic screenshot walkthrough) · **Notifications** (feature-level only) ·
 **Tasks** (each merged slice, linking to its own Task Evaluation) · **Refactor opportunities**
 (each pushable to change requests) · **Tests — full regression** · **QA — acceptance & journeys**
-(PRD acceptance criteria, spec-derived + end-to-end user journeys, behaviour-derived; both feed the
+(Spec acceptance criteria, spec-derived + end-to-end user journeys, behaviour-derived; both feed the
 one QA gate) · **Metadata**.
 
 ### The evaluation as a skill pipeline
@@ -771,7 +771,7 @@ Each section is its own skill, run sequentially after `/implement-issue`:
 ```
 
 The Feature Evaluation (`/eval-acceptance`) reuses the same skills, feature-scoped:
-full regression, cross-slice journeys, PRD acceptance checklist, holistic screenshots, and a
+full regression, cross-slice journeys, spec acceptance checklist, holistic screenshots, and a
 refactor-opportunities pass — but **no** diff narrative and **no** thermo-nuclear review (those
 live on each child's Task Evaluation, linked from the Tasks section).
 
@@ -844,7 +844,7 @@ jeeves/                             # repo root — also the app root
 │   └── execution/
 │       ├── slice-3-tracer.md
 │       ├── grill-with-docs.md
-│       ├── to-prd.md
+│       ├── to-spec.md
 │       ├── to-issues.md             # writes structured JSON sidecar (harvested + Zod-validated)
 │       ├── plan-implementation.md
 │       ├── implement-issue.md
@@ -867,7 +867,7 @@ jeeves/                             # repo root — also the app root
 │   │   ├── CardView.tsx            # full-page card view: step tabs + work area + footer
 │   │   ├── StepInfo.tsx            # Backlog Info tab + Grill-me / Implement-now decision
 │   │   ├── StepGrill.tsx           # assistant-ui chat (useChat + AcpBridge transport)
-│   │   ├── StepPrd.tsx             # PRD markdown editor + AI side-chat (reuses chat stack)
+│   │   ├── StepSpec.tsx             # Spec markdown editor + AI side-chat (reuses chat stack)
 │   │   ├── StepTasks.tsx           # draft cards list, blocked-by, fan-out, Round N history
 │   │   ├── StepExecution.tsx       # live RunLog + mini eval pipeline progress (Plan/Impl/AIReview)
 │   │   ├── ReviewTask.tsx          # Task Evaluation + Request-changes panel + QA gate
@@ -894,7 +894,7 @@ jeeves/                             # repo root — also the app root
 ### The module map (deep modules and their seams)
 
 Five deep modules, each a small interface hiding a lot of behaviour. These are the
-**pre-agreed seams**: every PRD sketches its testing against them (`/to-prd` step 2), and all
+**pre-agreed seams**: every spec sketches its testing against them (`/to-spec` step 2), and all
 TDD happens at them. The HTTP routes and the React client are thin adapters over these
 modules, not modules of their own.
 
@@ -940,15 +940,15 @@ blocker relationship can be built in parallel or reordered.
    `/grill-with-docs` session from the phone.* (Blocked by 1 only — independent of 3–4, can
    run in parallel.)
 
-   **Grill → PRD hand-off summary prompt:**
+   **Grill → Spec hand-off summary prompt:**
 ```
 Summarise this entire conversation as a structured markdown document.
 Include: the problem statement as clarified, key assumptions surfaced,
 constraints identified, open questions remaining, and a readiness assessment.
-This will be used as input to /to-prd.
+This will be used as input to /to-spec.
 ```
-6. **PRD step.** MDXEditor + AI side-chat reusing the chat stack from slice 5; PRD artifact
-   with the acceptance-criteria checklist. *Demo: author a PRD collaboratively from the
+6. **Spec step.** MDXEditor + AI side-chat reusing the chat stack from slice 5; spec artifact
+   with the acceptance-criteria checklist. *Demo: author a spec collaboratively from the
    tablet.* (Blocked by 5.)
 7. **Fan-out.** `/to-issues` writes a structured JSON sidecar in the worktree (vertical
    slices + blocked-by); the runner harvests it and validates with a Zod schema before creating
@@ -1001,13 +1001,13 @@ This plan document is not the issue list — it's the grilling output. From here
 built with the same workflow it automates:
 
 1. **Grilling** — done: this plan plus [`CONTEXT.md`](./CONTEXT.md) are its artifacts.
-2. **`/to-prd`** per slice group — each PRD confirms its testing seams against the module
+2. **`/to-spec`** per slice group — each spec confirms its testing seams against the module
    map above.
 3. **`/to-issues`** — produces roughly the slice sequence above as tracer-bullet issues with
    blocked-by edges.
 4. **`/implement` with `/tdd`** — red → green at the pre-agreed seams (the module
    interfaces), one slice at a time.
-5. **`/code-review`** against the merge-base — Standards axis + Spec axis (the PRD).
+5. **`/code-review`** against the merge-base — Standards axis + Spec axis (the spec).
 
 Every rough edge found in the skills while building jeeves is dogfooding feedback for the
 pipeline jeeves will run.

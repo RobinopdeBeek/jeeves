@@ -18,7 +18,7 @@ For autonomous runs, **`ExecutionEngine`** exposes `enqueue(card, step)` + a run
 
 ## Consequences
 
-- Chat step components (`StepGrill`, PRD side-chat) are thin adapters over `useChat` + assistant-ui; the ACP→UIMessage projection is owned entirely by `AcpBridge`.
+- Chat step components (`StepGrill`, Spec side-chat) are thin adapters over `useChat` + assistant-ui; the ACP→UIMessage projection is owned entirely by `AcpBridge`.
 - Permission-request UI is a custom assistant-ui message part, not something either library provides out of the box.
 - `ExecutionEngine` tests mock `AgentRunner`; SDK integration tests live behind the implementation (real SDK = manual / `npm run spike:sdk`).
 - Plan and review runs succeed only when their declared artifacts are harvested and the source tree is unchanged; Implement succeeds only with required commits and a clean tree.

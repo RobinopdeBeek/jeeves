@@ -69,8 +69,26 @@ function fakeWorktrees(root: string): WorktreeLifecycle {
     async remove(worktreePath) {
       fs.rmSync(worktreePath, { recursive: true, force: true });
     },
-    async captureDiagnostics() {
-      return { status: "", diff: "", diffCached: "", headSha: "abc123def456" };
+    async captureDiagnostics(cwd) {
+      const entries: string[] = [];
+      const walk = (dir: string, prefix: string) => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+          if (entry.isDirectory()) {
+            if (entry.name === ".jeeves") continue;
+            walk(path.join(dir, entry.name), rel);
+          } else if (!rel.startsWith(".jeeves/")) {
+            entries.push(`?? ${rel}`);
+          }
+        }
+      };
+      if (fs.existsSync(cwd)) walk(cwd, "");
+      return {
+        status: entries.join("\n"),
+        diff: entries.length ? `diff --git a/${entries[0].slice(3)}` : "",
+        diffCached: "",
+        headSha: "abc123def456",
+      };
     },
     async cleanupOrphans() {},
   };
@@ -200,6 +218,127 @@ describe("ExecutionEngine", () => {
     expect(
       artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" }),
     ).toBeUndefined();
+
+    const diag = artifactStore.latest(card.id, {
+      stepKey: "plan",
+      round: 0,
+      kind: "attachment",
+    });
+    expect(diag).toBeDefined();
+    expect(artifactStore.readBody(diag!)).toContain("Workspace diagnostics");
+  });
+
+  it("fails Plan when the exchange sidecar is empty at finalize", async () => {
+    const card = queuedCard();
+    const runnerWithEmptyPlan: AgentRunner = {
+      async *run(_promptFile, options) {
+        const planDir = path.join(options.worktreePath, ".jeeves");
+        fs.mkdirSync(planDir, { recursive: true });
+        fs.writeFileSync(path.join(planDir, "plan.md"), "  \n");
+        if (options.onFinalize) {
+          await options.onFinalize({
+            workspacePath: options.worktreePath,
+            headSha: options.baseSha,
+            baseSha: options.baseSha,
+          });
+        }
+        yield { type: "result", status: "finished" };
+      },
+    };
+    const engine = new ExecutionEngine({
+      store,
+      runs: runStore,
+      runner: runnerWithEmptyPlan,
+      worktrees: fakeWorktrees(artifactRoot),
+      artifacts: artifactStore,
+      events,
+      artifactRoot,
+      repoRoot,
+    });
+
+    engine.enqueue(card.id, "plan");
+    await engine.whenIdle();
+
+    expect(stepStatus(card.id, "plan")).toBe("needs-user");
+    expect(runStore.latestForStep(card.id, "plan")?.error).toMatch(/empty/);
+    expect(
+      artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" }),
+    ).toBeUndefined();
+  });
+
+  it("fails Plan when the agent edits source files beyond the exchange sidecar", async () => {
+    const card = queuedCard();
+    const runnerWithSourceEdit: AgentRunner = {
+      async *run(_promptFile, options) {
+        const planDir = path.join(options.worktreePath, ".jeeves");
+        fs.mkdirSync(planDir, { recursive: true });
+        fs.writeFileSync(path.join(planDir, "plan.md"), "# Plan\n\nDo the thing.\n");
+        fs.writeFileSync(path.join(options.worktreePath, "hello.txt"), "oops\n");
+        if (options.onFinalize) {
+          await options.onFinalize({
+            workspacePath: options.worktreePath,
+            headSha: options.baseSha,
+            baseSha: options.baseSha,
+          });
+        }
+        yield { type: "result", status: "finished" };
+      },
+    };
+    const engine = new ExecutionEngine({
+      store,
+      runs: runStore,
+      runner: runnerWithSourceEdit,
+      worktrees: fakeWorktrees(artifactRoot),
+      artifacts: artifactStore,
+      events,
+      artifactRoot,
+      repoRoot,
+    });
+
+    engine.enqueue(card.id, "plan");
+    await engine.whenIdle();
+
+    expect(stepStatus(card.id, "plan")).toBe("needs-user");
+    expect(runStore.latestForStep(card.id, "plan")?.error).toMatch(/dirty/);
+    expect(
+      artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" }),
+    ).toBeDefined();
+    expect(fs.existsSync(path.join(artifactRoot, "worktrees", card.id))).toBe(false);
+  });
+
+  it("fails Plan when the agent commits to the card branch", async () => {
+    const card = queuedCard();
+    const runnerWithCommit: AgentRunner = {
+      async *run(_promptFile, options) {
+        const planDir = path.join(options.worktreePath, ".jeeves");
+        fs.mkdirSync(planDir, { recursive: true });
+        fs.writeFileSync(path.join(planDir, "plan.md"), "# Plan\n\nDo the thing.\n");
+        if (options.onFinalize) {
+          await options.onFinalize({
+            workspacePath: options.worktreePath,
+            headSha: "newcommit999",
+            baseSha: options.baseSha,
+          });
+        }
+        yield { type: "result", status: "finished" };
+      },
+    };
+    const engine = new ExecutionEngine({
+      store,
+      runs: runStore,
+      runner: runnerWithCommit,
+      worktrees: fakeWorktrees(artifactRoot),
+      artifacts: artifactStore,
+      events,
+      artifactRoot,
+      repoRoot,
+    });
+
+    engine.enqueue(card.id, "plan");
+    await engine.whenIdle();
+
+    expect(stepStatus(card.id, "plan")).toBe("needs-user");
+    expect(runStore.latestForStep(card.id, "plan")?.error).toMatch(/commits/);
   });
 
   it("moves Plan to needs-user with a failed run when the agent errors", async () => {

@@ -115,4 +115,38 @@ describe("ArtifactStore", () => {
     ).toThrow(/plan\.md/);
     fs.rmSync(workspace, { recursive: true, force: true });
   });
+
+  it("throws when a plan sidecar is whitespace-only", () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-wt-"));
+    const exchangeDir = path.join(workspace, ".jeeves");
+    fs.mkdirSync(exchangeDir, { recursive: true });
+    fs.writeFileSync(path.join(exchangeDir, "plan.md"), "   \n\n  ");
+
+    expect(() =>
+      artifacts.harvest(
+        workspace,
+        [{ exchangePath: ".jeeves/plan.md", kind: "plan", stepKey: "plan" }],
+        { cardId, round: 0, sourceSkill: "slice-3-tracer" },
+      ),
+    ).toThrow(/empty/);
+
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+
+  it("throws when a plan sidecar has no useful content beyond headings", () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-wt-"));
+    const exchangeDir = path.join(workspace, ".jeeves");
+    fs.mkdirSync(exchangeDir, { recursive: true });
+    fs.writeFileSync(path.join(exchangeDir, "plan.md"), "# Plan\n\n## Steps\n");
+
+    expect(() =>
+      artifacts.harvest(
+        workspace,
+        [{ exchangePath: ".jeeves/plan.md", kind: "plan", stepKey: "plan" }],
+        { cardId, round: 0, sourceSkill: "slice-3-tracer" },
+      ),
+    ).toThrow(/useful content/);
+
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
 });

@@ -106,6 +106,9 @@ export class ArtifactStore {
       if (!raw.trim()) {
         throw new ArtifactStoreError(`exchange sidecar is empty: ${decl.exchangePath}`);
       }
+      if (decl.kind === "plan" && !planHasUsefulContent(raw)) {
+        throw new ArtifactStoreError(`exchange sidecar has no useful content: ${decl.exchangePath}`);
+      }
       harvested.push(
         this.save({
           cardId: ctx.cardId,
@@ -251,4 +254,13 @@ function stripFrontmatter(raw: string): string {
   const end = raw.indexOf("\n---\n", 4);
   if (end === -1) return raw;
   return raw.slice(end + 5);
+}
+
+/** Plan sidecars need prose beyond headings and empty bullets. */
+function planHasUsefulContent(raw: string): boolean {
+  const body = stripFrontmatter(raw)
+    .replace(/^#+\s+.*$/gm, "")
+    .replace(/^[-*]\s*$/gm, "")
+    .trim();
+  return body.length > 0;
 }

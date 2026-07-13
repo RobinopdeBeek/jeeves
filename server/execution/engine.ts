@@ -7,7 +7,7 @@ import type { StepKey } from "../pipelines.js";
 import { EventBus } from "./events.js";
 import type { RunStore } from "./run-store.js";
 import type { AgentRunner, RunEvent } from "./runner.js";
-import type { WorktreeLifecycle } from "./worktree-manager.js";
+import type { WorktreeDiagnostics, WorktreeLifecycle } from "./worktree-manager.js";
 import { WorktreeManager } from "./worktree-manager.js";
 
 /** Which skill an ai-execution step runs (slice 3: Plan → tracer only). */
@@ -144,8 +144,15 @@ export class ExecutionEngine {
     let baseSha = "";
     let headSha: string | undefined;
 
-    const fail = (message: string) => {
-      this.freezeRunLog(run, stepKey, round, skill.skill, headSha);
+    const fail = async (message: string) => {
+      await this.preserveFailureEvidence(
+        run,
+        stepKey,
+        round,
+        skill.skill,
+        worktreePath,
+        headSha,
+      );
       runs.finish(run.id, { status: "failed", error: message });
       this.finishStep(cardId, stepKey, "needs-user", run.id, "failed", message);
     };
@@ -184,12 +191,12 @@ export class ExecutionEngine {
         });
         this.finishStep(cardId, stepKey, "done", run.id, "succeeded");
       } else if (result?.status === "cancelled") {
-        fail("run cancelled");
+        await fail("run cancelled");
       } else {
-        fail("step postconditions not met");
+        await fail("step postconditions not met");
       }
     } catch (e) {
-      fail(e instanceof Error ? e.message : String(e));
+      await fail(e instanceof Error ? e.message : String(e));
     } finally {
       try {
         await worktrees.remove(worktreePath);
@@ -241,6 +248,33 @@ export class ExecutionEngine {
       [{ exchangePath: ".jeeves/plan.md", kind: "plan", stepKey: "plan" }],
       { cardId, round, sourceSkill, gitSha: ctx.headSha },
     );
+    await assertPlanWorkspaceClean(this.deps.worktrees, ctx);
+  }
+
+  private async preserveFailureEvidence(
+    run: { id: string; cardId: string; logPath: string | null },
+    stepKey: StepKey,
+    round: number,
+    sourceSkill: string,
+    worktreePath: string,
+    gitSha?: string,
+  ): Promise<void> {
+    this.freezeRunLog(run, stepKey, round, sourceSkill, gitSha);
+    if (!worktreePath || !fs.existsSync(worktreePath)) return;
+    try {
+      const diag = await this.deps.worktrees.captureDiagnostics(worktreePath);
+      this.deps.artifacts.save({
+        cardId: run.cardId,
+        stepKey,
+        round,
+        kind: "attachment",
+        content: formatWorkspaceDiagnostics(diag),
+        sourceSkill,
+        gitSha: gitSha ?? diag.headSha,
+      });
+    } catch {
+      // Best-effort — run log is the minimum retained evidence.
+    }
   }
 
   /**
@@ -295,4 +329,42 @@ function checkStepPostconditions(
     );
   }
   return true;
+}
+
+/** Plan runs must leave the target tree unchanged after exchange sidecars are removed. */
+async function assertPlanWorkspaceClean(
+  worktrees: WorktreeLifecycle,
+  ctx: { workspacePath: string; headSha: string; baseSha: string },
+): Promise<void> {
+  if (ctx.headSha !== ctx.baseSha) {
+    throw new Error("plan step must not create commits on the card branch");
+  }
+  const diag = await worktrees.captureDiagnostics(ctx.workspacePath);
+  if (diag.status) {
+    const summary = diag.status.split("\n")[0] ?? "dirty tree";
+    throw new Error(`plan step left source tree dirty: ${summary}`);
+  }
+}
+
+function formatWorkspaceDiagnostics(diag: WorktreeDiagnostics): string {
+  return [
+    "# Workspace diagnostics",
+    "",
+    "## HEAD",
+    diag.headSha,
+    "",
+    "## Status",
+    diag.status || "(clean)",
+    "",
+    "## Diff",
+    "```diff",
+    diag.diff || "(empty)",
+    "```",
+    "",
+    "## Staged diff",
+    "```diff",
+    diag.diffCached || "(empty)",
+    "```",
+    "",
+  ].join("\n");
 }

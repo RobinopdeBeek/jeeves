@@ -59,6 +59,17 @@ export interface RunWithLog extends Run {
   log: string;
 }
 
+export interface ArtifactContent {
+  id: string;
+  cardId: string;
+  stepKey: string;
+  round: number;
+  kind: string;
+  gitSha: string | null;
+  createdAt: string;
+  content: string;
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     headers: { "Content-Type": "application/json" },
@@ -87,6 +98,17 @@ export const api = {
     request<{ ok: boolean }>(`/api/cards/${id}`, { method: "DELETE" }),
   listRuns: (cardId: string) => request<Run[]>(`/api/cards/${cardId}/runs`),
   getRun: (id: string) => request<RunWithLog>(`/api/runs/${id}`),
+  getLatestArtifact: (
+    cardId: string,
+    params: { stepKey: string; round: number; kind: string },
+  ) => {
+    const qs = new URLSearchParams({
+      stepKey: params.stepKey,
+      round: String(params.round),
+      kind: params.kind,
+    });
+    return request<ArtifactContent>(`/api/cards/${cardId}/artifacts/latest?${qs}`);
+  },
   retryStep: (cardId: string, stepKey: string) =>
     request<Card>(`/api/cards/${cardId}/steps/${stepKey}/retry`, {
       method: "POST",

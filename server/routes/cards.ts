@@ -5,6 +5,8 @@ import type { Project } from "../db/schema.js";
 import type { ExecutionEngine } from "../execution/engine.js";
 import type { EventBus } from "../execution/events.js";
 import type { RunStore } from "../execution/run-store.js";
+import type { ArtifactStore } from "../artifacts/store.js";
+import { artifactRoutes } from "./artifacts.js";
 
 function isKindPath(value: unknown): value is KindPath {
   return value === "feature" || value === "standalone";
@@ -14,6 +16,7 @@ export interface CardRouteDeps {
   engine: ExecutionEngine;
   runs: RunStore;
   events: EventBus;
+  artifacts: ArtifactStore;
 }
 
 /** Thin HTTP adapter over the CardStore seam. */
@@ -67,6 +70,8 @@ export function cardRoutes(
     if (!card) return c.json({ error: "not found" }, 404);
     return c.json(deps.runs.listForCard(card.id));
   });
+
+  app.route("/:id/artifacts", artifactRoutes(deps.artifacts));
 
   app.post("/:id/steps/:stepKey/retry", (c) => {
     const stepKey = c.req.param("stepKey");

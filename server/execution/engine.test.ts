@@ -35,6 +35,9 @@ function fakeRunner(scripts: Script[]) {
           : script.events;
       options.signal?.throwIfAborted();
       for (const event of events) {
+        if (event.type === "log") {
+          fs.appendFileSync(options.logPath, `${event.line}\n`);
+        }
         if (event.type === "result" && event.status === "finished" && options.onFinalize) {
           const planDir = path.join(options.worktreePath, ".jeeves");
           fs.mkdirSync(planDir, { recursive: true });
@@ -167,6 +170,7 @@ describe("ExecutionEngine", () => {
     const runnerWithoutSidecar: AgentRunner = {
       async *run(_promptFile, options) {
         yield { type: "log", line: "working…" };
+        fs.appendFileSync(options.logPath, "working…\n");
         if (options.onFinalize) {
           await options.onFinalize({
             workspacePath: options.worktreePath,
@@ -278,11 +282,15 @@ describe("ExecutionEngine", () => {
       const card = queuedCard();
       // Simulate a crash mid-run: step ai-working, run row still running.
       store.setStepStatus(card.id, "plan", "ai-working");
+      const logDir = path.join(artifactRoot, "cards", card.id, "0");
+      fs.mkdirSync(logDir, { recursive: true });
+      const logPath = path.join(logDir, "run-orphan.log");
+      fs.writeFileSync(logPath, "orphan partial log\n");
       const orphan = runStore.create({
         cardId: card.id,
         stepKey: "plan",
         skill: "slice-3-tracer",
-        logPath: "x.log",
+        logPath,
       });
       const { engine, calls } = makeEngine([]);
 
@@ -291,6 +299,12 @@ describe("ExecutionEngine", () => {
 
       expect(runStore.get(orphan.id)?.status).toBe("failed");
       expect(stepStatus(card.id, "plan")).toBe("needs-user");
+      const runlog = artifactStore.latest(card.id, {
+        stepKey: "plan",
+        round: 0,
+        kind: "runlog",
+      });
+      expect(artifactStore.readBody(runlog!)).toContain("orphan partial log");
       expect(calls).toHaveLength(0); // orphan must not be re-enqueued
     });
 
@@ -362,6 +376,89 @@ describe("ExecutionEngine", () => {
     expect(() => engine.retry("missing", "plan")).toThrow(
       expect.objectContaining({ status: 404 }),
     );
+  });
+
+  describe("run log freeze", () => {
+    it("does not index a runlog artifact while the run is still in flight", async () => {
+      const card = queuedCard();
+      let release!: (events: RunEvent[]) => void;
+      const gate = new Promise<RunEvent[]>((r) => (release = r));
+      const { engine } = makeEngine([{ gate }]);
+
+      engine.enqueue(card.id, "plan");
+      await tick();
+
+      expect(stepStatus(card.id, "plan")).toBe("ai-working");
+      expect(
+        artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "runlog" }),
+      ).toBeUndefined();
+
+      release(ok());
+      await engine.whenIdle();
+    });
+
+    it("freezes the final log as a runlog artifact after a successful run", async () => {
+      const card = queuedCard();
+      const { engine } = makeEngine([{ events: ok() }]);
+
+      engine.enqueue(card.id, "plan");
+      await engine.whenIdle();
+
+      const runlog = artifactStore.latest(card.id, {
+        stepKey: "plan",
+        round: 0,
+        kind: "runlog",
+      });
+      expect(runlog).toBeDefined();
+      expect(artifactStore.readBody(runlog!)).toContain("working…");
+      expect(runlog!.path).toMatch(new RegExp(`^cards/${card.id}/0/runlog/.+\\.log$`));
+    });
+
+    it("freezes the final log as a runlog artifact after a failed run", async () => {
+      const card = queuedCard();
+      const runnerWithLogThenError: AgentRunner = {
+        async *run(_promptFile, options) {
+          yield { type: "log", line: "partial output" };
+          fs.appendFileSync(options.logPath, "partial output\n");
+          throw new Error("sdk exploded");
+        },
+      };
+      const engine = new ExecutionEngine({
+        store,
+        runs: runStore,
+        runner: runnerWithLogThenError,
+        worktrees: fakeWorktrees(artifactRoot),
+        artifacts: artifactStore,
+        events,
+        artifactRoot,
+        repoRoot,
+      });
+
+      engine.enqueue(card.id, "plan");
+      await engine.whenIdle();
+
+      const runlog = artifactStore.latest(card.id, {
+        stepKey: "plan",
+        round: 0,
+        kind: "runlog",
+      });
+      expect(runlog).toBeDefined();
+      expect(artifactStore.readBody(runlog!)).toContain("partial output");
+      expect(runlog!.gitSha).toBeNull();
+    });
+
+    it("does not index a runlog while the step is still queued", async () => {
+      const card = queuedCard();
+      const { engine } = makeEngine([{ events: ok() }]);
+      // Plan is queued after decideKind but before enqueue — no run row yet.
+      expect(runStore.latestForStep(card.id, "plan")).toBeUndefined();
+      expect(
+        artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "runlog" }),
+      ).toBeUndefined();
+
+      engine.enqueue(card.id, "plan");
+      await engine.whenIdle();
+    });
   });
 });
 

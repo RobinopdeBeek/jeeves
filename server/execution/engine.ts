@@ -59,10 +59,21 @@ export class ExecutionEngine {
   boot(): void {
     const { store, runs, events, worktrees } = this.deps;
     void worktrees.cleanupOrphans();
-    for (const orphan of runs.failOrphans()) {
+    const orphans = runs.listRunning();
+    for (const orphan of orphans) {
+      this.freezeRunLog(
+        orphan,
+        orphan.stepKey as StepKey,
+        orphan.round,
+        orphan.skill,
+      );
+      runs.finish(orphan.id, {
+        status: "failed",
+        error: "interrupted by server restart",
+      });
       events.emit({
         type: "card.updated",
-        card: store.setStepStatus(orphan.cardId, orphan.stepKey, "needs-user"),
+        card: store.setStepStatus(orphan.cardId, orphan.stepKey as StepKey, "needs-user"),
       });
     }
     for (const step of store.listQueuedSteps()) {
@@ -131,8 +142,10 @@ export class ExecutionEngine {
     const branch = WorktreeManager.cardBranch(cardId);
     const worktreePath = worktrees.worktreePathFor(cardId);
     let baseSha = "";
+    let headSha: string | undefined;
 
     const fail = (message: string) => {
+      this.freezeRunLog(run, stepKey, round, skill.skill, headSha);
       runs.finish(run.id, { status: "failed", error: message });
       this.finishStep(cardId, stepKey, "needs-user", run.id, "failed", message);
     };
@@ -150,6 +163,7 @@ export class ExecutionEngine {
         logPath,
         signal: this.abort.signal,
         onFinalize: async (ctx) => {
+          headSha = ctx.headSha;
           await this.finalizeStep(cardId, stepKey, round, skill.skill, ctx);
         },
       });
@@ -161,6 +175,7 @@ export class ExecutionEngine {
         }
       }
       if (result?.status === "finished" && checkStepPostconditions(stepKey, artifacts, cardId, round)) {
+        this.freezeRunLog(run, stepKey, round, skill.skill, headSha);
         runs.finish(run.id, {
           status: "succeeded",
           model: result.model,
@@ -182,6 +197,35 @@ export class ExecutionEngine {
         // Non-fatal: orphan cleanup runs on next boot.
       }
     }
+  }
+
+  private freezeRunLog(
+    run: { id: string; cardId: string; logPath: string | null },
+    stepKey: StepKey,
+    round: number,
+    sourceSkill: string,
+    gitSha?: string,
+  ): void {
+    const row = this.deps.runs.get(run.id);
+    const logPath = row?.logPath;
+    if (!logPath) return;
+    let content = "";
+    try {
+      if (fs.existsSync(logPath)) {
+        content = fs.readFileSync(logPath, "utf8");
+      }
+    } catch {
+      return;
+    }
+    this.deps.artifacts.save({
+      cardId: run.cardId,
+      stepKey,
+      round,
+      kind: "runlog",
+      content,
+      sourceSkill,
+      gitSha,
+    });
   }
 
   private async finalizeStep(

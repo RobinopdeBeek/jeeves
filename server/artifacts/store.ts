@@ -155,6 +155,11 @@ export class ArtifactStore {
     return fs.readFileSync(absPath, "utf8");
   }
 
+  /** Body without YAML frontmatter — what the UI renders. */
+  readBody(artifact: Artifact): string {
+    return stripFrontmatter(this.readContent(artifact)).trim();
+  }
+
   resolveServePath(cardId: string, relativePath: string): string {
     const normalized = relativePath.replace(/\\/g, "/");
     const expectedPrefix = `cards/${cardId}/`;

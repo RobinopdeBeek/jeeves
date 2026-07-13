@@ -96,7 +96,7 @@ export class RunStore {
    * crash/restart. Mark it failed and report the affected steps so the
    * caller can move them to needs-user.
    */
-  failOrphans(): Array<{ cardId: string; stepKey: StepKey }> {
+  failOrphans(): Run[] {
     const orphans = this.db
       .select()
       .from(runs)
@@ -108,9 +108,15 @@ export class RunStore {
         error: "interrupted by server restart",
       });
     }
-    return orphans.map((o) => ({
-      cardId: o.cardId,
-      stepKey: o.stepKey as StepKey,
-    }));
+    return orphans;
+  }
+
+  /** Runs still in flight — used before orphan recovery freezes their logs. */
+  listRunning(): Run[] {
+    return this.db
+      .select()
+      .from(runs)
+      .where(eq(runs.status, "running"))
+      .all();
   }
 }

@@ -52,6 +52,18 @@ describe("card-steps", () => {
       { key: "impl", status: "pending", label: "Implement", stepKind: "ai-execution", column: "implement" },
     ];
     expect(activeStep(steps)?.key).toBe("plan");
+    expect(activeTabKey(steps)).toBe("plan");
+  });
+
+  it("opens the last visible tab when later steps are still pending", () => {
+    const steps: CardStep[] = [
+      { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
+      { key: "plan", status: "done", label: "Plan", stepKind: "ai-execution", column: "implement" },
+      { key: "impl", status: "pending", label: "Implement", stepKind: "ai-execution", column: "implement" },
+      { key: "airev", status: "pending", label: "AI Review", stepKind: "ai-execution", column: "implement" },
+    ];
+    expect(activeStep(steps)?.key).toBe("impl");
+    expect(activeTabKey(steps)).toBe("plan");
   });
 
   describe("tile derivation", () => {

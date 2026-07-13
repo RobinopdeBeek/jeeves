@@ -1,9 +1,10 @@
-import { IconRefresh } from "@tabler/icons-react";
+import { IconChevronDown, IconRefresh } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, type ArtifactContent, type Run } from "@/lib/api";
 import { useJeevesEvents } from "@/lib/events";
+import { appendLogLine, formatRunLogText } from "@/lib/run-log";
 import {
   initialLogOpen,
   logOpenAfterFinish,
@@ -11,6 +12,7 @@ import {
   usesFrozenArtifacts,
 } from "@/lib/step-execution-view";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import type { StepPanelProps } from "./step-panel-types";
 
 async function fetchArtifact(
@@ -26,16 +28,20 @@ async function fetchArtifact(
   }
 }
 
+function toDisplayLog(raw: string): string {
+  return formatRunLogText(raw);
+}
+
 /**
  * Plan / Implement / AI Review run-log panel: queued message → live SSE
- * stream while ai-working → stacked plan + frozen log when finished.
+ * stream while ai-working → run log above formatted plan when finished.
  */
 export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
   const step = card.steps.find((s) => s.key === stepKey);
   const mode = stepExecutionMode(step?.status);
   const round = 0;
 
-  const [lines, setLines] = useState<string[]>([]);
+  const [logText, setLogText] = useState("");
   const [latestRun, setLatestRun] = useState<Run | null>(null);
   const [planArtifact, setPlanArtifact] = useState<ArtifactContent | null>(null);
   const [logOpen, setLogOpen] = useState(() => initialLogOpen(step?.status));
@@ -53,11 +59,10 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
     ]);
     setPlanArtifact(plan);
     if (runlog?.content) {
-      setLines(runlog.content.split(/\r?\n/).filter((line, i, arr) => line || i < arr.length - 1));
+      setLogText(toDisplayLog(runlog.content));
     }
   }
 
-  // Latest run + persisted log tail — initial load and reconnect catch-up.
   async function loadLatest() {
     const runs = await api.listRuns(card.id);
     const run = runs.find((r) => r.stepKey === stepKey);
@@ -72,9 +77,9 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
 
     if (run) {
       const withLog = await api.getRun(run.id);
-      setLines(withLog.log ? withLog.log.split(/\r?\n/) : []);
+      setLogText(withLog.log ? toDisplayLog(withLog.log) : "");
     } else {
-      setLines([]);
+      setLogText("");
     }
   }
 
@@ -110,14 +115,13 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
       if (event.cardId !== card.id) return;
       if (event.type === "run.log") {
         if (!acceptsRunEvent(event.runId)) return;
-        setLines((prev) => [...prev, event.line]);
+        setLogText((prev) => appendLogLine(prev, event.line));
       }
       if (event.type === "run.finished") {
         if (!acceptsRunEvent(event.runId)) return;
         loadLatest().catch(console.error);
       }
     },
-    // On SSE reconnect, re-fetch the log tail to cover the gap.
     () => loadLatest().catch(console.error),
   );
 
@@ -125,7 +129,7 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
     if (mode === "live" || logOpen) {
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
     }
-  }, [lines, mode, logOpen]);
+  }, [logText, mode, logOpen]);
 
   async function retry() {
     setRetrying(true);
@@ -134,7 +138,7 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
       onCardChange(updated);
       activeRunIdRef.current = null;
       wasLiveRef.current = false;
-      setLines([]);
+      setLogText("");
       setLatestRun(null);
       setPlanArtifact(null);
       setLogOpen(false);
@@ -146,63 +150,76 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
   }
 
   const failed = step?.status === "needs-user" && latestRun?.status === "failed";
+  const frozen = usesFrozenArtifacts(mode);
+  const showPlan = frozen && stepKey === "plan" && planArtifact;
 
-  function renderLogLines() {
-    return lines.map((line, i) => (
-      <div key={i} className="whitespace-pre-wrap break-all">
-        {line}
-      </div>
-    ));
+  function renderLogBody() {
+    return (
+      <>
+        {logText ? (
+          <pre className="whitespace-pre-wrap break-words">{logText}</pre>
+        ) : null}
+        {failed && latestRun?.error && (
+          <div className="text-destructive">[failed] {latestRun.error}</div>
+        )}
+        {!logText && !failed && (
+          <div className="text-muted-foreground">[empty] no log output recorded</div>
+        )}
+      </>
+    );
   }
 
   return (
-    <div className="flex flex-1 flex-col gap-3 overflow-hidden">
-      {usesFrozenArtifacts(mode) && stepKey === "plan" && planArtifact && (
-        <div className="overflow-y-auto rounded-lg border p-4 text-sm">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{planArtifact.content}</ReactMarkdown>
-        </div>
-      )}
-
-      {usesFrozenArtifacts(mode) ? (
-        <details
-          className="flex flex-1 flex-col overflow-hidden rounded-lg border"
-          open={logOpen}
-          onToggle={(e) => setLogOpen((e.target as HTMLDetailsElement).open)}
-        >
-          <summary className="cursor-pointer border-b px-4 py-2 text-sm font-medium">
-            Run log
-          </summary>
-          <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 font-mono text-sm">
-            {renderLogLines()}
-            {failed && latestRun?.error && (
-              <div className="text-destructive">[failed] {latestRun.error}</div>
+    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+      {frozen ? (
+        <>
+          <div
+            className={cn(
+              "flex min-h-0 flex-col overflow-hidden rounded-lg border",
+              logOpen ? "flex-1" : "shrink-0",
             )}
-            {lines.length === 0 && !failed && (
-              <div className="text-muted-foreground">[empty] no log output recorded</div>
+          >
+            <button
+              type="button"
+              className="flex w-full cursor-pointer items-center gap-2 border-b px-4 py-2 text-left text-sm font-medium"
+              onClick={() => setLogOpen((open) => !open)}
+            >
+              <IconChevronDown
+                className={cn("size-4 shrink-0 transition-transform", !logOpen && "-rotate-90")}
+              />
+              Run log
+            </button>
+            {logOpen && (
+              <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-4 font-mono text-sm">
+                {renderLogBody()}
+              </div>
             )}
           </div>
-        </details>
+
+          {showPlan && (
+            <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border p-4 text-sm">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{planArtifact.content}</ReactMarkdown>
+            </div>
+          )}
+        </>
       ) : (
-        <div className="flex flex-1 flex-col overflow-hidden rounded-lg border">
-          <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 font-mono text-sm">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
+          <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-4 font-mono text-sm">
             {mode === "queued" && (
               <div className="text-muted-foreground">
                 [queued] {step?.label} step waiting in queue…
               </div>
             )}
-            {renderLogLines()}
-            {mode === "live" && lines.length === 0 && (
+            {renderLogBody()}
+            {mode === "live" && !logText && (
               <div className="text-muted-foreground">[starting] agent is warming up…</div>
-            )}
-            {failed && latestRun?.error && (
-              <div className="text-destructive">[failed] {latestRun.error}</div>
             )}
           </div>
         </div>
       )}
 
       {failed && (
-        <div className="flex justify-end">
+        <div className="flex shrink-0 justify-end">
           <Button variant="outline" disabled={retrying} onClick={retry}>
             <IconRefresh data-icon="inline-start" />
             Retry

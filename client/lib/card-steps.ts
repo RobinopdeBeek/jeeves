@@ -32,7 +32,16 @@ export function visibleSteps(steps: CardStep[]): CardStep[] {
 }
 
 export function activeTabKey(steps: CardStep[]): string {
-  return activeStep(steps)?.key ?? "info";
+  const tabs = visibleSteps(steps);
+  const workTabs = tabs.filter((s) => s.key !== "info");
+
+  const focused =
+    workTabs.find((s) => s.status === "needs-user") ??
+    workTabs.find((s) => s.status === "ai-working") ??
+    workTabs.find((s) => s.status === "queued") ??
+    workTabs[workTabs.length - 1];
+
+  return focused?.key ?? tabs[tabs.length - 1]?.key ?? "info";
 }
 
 /** Post-decide cards show pipeline chrome on the board tile. */

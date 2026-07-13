@@ -2,7 +2,7 @@
 
 A personal workflow board that runs a Matt Pocock-inspired development pipeline visually.
 
-Docs: [`jeeves-plan.md`](./jeeves-plan.md) (the plan) · [`ARCHITECTURE.md`](./ARCHITECTURE.md) ·
+Docs: [`docs/plans/jeeves-plan.md`](./docs/plans/jeeves-plan.md) (plan hub) · [`ARCHITECTURE.md`](./ARCHITECTURE.md) ·
 [`CONTEXT.md`](./CONTEXT.md) (domain glossary) · [`docs/adr/`](./docs/adr/)
 
 ## Prerequisites

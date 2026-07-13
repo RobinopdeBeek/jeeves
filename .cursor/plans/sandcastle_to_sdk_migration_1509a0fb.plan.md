@@ -3,7 +3,7 @@ name: Sandcastle to SDK migration
 overview: Replace Sandcastle + Docker agent execution with self-managed git worktrees and `@cursor/sdk` local agents, update all docs/ADRs/issues to match, and adopt host-process previews (Docker previews considered but rejected for now).
 todos:
   - id: adr-docs
-    content: Write ADR 0010 and update ADR 0008, 0009, jeeves-plan.md, ARCHITECTURE.md, CONTEXT.md, README.md, .env.example
+    content: Write ADR 0010 and update ADR 0008, 0009, docs/plans/jeeves-plan.md, ARCHITECTURE.md, CONTEXT.md, README.md, .env.example
     status: completed
   - id: worktree-manager
     content: Implement server/execution/worktree-manager.ts + unit tests (temp git repo)
@@ -106,7 +106,7 @@ Create `[docs/adr/0010-self-managed-worktrees-cursor-sdk.md](docs/adr/0010-self-
 
 | File                                 | Sections to revise                                                                                                                                                                                              |
 | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `[jeeves-plan.md](jeeves-plan.md)`   | Architecture diagram, tech stack table, execution engine description, worktree/preview sections, project structure (`.sandcastle/` → `prompts/`), slice 3 notes, "Resolved: Cursor Docker auth", open questions |
+| [`docs/plans/jeeves-plan.md`](../../docs/plans/jeeves-plan.md)   | Architecture diagram, tech stack table, execution engine description, worktree/preview sections, project structure (`.sandcastle/` → `prompts/`), slice 3 notes, "Resolved: Cursor Docker auth", open questions |
 | `[ARCHITECTURE.md](ARCHITECTURE.md)` | System context, tech stack, AI execution layer, module map file names                                                                                                                                           |
 | `[CONTEXT.md](CONTEXT.md)`           | **Preview** definition (host process, not Docker container); **Harvest** (host worktree, not sandbox)                                                                                                           |
 | `[README.md](README.md)`             | Prerequisites: git, `CURSOR_API_KEY`; remove Docker Desktop requirement; add spike command                                                                                                                      |
@@ -211,7 +211,7 @@ Per your choice: **update ADR/plan now**; implement `PreviewManager` when buildi
 
 ### Considered alternative: Docker preview containers (rejected for now)
 
-The original `[jeeves-plan.md](jeeves-plan.md)` and ADR 0009 specified **Docker-isolated preview servers** for Human Review — recreating the evaluated SHA in a container with Jeeves-owned image/setup/dev commands, published port, and env allowlist. That approach preserves a stronger trust boundary when running AI-written dependency scripts during manual testing.
+The original [`docs/plans/jeeves-plan.md`](../../docs/plans/jeeves-plan.md) and ADR 0009 specified **Docker-isolated preview servers** for Human Review — recreating the evaluated SHA in a container with Jeeves-owned image/setup/dev commands, published port, and env allowlist. That approach preserves a stronger trust boundary when running AI-written dependency scripts during manual testing.
 
 **Why it was considered:** executing reviewed code in a container limits blast radius if a dev-server script or `postinstall` hook misbehaves.
 
@@ -249,7 +249,7 @@ No `image` / `dockerfile` fields.
 - Readiness HTTP probe; single lazy-retained slot; kill process tree on Stop
 - Shared port allocator with Playwright screenshot capture (slice 11)
 
-Update `[jeeves-plan.md](jeeves-plan.md)` Human Review preview section accordingly.
+Update [`docs/plans/jeeves-plan.md`](../../docs/plans/jeeves-plan.md) Human Review preview section accordingly.
 
 ---
 
@@ -284,7 +284,7 @@ No Sandcastle references today. Update when connecting skills:
 
 | Skill                                                                    | When                                                |
 | ------------------------------------------------------------------------ | --------------------------------------------------- |
-| `[.agents/skills/to-issues/SKILL.md](.agents/skills/to-issues/SKILL.md)` | Slice 7 — document `.jeeves/to-issues.json` sidecar |
+| `[prompts/execution/to-tasks.md](prompts/execution/to-tasks.md)` | Slice 7 — document `.jeeves/to-tasks.json` sidecar |
 | `[.agents/skills/implement/SKILL.md](.agents/skills/implement/SKILL.md)` | Slice 8 — worktree checkout assumptions             |
 
 

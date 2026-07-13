@@ -126,7 +126,7 @@ Browser                          Server
   finalization callback before cleanup so `ExecutionEngine` can harvest and enforce the Plan,
   Implement, or AI Review postcondition. `@cursor/sdk` local is today's implementation; a future
   HarnessAgent adapter would slot in without changing the board, queue, or chat UI.
-- **Structured skill outputs:** skills that must return parseable data (e.g. `/to-issues`)
+- **Structured skill outputs:** skills that must return parseable data (e.g. `/to-tasks`)
   write JSON to a known worktree path; the runner harvests and validates with Zod on the host,
   with retry on parse failure — not `generateObject` (which would bypass Cursor context and
   add a provider billing path).

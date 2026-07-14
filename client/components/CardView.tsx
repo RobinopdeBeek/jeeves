@@ -160,6 +160,10 @@ export function CardView() {
           </>
         )}
       </footer>
+
+      <p className="pointer-events-none fixed bottom-1 left-1/2 -translate-x-1/2 text-xs text-muted-foreground">
+        {card.id}
+      </p>
     </div>
   );
 }

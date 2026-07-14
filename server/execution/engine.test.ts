@@ -152,6 +152,16 @@ describe("ExecutionEngine", () => {
     return store.getCard(cardId)!.steps.find((s) => s.key === stepKey)?.status;
   }
 
+  function expectDiagnosticAttachment(cardId: string) {
+    const diag = artifactStore.latest(cardId, {
+      stepKey: "plan",
+      round: 0,
+      kind: "attachment",
+    });
+    expect(diag).toBeDefined();
+    expect(artifactStore.readBody(diag!)).toContain("Workspace diagnostics");
+  }
+
   it("runs a queued Plan to done when the agent succeeds", async () => {
     const card = queuedCard();
     const { engine, calls } = makeEngine([{ events: ok() }]);
@@ -219,13 +229,7 @@ describe("ExecutionEngine", () => {
       artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" }),
     ).toBeUndefined();
 
-    const diag = artifactStore.latest(card.id, {
-      stepKey: "plan",
-      round: 0,
-      kind: "attachment",
-    });
-    expect(diag).toBeDefined();
-    expect(artifactStore.readBody(diag!)).toContain("Workspace diagnostics");
+    expectDiagnosticAttachment(card.id);
   });
 
   it("fails Plan when the exchange file is empty at finalize", async () => {
@@ -264,6 +268,46 @@ describe("ExecutionEngine", () => {
     expect(
       artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" }),
     ).toBeUndefined();
+    expectDiagnosticAttachment(card.id);
+  });
+
+  it("fails Plan when the exchange file has no useful content at finalize", async () => {
+    const card = queuedCard();
+    const runnerWithInvalidPlan: AgentRunner = {
+      async *run(_promptFile, options) {
+        const planDir = path.join(options.worktreePath, ".jeeves");
+        fs.mkdirSync(planDir, { recursive: true });
+        fs.writeFileSync(path.join(planDir, "plan.md"), "# Plan\n\n## Steps\n");
+        if (options.onFinalize) {
+          await options.onFinalize({
+            workspacePath: options.worktreePath,
+            headSha: options.baseSha,
+            baseSha: options.baseSha,
+          });
+        }
+        yield { type: "result", status: "finished" };
+      },
+    };
+    const engine = new ExecutionEngine({
+      store,
+      runs: runStore,
+      runner: runnerWithInvalidPlan,
+      worktrees: fakeWorktrees(artifactRoot),
+      artifacts: artifactStore,
+      events,
+      artifactRoot,
+      repoRoot,
+    });
+
+    engine.enqueue(card.id, "plan");
+    await engine.whenIdle();
+
+    expect(stepStatus(card.id, "plan")).toBe("needs-user");
+    expect(runStore.latestForStep(card.id, "plan")?.error).toMatch(/useful content/);
+    expect(
+      artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" }),
+    ).toBeUndefined();
+    expectDiagnosticAttachment(card.id);
   });
 
   it("fails Plan when the agent edits source files beyond the exchange file", async () => {
@@ -304,6 +348,7 @@ describe("ExecutionEngine", () => {
       artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" }),
     ).toBeDefined();
     expect(fs.existsSync(path.join(artifactRoot, "worktrees", card.id))).toBe(false);
+    expectDiagnosticAttachment(card.id);
   });
 
   it("fails Plan when the agent commits to the card branch", async () => {
@@ -339,6 +384,7 @@ describe("ExecutionEngine", () => {
 
     expect(stepStatus(card.id, "plan")).toBe("needs-user");
     expect(runStore.latestForStep(card.id, "plan")?.error).toMatch(/commits/);
+    expectDiagnosticAttachment(card.id);
   });
 
   it("moves Plan to needs-user with a failed run when the agent errors", async () => {

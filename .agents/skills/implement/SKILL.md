@@ -1,10 +1,12 @@
 ---
 name: implement
-description: "Implement a piece of work based on a PRD or set of issues."
+description: "Implement a piece of work based on a spec or set of tickets."
 disable-model-invocation: true
 ---
 
-Implement the work described by the user in the PRD or issues.
+Implement the work described by the user in the spec or tickets.
+
+If the work involves third party libraries or tools, use Context7 MCP to check the latest docs.
 
 Use /tdd where possible, at pre-agreed seams.
 
@@ -13,3 +15,5 @@ Run typechecking regularly, single test files regularly, and the full test suite
 Once done, use /code-review to review the work.
 
 Commit your work to the current branch.
+
+Write a concise QA Checklist, so the user can quickly start testing.

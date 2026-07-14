@@ -11,6 +11,11 @@ export function eventRoutes(events: EventBus) {
 
   app.get("/", (c) =>
     streamSSE(c, async (stream) => {
+      // Flush the response immediately. Without an initial event, EventSource
+      // remains CONNECTING until the first run event or 25-second heartbeat,
+      // delaying reconnect catch-up after a dev-server restart.
+      await stream.writeSSE({ event: "ping", data: "{}" });
+
       let id = 0;
       const unsubscribe = events.subscribe((event) => {
         void stream.writeSSE({

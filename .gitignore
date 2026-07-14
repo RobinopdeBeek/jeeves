@@ -9,15 +9,6 @@ node_modules/
 # Local scratch (agent drafts, spike notes)
 .scratch/
 
-# Ephemeral git worktrees (under data/; listed explicitly for clarity)
-data/worktrees/
-
-# Local data (SQLite + WAL sidecars)
-data/
-*.db
-*.db-wal
-*.db-shm
-
 # Build output
 client/dist/
 dist/

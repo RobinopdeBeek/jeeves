@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { WorktreeManager } from "./worktree-manager.js";
+import { resolveWorktreeRoot, WorktreeManager, filterPorcelainStatus } from "./worktree-manager.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -67,6 +67,13 @@ describe("WorktreeManager", () => {
     expect(WorktreeManager.cardBranch("abc123")).toBe("jeeves/card-abc123");
   });
 
+  it("defaults worktree root to <repo>/.jeeves/worktrees when omitted", () => {
+    const repo = "C:/projects/pantry-checker";
+    expect(resolveWorktreeRoot(repo)).toBe(
+      path.join(path.resolve(repo), ".jeeves", "worktrees"),
+    );
+  });
+
   it("creates and removes a worktree at baseSha", async () => {
     const wm = manager();
     const cardId = "card-1";
@@ -85,6 +92,25 @@ describe("WorktreeManager", () => {
     const listed = await git(temp.repoPath, ["worktree", "list", "--porcelain"]);
     expect(listed).not.toContain(gitPath(wtPath));
     expect(fs.existsSync(wtPath)).toBe(false);
+  });
+
+  it("ignores exchange paths in worktreeStatus when requested", async () => {
+    const wm = manager();
+    const cardId = "card-exchange";
+    const wtPath = wm.worktreePathFor(cardId);
+    await wm.create(WorktreeManager.cardBranch(cardId), temp.mainSha, wtPath);
+
+    const exchangeDir = path.join(wtPath, ".jeeves");
+    fs.mkdirSync(exchangeDir, { recursive: true });
+    fs.writeFileSync(path.join(exchangeDir, "plan.md"), "# Plan\n\nDo the thing.\n");
+
+    const raw = await wm.worktreeStatus(wtPath);
+    expect(raw).toContain(".jeeves");
+
+    const filtered = await wm.worktreeStatus(wtPath, { ignorePathPrefixes: [".jeeves"] });
+    expect(filtered).toBe("");
+
+    await wm.remove(wtPath);
   });
 
   it("captures diagnostics for dirty and staged changes", async () => {
@@ -150,5 +176,12 @@ describe("WorktreeManager", () => {
     await wm.cleanupOrphans();
 
     expect(fs.existsSync(staleDir)).toBe(false);
+  });
+});
+
+describe("filterPorcelainStatus", () => {
+  it("drops lines under ignored path prefixes", () => {
+    const raw = ["?? .jeeves/", "?? .jeeves/plan.md", " M README.md"].join("\n");
+    expect(filterPorcelainStatus(raw, [".jeeves"])).toBe(" M README.md");
   });
 });

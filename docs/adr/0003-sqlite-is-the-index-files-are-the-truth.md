@@ -4,7 +4,7 @@ Artifacts have two natures pulling in different directions: prose and media want
 
 ## Consequences
 
-- Nothing the UI renders on a card tile may be trapped inside markdown or HTML; if the board needs it, it must be a row (this is why notifications arrive as a sidecar JSON that is inserted into the database at harvest, not scraped from the evaluation HTML).
+- Nothing the UI renders on a card tile may be trapped inside markdown or HTML; if the board needs it, it must be a row (this is why notifications arrive as an exchange file inserted into the database at harvest, not scraped from the evaluation HTML).
 - Structured state (change requests, runs, decisions) gets real tables, never markdown files.
 - `ArtifactStore` alone resolves paths and rejects any resolution outside the configured artifact root.
 - Saves are file-first: write and validate a temporary file, atomically rename it, then insert the SQLite row. A normal insert failure removes the file; a crash between rename and insert leaves a recoverable self-describing orphan rather than a broken database pointer.

@@ -30,6 +30,7 @@ export function CardView() {
 
   useEffect(() => {
     if (!id) return;
+    setTabOverride(null);
     api
       .getCard(id)
       .then(setCard)
@@ -47,13 +48,6 @@ export function CardView() {
       api.getCard(id).then(setCard).catch(() => setMissing(true));
     },
   );
-
-  useEffect(() => {
-    if (!card || tabOverride === null) return;
-    if (!visibleSteps(card.steps).some((s) => s.key === tabOverride)) {
-      setTabOverride(null);
-    }
-  }, [card, tabOverride]);
 
   async function remove() {
     if (!card) return;
@@ -90,7 +84,9 @@ export function CardView() {
   if (!card) return null;
 
   const tabs = visibleSteps(card.steps);
-  const activeKey = tabOverride ?? activeTabKey(card.steps);
+  const defaultTabKey = activeTabKey(card.steps);
+  const activeKey =
+    tabOverride && tabs.some((s) => s.key === tabOverride) ? tabOverride : defaultTabKey;
   const Panel = STEP_PANELS[activeKey];
   const inBacklog = card.column === "backlog";
   const hasTitle = card.title.trim().length > 0;
@@ -164,6 +160,10 @@ export function CardView() {
           </>
         )}
       </footer>
+
+      <p className="pointer-events-none fixed bottom-1 left-1/2 -translate-x-1/2 text-xs text-muted-foreground">
+        {card.id}
+      </p>
     </div>
   );
 }

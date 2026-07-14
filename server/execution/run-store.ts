@@ -18,6 +18,7 @@ export class RunStore {
     logPath: string;
     round?: number;
     model?: string;
+    baseSha?: string;
   }): Run {
     const run: Run = {
       id: nanoid(10),
@@ -34,6 +35,7 @@ export class RunStore {
       cost: null,
       error: null,
       logPath: input.logPath,
+      baseSha: input.baseSha ?? null,
     };
     this.db.insert(runs).values(run).run();
     return run;
@@ -96,7 +98,7 @@ export class RunStore {
    * crash/restart. Mark it failed and report the affected steps so the
    * caller can move them to needs-user.
    */
-  failOrphans(): Array<{ cardId: string; stepKey: StepKey }> {
+  failOrphans(): Run[] {
     const orphans = this.db
       .select()
       .from(runs)
@@ -108,9 +110,15 @@ export class RunStore {
         error: "interrupted by server restart",
       });
     }
-    return orphans.map((o) => ({
-      cardId: o.cardId,
-      stepKey: o.stepKey as StepKey,
-    }));
+    return orphans;
+  }
+
+  /** Runs still in flight — used before orphan recovery freezes their logs. */
+  listRunning(): Run[] {
+    return this.db
+      .select()
+      .from(runs)
+      .where(eq(runs.status, "running"))
+      .all();
   }
 }

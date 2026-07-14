@@ -16,7 +16,7 @@ The one-time, irreversible Backlog exit where a card's kind is chosen: "Grill me
 _Avoid_: Advance (that's any pipeline transition; this is specifically the first one)
 
 **Feature**:
-A card that is defined collaboratively (Grill → PRD → Tasks), fans out into child tasks, and is reviewed and finalized as a whole.
+A card that is defined collaboratively (Grill → Spec → Tasks), fans out into child tasks, and is reviewed and finalized as a whole.
 
 **Task**:
 A card that implements one vertical slice autonomously (Plan → Implement → AI Review). A **child task** has a parent feature and merges into its branch; a **standalone task** has no parent and finalizes itself. Child vs standalone is derived from the parent link, never stored.
@@ -33,7 +33,7 @@ _Avoid_: Stage, phase, "shape" (legacy id for Define)
 The ordered list of columns a card kind passes through. Defined in code per kind, not in the database.
 
 **Evaluation**:
-The generated, self-contained HTML report a review works from, pinned to the commit it evaluated. Comes in two scopes: a **Task Evaluation** (deep: diff narrative, tests, AI findings, QA checklist) and a **Feature Evaluation** (integration-focused: regression, journeys, PRD criteria, refactor opportunities).
+The generated, self-contained HTML report a review works from, pinned to the commit it evaluated. Comes in two scopes: a **Task Evaluation** (deep: diff narrative, tests, AI findings, QA checklist) and a **Feature Evaluation** (integration-focused: regression, journeys, spec criteria, refactor opportunities).
 _Avoid_: Evaluation plan, eval plan, acceptance eval, review doc
 
 **Review**:
@@ -70,14 +70,21 @@ One skill invocation by the execution runner, recording status, timestamps, mode
 A free-text item raised during review, scoped to a round, moving open → consumed. The open set is collectively the input to the next round. Sources: manual, AI-review finding, refactor opportunity.
 
 **Artifact**:
-A file produced by a step, stored in the artifact folder and indexed by a database row holding metadata and a path — never content. Self-describing via frontmatter; lineage recorded as derived-from links.
+A file produced by a step, stored in the project store's artifact folder and indexed by a database row holding metadata and a path — never content. Self-describing via frontmatter; lineage recorded as derived-from links.
+
+**Project store**:
+Per-target-repository workflow storage at `<repo>/.jeeves/` (gitignored on disk). Holds `jeeves.db`, the artifact tree under `data/`, and ephemeral agent worktrees under `worktrees/`. Jeeves creates it on first use and ensures `.jeeves/` is in the target repo's `.gitignore`. Application source stays git-clean — nothing in the store is committed.
+_Avoid_: Data dir (ambiguous with app vs project)
 
 **Artifact folder**:
-Jeeves' own file storage (`data/cards/<cardId>/<round>/`), outside the repository under review. The file-shaped source of truth; SQLite is the index.
-_Avoid_: Data dir, jeeves data dir
+File-shaped artifacts for a card, under `<repo>/.jeeves/data/cards/<cardId>/<round>/`. The file-shaped source of truth within the project store; SQLite at `<repo>/.jeeves/jeeves.db` is the index.
+_Avoid_: Jeeves app `data/` (retired layout)
+
+**Exchange file**:
+A short-lived file an agent writes under `<worktree>/.jeeves/` during a run (e.g. `plan.md`, `to-tasks.json`). Harvest copies it into the project store and removes it from the worktree. Not the same as the durable project store at `<repo>/.jeeves/`.
 
 **Harvest**:
-The runner copying worktree-produced artifacts from the host worktree path into the artifact folder (and notifications into the database) before worktree teardown. Exchange sidecars (e.g. `.jeeves/plan.md`) are removed from the worktree after a successful harvest.
+The runner copying worktree-produced **exchange files** from the host worktree path into the project store's artifact folder (and notifications into the database) before worktree teardown. Exchange files are removed from the worktree after a successful harvest.
 
 **Fan-out**:
 Activating a feature's draft tasks into child cards on the board.
@@ -93,7 +100,7 @@ A card that must merge before another may start. Stored as card-to-card edges.
 _Avoid_: Dependency (ambiguous with package dependencies)
 
 **Project**:
-A target repository jeeves works on. Every card belongs to exactly one project. The project owns its explicit local default branch and trusted preview configuration.
+A target repository Jeeves works on. Every card belongs to exactly one project. The project owns its gitignored **project store** at `<repo>/.jeeves/`, its explicit local default branch, and trusted preview configuration.
 
 **Manifest**:
-The per-card `manifest.json` in the artifact folder — a regenerable projection of the database index that agent runs read instead of the database.
+The per-card `manifest.json` in the project store (`<repo>/.jeeves/data/cards/<cardId>/manifest.json`) — a regenerable projection of the database index that agent runs read instead of the database.

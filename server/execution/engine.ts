@@ -2,20 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { CardStoreError, type CardWithSteps } from "../cards/store.js";
 import type { CardStore } from "../cards/store.js";
+import type { ArtifactStore } from "../artifacts/store.js";
 import type { StepKey } from "../pipelines.js";
 import { EventBus } from "./events.js";
 import type { RunStore } from "./run-store.js";
 import type { AgentRunner, RunEvent } from "./runner.js";
-import type { WorktreeLifecycle } from "./worktree-manager.js";
+import type { WorktreeDiagnostics, WorktreeLifecycle } from "./worktree-manager.js";
 import { WorktreeManager } from "./worktree-manager.js";
-
-/** Which skill an ai-execution step runs (slice 3: Plan → tracer only). */
-const STEP_SKILLS: Partial<Record<StepKey, { skill: string; promptFile: string }>> = {
-  plan: {
-    skill: "slice-3-tracer",
-    promptFile: path.join("prompts", "execution", "slice-3-tracer.md"),
-  },
-};
+import { meetsPostconditions, stepPolicy } from "./step-policies.js";
 
 const DEFAULT_BASE_REF = "main";
 
@@ -24,9 +18,8 @@ export interface ExecutionEngineDeps {
   runs: RunStore;
   runner: AgentRunner;
   worktrees: WorktreeLifecycle;
+  artifacts: ArtifactStore;
   events: EventBus;
-  /** The artifact folder root — run logs land under `cards/<id>/<round>/`. */
-  artifactRoot: string;
   /** Repo root — prompt files resolve relative to this. */
   repoRoot: string;
 }
@@ -57,10 +50,21 @@ export class ExecutionEngine {
   boot(): void {
     const { store, runs, events, worktrees } = this.deps;
     void worktrees.cleanupOrphans();
-    for (const orphan of runs.failOrphans()) {
+    const orphans = runs.listRunning();
+    for (const orphan of orphans) {
+      this.freezeRunLog(
+        orphan,
+        orphan.stepKey as StepKey,
+        orphan.round,
+        orphan.skill,
+      );
+      runs.finish(orphan.id, {
+        status: "failed",
+        error: "interrupted by server restart",
+      });
       events.emit({
         type: "card.updated",
-        card: store.setStepStatus(orphan.cardId, orphan.stepKey, "needs-user"),
+        card: store.setStepStatus(orphan.cardId, orphan.stepKey as StepKey, "needs-user"),
       });
     }
     for (const step of store.listQueuedSteps()) {
@@ -100,24 +104,29 @@ export class ExecutionEngine {
   }
 
   private async execute(cardId: string, stepKey: StepKey): Promise<void> {
-    const { store, runs, runner, worktrees, events, artifactRoot, repoRoot } =
-      this.deps;
-    const skill = STEP_SKILLS[stepKey];
+    const { store, runs, runner, worktrees, artifacts, events, repoRoot } = this.deps;
+    const policy = stepPolicy(stepKey);
     const card = store.getCard(cardId);
-    if (!skill || !card) return;
+    if (!policy || !card) return;
 
-    const round = 0;
-    const logDir = path.join(artifactRoot, "cards", cardId, String(round));
-    fs.mkdirSync(logDir, { recursive: true });
+    const round = currentRound(cardId);
+    const priorRun = runs.latestForStep(cardId, stepKey);
+    let baseSha: string;
+    if (priorRun?.status === "failed" && priorRun.baseSha) {
+      baseSha = priorRun.baseSha;
+    } else {
+      baseSha = await worktrees.resolveRef(DEFAULT_BASE_REF);
+    }
 
     const run = runs.create({
       cardId,
       stepKey,
-      skill: skill.skill,
+      skill: policy.skill,
       round,
       logPath: "",
+      baseSha,
     });
-    const logPath = path.join(logDir, `run-${run.id}.log`);
+    const logPath = artifacts.liveLogPath(cardId, round, run.id);
     runs.setLogPath(run.id, logPath);
 
     events.emit({
@@ -128,19 +137,26 @@ export class ExecutionEngine {
     const repoPath = store.getRepoPath(cardId);
     const branch = WorktreeManager.cardBranch(cardId);
     const worktreePath = worktrees.worktreePathFor(cardId);
-    let baseSha = "";
+    let headSha: string | undefined;
 
-    const fail = (message: string) => {
+    const fail = async (message: string) => {
+      await this.preserveFailureEvidence(
+        run,
+        stepKey,
+        round,
+        policy.skill,
+        worktreePath,
+        headSha,
+      );
       runs.finish(run.id, { status: "failed", error: message });
       this.finishStep(cardId, stepKey, "needs-user", run.id, "failed", message);
     };
 
     try {
-      baseSha = await worktrees.resolveRef(DEFAULT_BASE_REF);
       await worktrees.create(branch, baseSha, worktreePath);
 
       let result: Extract<RunEvent, { type: "result" }> | undefined;
-      const iterable = runner.run(path.resolve(repoRoot, skill.promptFile), {
+      const iterable = runner.run(path.resolve(repoRoot, policy.promptFile), {
         cwd: repoPath,
         branch,
         worktreePath,
@@ -148,7 +164,8 @@ export class ExecutionEngine {
         logPath,
         signal: this.abort.signal,
         onFinalize: async (ctx) => {
-          await this.finalizeStep(cardId, stepKey, ctx);
+          headSha = ctx.headSha;
+          await this.finalizeStep(cardId, stepKey, round, policy.skill, ctx);
         },
       });
       for await (const event of iterable) {
@@ -158,7 +175,11 @@ export class ExecutionEngine {
           result = event;
         }
       }
-      if (result?.status === "finished" && checkStepPostconditions(stepKey, result)) {
+      if (
+        result?.status === "finished" &&
+        meetsPostconditions(stepKey, artifacts, cardId, round)
+      ) {
+        this.freezeRunLog(run, stepKey, round, policy.skill, headSha);
         runs.finish(run.id, {
           status: "succeeded",
           model: result.model,
@@ -167,12 +188,12 @@ export class ExecutionEngine {
         });
         this.finishStep(cardId, stepKey, "done", run.id, "succeeded");
       } else if (result?.status === "cancelled") {
-        fail("run cancelled");
+        await fail("run cancelled");
       } else {
-        fail("step postconditions not met");
+        await fail("step postconditions not met");
       }
     } catch (e) {
-      fail(e instanceof Error ? e.message : String(e));
+      await fail(e instanceof Error ? e.message : String(e));
     } finally {
       try {
         await worktrees.remove(worktreePath);
@@ -182,16 +203,79 @@ export class ExecutionEngine {
     }
   }
 
-  /**
-   * Post-run finalization on the host worktree path (slice 4: harvest
-   * exchange sidecars via ArtifactStore).
-   */
+  private freezeRunLog(
+    run: { id: string; cardId: string; logPath: string | null },
+    stepKey: StepKey,
+    round: number,
+    sourceSkill: string,
+    gitSha?: string,
+  ): void {
+    const row = this.deps.runs.get(run.id);
+    const logPath = row?.logPath;
+    if (!logPath) return;
+    let content = "";
+    try {
+      if (fs.existsSync(logPath)) {
+        content = fs.readFileSync(logPath, "utf8");
+      }
+    } catch {
+      // Degraded freeze — still index an empty runlog so the UI does not lie.
+    }
+    this.deps.artifacts.save({
+      cardId: run.cardId,
+      stepKey,
+      round,
+      kind: "runlog",
+      content,
+      sourceSkill,
+      gitSha,
+    });
+  }
+
   private async finalizeStep(
-    _cardId: string,
-    _stepKey: StepKey,
-    _ctx: { workspacePath: string; headSha: string; baseSha: string },
+    cardId: string,
+    stepKey: StepKey,
+    round: number,
+    sourceSkill: string,
+    ctx: { workspacePath: string; headSha: string; baseSha: string },
   ): Promise<void> {
-    // slice 4 — ArtifactStore.harvest from workspacePath
+    const policy = stepPolicy(stepKey);
+    if (!policy?.harvest) return;
+    if (policy.assertWorkspace) {
+      await policy.assertWorkspace(this.deps.worktrees, ctx);
+    }
+    this.deps.artifacts.harvest(ctx.workspacePath, policy.harvest, {
+      cardId,
+      round,
+      sourceSkill,
+      gitSha: ctx.headSha,
+    });
+  }
+
+  private async preserveFailureEvidence(
+    run: { id: string; cardId: string; logPath: string | null },
+    stepKey: StepKey,
+    round: number,
+    sourceSkill: string,
+    worktreePath: string,
+    gitSha?: string,
+  ): Promise<void> {
+    this.freezeRunLog(run, stepKey, round, sourceSkill, gitSha);
+    if (!worktreePath || !fs.existsSync(worktreePath)) return;
+    try {
+      const diag = await this.deps.worktrees.captureDiagnostics(worktreePath);
+      this.deps.artifacts.save({
+        cardId: run.cardId,
+        stepKey,
+        round,
+        kind: "attachment",
+        content: formatWorkspaceDiagnostics(diag),
+        sourceSkill,
+        gitSha: gitSha ?? diag.headSha,
+      });
+    } catch {
+      // Best-effort — run log is the minimum retained evidence.
+    }
   }
 
   /**
@@ -233,10 +317,30 @@ export class ExecutionEngine {
   }
 }
 
-/** Slice 4 — per-step success checks beyond runner terminal status. */
-function checkStepPostconditions(
-  _stepKey: StepKey,
-  _result: Extract<RunEvent, { type: "result" }>,
-): boolean {
-  return true;
+/** Slice 4 — rework rounds land in slice 8; centralize the pin here. */
+function currentRound(_cardId: string): number {
+  return 0;
+}
+
+function formatWorkspaceDiagnostics(diag: WorktreeDiagnostics): string {
+  return [
+    "# Workspace diagnostics",
+    "",
+    "## HEAD",
+    diag.headSha,
+    "",
+    "## Status",
+    diag.status || "(clean)",
+    "",
+    "## Diff",
+    "```diff",
+    diag.diff || "(empty)",
+    "```",
+    "",
+    "## Staged diff",
+    "```diff",
+    diag.diffCached || "(empty)",
+    "```",
+    "",
+  ].join("\n");
 }

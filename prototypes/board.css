@@ -1061,22 +1061,22 @@ body {
   color: var(--muted-foreground);
 }
 
-/* ---- PRD tab: editor + AI chat sidepanel ---- */
-.prd-layout {
+/* ---- Spec tab: editor + AI chat sidepanel ---- */
+.spec-layout {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   gap: 16px;
 }
 
-.prd-editor {
+.spec-editor {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   flex-direction: column;
 }
 
-.prd-ed {
+.spec-ed {
   flex: 1 1 auto;
   min-height: 320px;
   resize: none;
@@ -1086,7 +1086,7 @@ body {
   padding: 14px 16px;
 }
 
-.prd-side {
+.spec-side {
   flex: 0 0 340px;
   display: flex;
   flex-direction: column;
@@ -1096,7 +1096,7 @@ body {
   background: var(--background);
 }
 
-.prd-side .chat {
+.spec-side .chat {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
@@ -1104,7 +1104,7 @@ body {
   gap: 9px;
 }
 
-.prd-side .composer {
+.spec-side .composer {
   border: none;
   border-top: 1px solid var(--border);
   border-radius: 0;
@@ -1112,7 +1112,7 @@ body {
   padding: 8px;
 }
 
-/* ---- Tasks tab (reuses prd-layout) ---- */
+/* ---- Tasks tab (reuses spec-layout) ---- */
 .tasks-left {
   padding: 0;
   overflow: hidden;
@@ -1293,7 +1293,7 @@ body {
   opacity: 1;
 }
 
-/* ---- Human Review: "Request changes" sidepanel (reuses prd-side) ---- */
+/* ---- Human Review: "Request changes" sidepanel (reuses spec-side) ---- */
 .review-left {
   overflow: auto;
   padding-right: 6px;
@@ -1858,11 +1858,11 @@ body {
     max-width: none;
   }
 
-  .prd-layout {
+  .spec-layout {
     flex-direction: column;
   }
 
-  .prd-side {
+  .spec-side {
     flex: 0 0 auto;
     max-height: 320px;
   }
@@ -1871,7 +1871,7 @@ body {
     opacity: 1;
   }
 
-  .prd-ed {
+  .spec-ed {
     min-height: 240px;
   }
 }
@@ -2347,7 +2347,7 @@ body {
   color: var(--destructive);
 }
 
-/* QA sub-groups: PRD acceptance + E2E journeys under one section */
+/* QA sub-groups: Spec acceptance + E2E journeys under one section */
 .ep-qa-group + .ep-qa-group {
   margin-top: 14px;
 }

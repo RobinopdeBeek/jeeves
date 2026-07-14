@@ -4,8 +4,9 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { Code, ConnectError } from "@connectrpc/connect";
 import { Agent, CursorAgentError } from "@cursor/sdk";
-import type { LocalAgentOptions, Run, SDKMessage } from "@cursor/sdk";
+import type { LocalAgentOptions, Run } from "@cursor/sdk";
 import type { AgentRunner, RunAgentOptions, RunEvent } from "./runner.js";
+import { RunLogWriter } from "./run-log.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -28,6 +29,7 @@ export class CursorSdkAgentRunner implements AgentRunner {
     const prompt = fs.readFileSync(promptFile, "utf8");
     fs.mkdirSync(path.dirname(options.logPath), { recursive: true });
     const log = fs.createWriteStream(options.logPath, { flags: "w" });
+    const logWriter = new RunLogWriter((chunk) => log.write(chunk));
 
     let agent: Awaited<ReturnType<typeof Agent.create>> | undefined;
     let run: Run | undefined;
@@ -48,9 +50,8 @@ export class CursorSdkAgentRunner implements AgentRunner {
 
       for await (const event of run.stream()) {
         options.signal?.throwIfAborted();
-        const line = formatMessage(event);
+        const line = logWriter.emit(event);
         if (line !== undefined) {
-          log.write(`${line}\n`);
           yield { type: "log", line };
         }
       }
@@ -92,6 +93,7 @@ export class CursorSdkAgentRunner implements AgentRunner {
       throw error;
     } finally {
       options.signal?.removeEventListener("abort", onAbort);
+      logWriter.close();
       log.end();
       if (agent) await safeDispose(agent);
     }
@@ -107,19 +109,6 @@ function localOptions(worktreePath: string): LocalAgentOptions {
     local.sandboxOptions = { enabled: true };
   }
   return local;
-}
-
-function formatMessage(message: SDKMessage): string | undefined {
-  if (message.type === "assistant") {
-    return message.message.content
-      .filter((block) => block.type === "text")
-      .map((block) => block.text)
-      .join("");
-  }
-  if (message.type === "tool_call") {
-    return `→ ${message.name} (${message.status})`;
-  }
-  return undefined;
 }
 
 async function safeWait(run: Run) {

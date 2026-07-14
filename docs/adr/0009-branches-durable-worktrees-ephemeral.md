@@ -11,10 +11,10 @@ The branch persists until merge: a child task branch merges into its feature bra
 `AgentRunner.run()` owns one temporary worktree and invokes an `ExecutionEngine` finalization callback after the agent exits but before cleanup. The callback harvests declared outputs and enforces step-specific postconditions:
 
 - **Plan:** a non-empty Plan artifact must be harvested; no source changes or commit are required.
-- **Implement:** source commits are required and the tree must be clean after declared sidecars are removed.
+- **Implement:** source commits are required and the tree must be clean after declared exchange files are removed.
 - **AI Review/evaluation:** declared review artifacts are required; source changes and source commits are forbidden.
 
-Missing or invalid required output fails the run atomically and preserves the worktree for diagnosis. Retry captures the failed worktree's status/diff as a diagnostic artifact, discards the contaminated generated worktree, and recreates a clean one from the recorded pre-run SHA. Harvested sidecars are removed from the target worktree; downstream runs receive canonical artifacts explicitly from `ArtifactStore`.
+Missing or invalid required output fails the run atomically and preserves the worktree for diagnosis. Retry captures the failed worktree's status/diff as a diagnostic artifact, discards the contaminated generated worktree, and recreates a clean one from the recorded pre-run SHA. Harvested exchange files are removed from the target worktree; downstream runs receive canonical artifacts explicitly from `ArtifactStore`.
 
 ## Independent child tasks
 

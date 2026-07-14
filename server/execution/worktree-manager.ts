@@ -19,9 +19,16 @@ export interface WorktreeLifecycle {
   worktreePathFor(cardId: string): string;
   create(cardBranch: string, baseSha: string, worktreePath: string): Promise<void>;
   remove(worktreePath: string): Promise<void>;
+  /** Porcelain status only — used for finalize checks without touching the index in parallel. */
+  worktreeStatus(cwd: string, options?: WorktreeStatusOptions): Promise<string>;
   captureDiagnostics(cwd: string): Promise<WorktreeDiagnostics>;
   cleanupOrphans(): Promise<void>;
   resolveRef(ref: string): Promise<string>;
+}
+
+export interface WorktreeStatusOptions {
+  /** Paths to omit from the status check (e.g. `.jeeves` exchange files pre-harvest). */
+  ignorePathPrefixes?: string[];
 }
 
 export interface WorktreeManagerOptions {
@@ -29,22 +36,20 @@ export interface WorktreeManagerOptions {
   repoPath: string;
   /** Root for ephemeral worktrees; defaults via `resolveWorktreeRoot`. */
   worktreeRoot?: string;
-  /** Base directory when resolving the default worktree root. */
-  baseDir?: string;
 }
 
-/** Default `data/worktrees/` under baseDir, or `JEEVES_WORKTREE_ROOT` when set. */
-export function resolveWorktreeRoot(baseDir?: string): string {
+/** Default `<repo>/.jeeves/worktrees/`, or `JEEVES_WORKTREE_ROOT` when set (ADR 0011). */
+export function resolveWorktreeRoot(repoPath?: string): string {
   const fromEnv = process.env.JEEVES_WORKTREE_ROOT?.trim();
   if (fromEnv) return path.resolve(fromEnv);
-  const root = baseDir ?? process.cwd();
-  return path.join(root, "data", "worktrees");
+  const root = path.resolve(repoPath ?? process.cwd());
+  return path.join(root, ".jeeves", "worktrees");
 }
 
 /**
- * Owns ephemeral git worktrees for agent runs (ADR 0009). Durable branches
- * (`jeeves/card-<id>`) live in the target repo; each run gets a fresh
- * checkout under the configured worktree root.
+ * Owns ephemeral git worktrees for agent runs (ADR 0009, ADR 0011). Durable
+ * branches (`jeeves/card-<id>`) live in the target repo; each run gets a
+ * fresh checkout under the configured worktree root.
  */
 export class WorktreeManager implements WorktreeLifecycle {
   readonly repoPath: string;
@@ -53,7 +58,7 @@ export class WorktreeManager implements WorktreeLifecycle {
   constructor(options: WorktreeManagerOptions) {
     this.repoPath = path.resolve(options.repoPath);
     this.worktreeRoot = path.resolve(
-      options.worktreeRoot ?? resolveWorktreeRoot(options.baseDir),
+      options.worktreeRoot ?? resolveWorktreeRoot(options.repoPath),
     );
   }
 
@@ -107,20 +112,33 @@ export class WorktreeManager implements WorktreeLifecycle {
     }
   }
 
+  /** Porcelain status — one git invocation, safe on Windows during finalize. */
+  async worktreeStatus(cwd: string, options?: WorktreeStatusOptions): Promise<string> {
+    const raw = (await git(cwd, ["status", "--porcelain"])).trimEnd();
+    const ignores = options?.ignorePathPrefixes;
+    if (!ignores?.length) return raw;
+    return filterPorcelainStatus(raw, ignores);
+  }
+
   /** Snapshot porcelain status and diffs before cleanup or retry. */
   async captureDiagnostics(cwd: string): Promise<WorktreeDiagnostics> {
-    const [status, diff, diffCached, headSha] = await Promise.all([
-      git(cwd, ["status", "--porcelain"]),
-      git(cwd, ["diff"]),
-      git(cwd, ["diff", "--cached"]),
-      git(cwd, ["rev-parse", "HEAD"]),
-    ]);
-    return {
-      status: status.trimEnd(),
-      diff: diff.trimEnd(),
-      diffCached: diffCached.trimEnd(),
-      headSha: headSha.trim(),
-    };
+    const status = await this.worktreeStatus(cwd);
+    const headSha = (await git(cwd, ["rev-parse", "HEAD"])).trim();
+    // Sequential — parallel `git diff` against the same worktree can lock the
+    // index on Windows (especially right after an SDK agent exits).
+    let diff = "";
+    let diffCached = "";
+    try {
+      diff = (await git(cwd, ["diff"])).trimEnd();
+    } catch {
+      // Best-effort diagnostics for failure attachments.
+    }
+    try {
+      diffCached = (await git(cwd, ["diff", "--cached"])).trimEnd();
+    } catch {
+      // Best-effort diagnostics for failure attachments.
+    }
+    return { status, diff, diffCached, headSha };
   }
 
   /**
@@ -148,6 +166,48 @@ export class WorktreeManager implements WorktreeLifecycle {
       }
     }
   }
+}
+
+/** Drop porcelain lines whose paths fall under ignored prefixes (exchange files). */
+export function filterPorcelainStatus(status: string, ignorePathPrefixes: string[]): string {
+  if (!status.trim() || ignorePathPrefixes.length === 0) return status;
+  return status
+    .split("\n")
+    .filter((line) => {
+      if (!line.trim()) return false;
+      const paths = porcelainPaths(line);
+      if (paths.length === 0) return true;
+      return paths.some((p) => !isIgnoredPath(p, ignorePathPrefixes));
+    })
+    .join("\n")
+    .trimEnd();
+}
+
+function porcelainPaths(line: string): string[] {
+  const trimmed = line.trim();
+  if (trimmed.startsWith("?? ") || trimmed.startsWith("!! ")) {
+    return [unquotePorcelainPath(trimmed.slice(3).trim())];
+  }
+  const rename = trimmed.match(/^.\s+(.+?)\s+->\s+(.+)$/);
+  if (rename) {
+    return [unquotePorcelainPath(rename[1].trim()), unquotePorcelainPath(rename[2].trim())];
+  }
+  if (trimmed.length > 3) return [unquotePorcelainPath(trimmed.slice(3).trim())];
+  return [];
+}
+
+function unquotePorcelainPath(p: string): string {
+  if (p.startsWith('"') && p.endsWith('"')) return p.slice(1, -1);
+  return p;
+}
+
+function isIgnoredPath(filePath: string, prefixes: string[]): boolean {
+  const normalized = filePath.replace(/\\/g, "/").replace(/\/$/, "");
+  for (const prefix of prefixes) {
+    const p = prefix.replace(/\\/g, "/").replace(/\/$/, "");
+    if (normalized === p || normalized.startsWith(`${p}/`)) return true;
+  }
+  return false;
 }
 
 async function git(cwd: string, args: string[]): Promise<string> {

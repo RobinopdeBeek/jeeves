@@ -13,7 +13,7 @@ export type ColumnId =
 export type StepKey =
   | "info"
   | "grill"
-  | "prd"
+  | "spec"
   | "tasks"
   | "plan"
   | "impl"
@@ -30,6 +30,23 @@ export type StepStatus =
   | "done";
 
 export type StepKind = "human" | "ai-chat" | "ai-execution";
+
+export const stepKeys = [
+  "info",
+  "grill",
+  "spec",
+  "tasks",
+  "plan",
+  "impl",
+  "airev",
+  "review",
+  "document",
+  "deploy",
+] as const satisfies readonly StepKey[];
+
+export function isStepKey(value: unknown): value is StepKey {
+  return typeof value === "string" && (stepKeys as readonly string[]).includes(value);
+}
 
 export type KindPath = "feature" | "standalone";
 
@@ -52,7 +69,7 @@ interface StepDef {
 const STEP_DEFS: Record<StepKey, StepDef> = {
   info: { label: "Info", stepKind: "human", column: "backlog" },
   grill: { label: "Grill", stepKind: "ai-chat", column: "define" },
-  prd: { label: "PRD", stepKind: "ai-chat", column: "define" },
+  spec: { label: "Spec", stepKind: "ai-chat", column: "define" },
   tasks: { label: "Tasks", stepKind: "ai-execution", column: "define" },
   plan: { label: "Plan", stepKind: "ai-execution", column: "implement" },
   impl: { label: "Implement", stepKind: "ai-execution", column: "implement" },
@@ -64,7 +81,7 @@ const STEP_DEFS: Record<StepKey, StepDef> = {
 
 const COLUMN_STEPS: Record<ColumnId, StepKey[]> = {
   backlog: ["info"],
-  define: ["grill", "prd", "tasks"],
+  define: ["grill", "spec", "tasks"],
   implement: ["plan", "impl", "airev"],
   review: ["review"],
   finalize: ["document", "deploy"],
@@ -133,7 +150,7 @@ export function kindDecisionTransition(path: KindPath): {
       steps: [
         { key: "info", status: "done" },
         { key: "grill", status: "needs-user" },
-        { key: "prd", status: "pending" },
+        { key: "spec", status: "pending" },
         { key: "tasks", status: "pending" },
       ],
     };

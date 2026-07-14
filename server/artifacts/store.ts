@@ -5,10 +5,24 @@ import { nanoid } from "nanoid";
 import type { Db } from "../db/index.js";
 import {
   artifacts,
+  cardSteps,
   type Artifact,
   type ArtifactKind,
 } from "../db/schema.js";
 import type { StepKey } from "../pipelines.js";
+
+/** Matches AI SDK `UIMessage` shape; swap for `import type { UIMessage } from "ai"` in slice 5B. */
+export interface UIMessage {
+  id: string;
+  role: "user" | "assistant" | "system";
+  parts: unknown[];
+}
+
+const TRANSCRIPT_FILE_ID = "transcript";
+
+function transcriptArtifactId(cardId: string, stepKey: StepKey, round: number): string {
+  return `${cardId}-${stepKey}-${round}-transcript`;
+}
 
 export class ArtifactStoreError extends Error {
   constructor(message: string) {
@@ -88,6 +102,63 @@ export class ArtifactStore {
       throw error;
     }
     this.regenerateManifest(input.cardId);
+    return row;
+  }
+
+  /** Mutable transcript for ai-chat steps — overwrites the same file and DB row each turn. */
+  upsertTranscript(
+    cardId: string,
+    stepKey: StepKey,
+    round: number,
+    messages: UIMessage[],
+  ): Artifact {
+    const step = this.db
+      .select()
+      .from(cardSteps)
+      .where(and(eq(cardSteps.cardId, cardId), eq(cardSteps.stepKey, stepKey)))
+      .get();
+    if (!step) {
+      throw new ArtifactStoreError(`unknown step: ${stepKey}`);
+    }
+    if (step.status === "done") {
+      throw new ArtifactStoreError("transcript is frozen");
+    }
+
+    const content = `${JSON.stringify(messages, null, 2)}\n`;
+    const existing = this.latest(cardId, { stepKey, round, kind: "transcript" });
+
+    if (existing) {
+      const absPath = this.resolveServePath(cardId, existing.path);
+      this.writeAtomic(absPath, content);
+      this.regenerateManifest(cardId);
+      return existing;
+    }
+
+    const createdAt = new Date();
+    const id = transcriptArtifactId(cardId, stepKey, round);
+    const relativePath = this.destinationPath(cardId, round, "transcript", TRANSCRIPT_FILE_ID);
+    const absPath = this.assertUnderRoot(relativePath);
+    fs.mkdirSync(path.dirname(absPath), { recursive: true });
+    this.writeAtomic(absPath, content);
+
+    const row: Artifact = {
+      id,
+      cardId,
+      stepKey,
+      round,
+      kind: "transcript",
+      path: relativePath,
+      gitSha: null,
+      schemaVersion: 1,
+      createdAt,
+    };
+    try {
+      this.db.insert(artifacts).values(row).run();
+    } catch (error) {
+      fs.rmSync(absPath, { force: true });
+      throw error;
+    }
+    this.regenerateManifest(cardId);
     return row;
   }
 
@@ -191,7 +262,14 @@ export class ArtifactStore {
     kind: ArtifactKind,
     id: string,
   ): string {
-    const ext = kind === "eval" ? "html" : kind === "runlog" ? "log" : "md";
+    const ext =
+      kind === "eval"
+        ? "html"
+        : kind === "runlog"
+          ? "log"
+          : kind === "transcript"
+            ? "json"
+            : "md";
     return path.posix.join("cards", cardId, String(round), kind, `${id}.${ext}`);
   }
 

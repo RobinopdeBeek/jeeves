@@ -139,6 +139,61 @@ describe("ArtifactStore", () => {
     fs.rmSync(workspace, { recursive: true, force: true });
   });
 
+  const sampleTranscript = [
+    { id: "msg-1", role: "user" as const, parts: [{ type: "text", text: "What should we build?" }] },
+    {
+      id: "msg-2",
+      role: "assistant" as const,
+      parts: [{ type: "text", text: "Let's start with the domain model." }],
+    },
+  ];
+
+  function cardWithGrillStep(): void {
+    store.updateCard(cardId, { title: "Feature" });
+    store.decideKind(cardId, "feature");
+  }
+
+  it("creates a transcript artifact on first upsert and overwrites on subsequent writes", () => {
+    cardWithGrillStep();
+    const first = artifacts.upsertTranscript(cardId, "grill", 0, sampleTranscript);
+    expect(first).toMatchObject({
+      cardId,
+      stepKey: "grill",
+      round: 0,
+      kind: "transcript",
+    });
+    expect(first.path).toBe(`cards/${cardId}/0/transcript/transcript.json`);
+
+    const updatedTranscript = [
+      ...sampleTranscript,
+      { id: "msg-3", role: "user" as const, parts: [{ type: "text", text: "Sounds good." }] },
+    ];
+    const second = artifacts.upsertTranscript(cardId, "grill", 0, updatedTranscript);
+
+    expect(second.id).toBe(first.id);
+    expect(second.path).toBe(first.path);
+    expect(artifacts.list(cardId)).toHaveLength(1);
+
+    const latest = artifacts.latest(cardId, { stepKey: "grill", round: 0, kind: "transcript" });
+    expect(latest?.id).toBe(first.id);
+    expect(JSON.parse(artifacts.readContent(latest!))).toEqual(updatedTranscript);
+  });
+
+  it("round-trips UIMessage[] transcript content", () => {
+    cardWithGrillStep();
+    artifacts.upsertTranscript(cardId, "grill", 0, sampleTranscript);
+    const latest = artifacts.latest(cardId, { stepKey: "grill", round: 0, kind: "transcript" });
+    expect(JSON.parse(artifacts.readContent(latest!))).toEqual(sampleTranscript);
+  });
+
+  it("rejects transcript writes when the step is done", () => {
+    cardWithGrillStep();
+    store.setStepStatus(cardId, "grill", "done");
+    expect(() => artifacts.upsertTranscript(cardId, "grill", 0, sampleTranscript)).toThrow(
+      /frozen/i,
+    );
+  });
+
   it("throws when a plan exchange file has no useful content beyond headings", () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-wt-"));
     const exchangeDir = path.join(workspace, ".jeeves");

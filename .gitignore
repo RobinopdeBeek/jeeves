@@ -9,10 +9,10 @@ node_modules/
 # Local scratch (agent drafts, spike notes)
 .scratch/
 
-# Ephemeral git worktrees (under data/; listed explicitly for clarity)
+# Ephemeral git worktrees (legacy app-local layout; see ADR 0011)
 data/worktrees/
 
-# Local data (SQLite + WAL sidecars)
+# Legacy local data (pre-ADR-0011; per-project store is now <target-repo>/.jeeves/)
 data/
 *.db
 *.db-wal

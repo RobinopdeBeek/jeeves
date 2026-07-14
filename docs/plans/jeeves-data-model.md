@@ -31,6 +31,24 @@ projects
                               -- Jeeves-owned host-process setup/dev/port/readiness/env policy
   created_at
 
+### Project store derivation
+
+`projects.repo_path` is the sole anchor for on-disk layout. Paths are computed at
+runtime by `ProjectStore` (`server/project-store.ts`) — they are **not** stored as
+columns and must not drift if the repo moves (update `repo_path` instead).
+
+| Derived path | Rule |
+|---|---|
+| SQLite database | `JEEVES_DB_PATH` ?? `<repo_path>/.jeeves/jeeves.db` |
+| Artifact root | `<repo_path>/.jeeves/data/` |
+| Worktree root | `JEEVES_WORKTREE_ROOT` ?? `<repo_path>/.jeeves/worktrees/` |
+
+One SQLite file per target repo: switching the active project reopens that repo's
+`.jeeves/jeeves.db`, `ArtifactStore`, and `WorktreeManager`. v1 boots a single
+active project via `JEEVES_REPO_PATH` + `ensureDefaultProject`; a future repo
+switcher lists known `repo_path` values and rebinds the server — no global
+mega-database or `store_path` / `db_path` columns on `projects`.
+
 cards                        -- one entity for features, tasks, AND drafts
   id            pk
   project_id    fk → projects

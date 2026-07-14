@@ -29,22 +29,20 @@ export interface WorktreeManagerOptions {
   repoPath: string;
   /** Root for ephemeral worktrees; defaults via `resolveWorktreeRoot`. */
   worktreeRoot?: string;
-  /** Base directory when resolving the default worktree root. */
-  baseDir?: string;
 }
 
-/** Default `data/worktrees/` under baseDir, or `JEEVES_WORKTREE_ROOT` when set. */
-export function resolveWorktreeRoot(baseDir?: string): string {
+/** Default `<repo>/.jeeves/worktrees/`, or `JEEVES_WORKTREE_ROOT` when set (ADR 0011). */
+export function resolveWorktreeRoot(repoPath?: string): string {
   const fromEnv = process.env.JEEVES_WORKTREE_ROOT?.trim();
   if (fromEnv) return path.resolve(fromEnv);
-  const root = baseDir ?? process.cwd();
-  return path.join(root, "data", "worktrees");
+  const root = path.resolve(repoPath ?? process.cwd());
+  return path.join(root, ".jeeves", "worktrees");
 }
 
 /**
- * Owns ephemeral git worktrees for agent runs (ADR 0009). Durable branches
- * (`jeeves/card-<id>`) live in the target repo; each run gets a fresh
- * checkout under the configured worktree root.
+ * Owns ephemeral git worktrees for agent runs (ADR 0009, ADR 0011). Durable
+ * branches (`jeeves/card-<id>`) live in the target repo; each run gets a
+ * fresh checkout under the configured worktree root.
  */
 export class WorktreeManager implements WorktreeLifecycle {
   readonly repoPath: string;
@@ -53,7 +51,7 @@ export class WorktreeManager implements WorktreeLifecycle {
   constructor(options: WorktreeManagerOptions) {
     this.repoPath = path.resolve(options.repoPath);
     this.worktreeRoot = path.resolve(
-      options.worktreeRoot ?? resolveWorktreeRoot(options.baseDir),
+      options.worktreeRoot ?? resolveWorktreeRoot(options.repoPath),
     );
   }
 

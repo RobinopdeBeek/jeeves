@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { ArtifactStore } from "./artifacts/store.js";
 import { CardStore } from "./cards/store.js";
 import { openDb } from "./db/index.js";
+import { ensureProjectStore } from "./project-store.js";
 import { CursorSdkAgentRunner } from "./execution/cursor-sdk-runner.js";
 import { ExecutionEngine } from "./execution/engine.js";
 import { EventBus } from "./execution/events.js";
@@ -22,21 +23,21 @@ try {
 } catch {
   // No .env file — environment variables come from the shell.
 }
-const dataDir = path.join(rootDir, "data");
-const dbPath = process.env.JEEVES_DB_PATH ?? path.join(dataDir, "jeeves.db");
-const repoPath = process.env.JEEVES_REPO_PATH ?? rootDir;
-const worktreeRoot =
-  process.env.JEEVES_WORKTREE_ROOT ?? path.join(dataDir, "worktrees");
+const repoPath = path.resolve(process.env.JEEVES_REPO_PATH ?? rootDir);
+const paths = ensureProjectStore(repoPath);
 const port = Number(process.env.JEEVES_PORT ?? 3939);
 
-const db = openDb(dbPath);
+const db = openDb(paths.dbPath);
 const store = new CardStore(db);
-const project = store.ensureDefaultProject(path.basename(repoPath), repoPath);
+const project = store.ensureDefaultProject(path.basename(paths.repoPath), paths.repoPath);
 
 const events = new EventBus();
 const runs = new RunStore(db);
-const artifacts = new ArtifactStore(db, dataDir);
-const worktrees = new WorktreeManager({ repoPath, worktreeRoot });
+const artifacts = new ArtifactStore(db, paths.artifactRoot);
+const worktrees = new WorktreeManager({
+  repoPath: paths.repoPath,
+  worktreeRoot: paths.worktreeRoot,
+});
 const engine = new ExecutionEngine({
   store,
   runs,
@@ -44,7 +45,7 @@ const engine = new ExecutionEngine({
   worktrees,
   artifacts,
   events,
-  artifactRoot: dataDir,
+  artifactRoot: paths.artifactRoot,
   repoRoot: rootDir,
 });
 

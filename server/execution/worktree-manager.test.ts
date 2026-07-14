@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { WorktreeManager } from "./worktree-manager.js";
+import { resolveWorktreeRoot, WorktreeManager } from "./worktree-manager.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -65,6 +65,13 @@ describe("WorktreeManager", () => {
 
   it("names card branches jeeves/card-<id>", () => {
     expect(WorktreeManager.cardBranch("abc123")).toBe("jeeves/card-abc123");
+  });
+
+  it("defaults worktree root to <repo>/.jeeves/worktrees when omitted", () => {
+    const repo = "C:/projects/pantry-checker";
+    expect(resolveWorktreeRoot(repo)).toBe(
+      path.join(path.resolve(repo), ".jeeves", "worktrees"),
+    );
   });
 
   it("creates and removes a worktree at baseSha", async () => {

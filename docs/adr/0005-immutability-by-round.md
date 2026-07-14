@@ -5,5 +5,5 @@ Re-running a step creates a new `(card, step, round)` artifact version, never an
 ## Consequences
 
 - Change requests are never deleted on consumption; they flip `open` → `consumed` and remain visible as "changes added later".
-- The artifact folder mirrors the rule: one subfolder per round and an immutable unique destination per successful version (for example `plan/<artifactId>.md`). Known sandbox sidecar paths such as `.jeeves/plan.md` are only exchange locations; harvest never overwrites a prior canonical artifact, even within the same round.
+- The artifact folder mirrors the rule: one subfolder per round and an immutable unique destination per successful version (for example `plan/<artifactId>.md`). Known exchange file paths such as `.jeeves/plan.md` are only staging locations; harvest never overwrites a prior canonical artifact, even within the same round.
 - Only the designated current-state tables (`cards`, `card_steps`) may be mutated in place (see ADR 0002).

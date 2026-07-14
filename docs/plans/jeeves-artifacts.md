@@ -15,15 +15,47 @@ there are four classes, and storage follows from the class:
 | **Composite review doc** | Task Evaluation, Feature Evaluation | Human review; linked from other evaluations | Self-contained HTML pinned to a commit SHA |
 | **Media / raw** | Screenshots/GIFs, run logs, chat transcripts (`UIMessage[]`) | Occasional human, gallery | Plain files, possibly large |
 
-### Storage: SQLite index + artifact folder
+### Storage: SQLite index + project store
 
 Two homes, one rule: **SQLite is the index and the source of truth for structured state; the
 artifact folder is the source of truth for everything file-shaped.** No blobs in DB columns, and
-nothing the UI renders on a card tile is trapped inside markdown/HTML. The user's repo stays
-git-clean — no artifacts are committed to it.
+nothing the UI renders on a card tile is trapped inside markdown/HTML. Application source stays
+**git-clean** — the project store is colocated on disk but **gitignored**
+([ADR 0011](../adr/0011-project-store-in-target-repo-gitignored.md)).
+
+**Project store** — per target repository at `<repo>/.jeeves/` (Jeeves creates on first use):
+
+```
+<target-repo>/.jeeves/              # gitignored
+├── jeeves.db                       # SQLite: cards, steps, runs, artifact index, …
+├── data/
+│   └── cards/
+│       └── <cardId>/
+│           ├── manifest.json       # regenerated projection of the DB index
+│           └── <round>/
+│               ├── grill/<artifactId>.md
+│               ├── spec/<artifactId>.md
+│               ├── plan/<artifactId>.md
+│               ├── eval/<artifactId>.html
+│               ├── screenshots/
+│               └── runlog/<runId>.log
+└── worktrees/<cardId>/             # ephemeral agent checkouts (also gitignored)
+```
+
+Jeeves ensures `<repo>/.gitignore` contains `.jeeves/` on init. The Jeeves **application**
+repository holds only server, client, and prompts — no per-project board state.
+
+**Three `.jeeves` roles (do not conflate):**
+
+| Role | Location | Lifetime |
+|---|---|---|
+| **Project store** | `<repo>/.jeeves/` on the host | Durable |
+| **Worktrees** | `<repo>/.jeeves/worktrees/<cardId>/` | Ephemeral per run |
+| **Exchange files** | `<worktree>/.jeeves/plan.md`, `.jeeves/to-tasks.json`, … | One run; harvested then removed |
 
 **SQLite (Drizzle) — the index + orchestration state.**
 
+- Lives at `<repo>/.jeeves/jeeves.db`; `projects.repo_path` implies store paths.
 - The `artifacts` table holds *metadata + a pointer*, never content (see [Data Model](./jeeves-data-model.md)).
 - Structured state gets real tables (`change_requests`, `runs`, `decisions`, …), not markdown.
 - The board renders tiles, progress bars, notification dots, and gates entirely from the DB —
@@ -31,28 +63,14 @@ git-clean — no artifacts are committed to it.
 
 **Artifact folder — all file artifacts, keyed by card.**
 
-```
-data/
-└── cards/
-    └── <cardId>/
-        ├── manifest.json            # regenerated projection of the DB index
-        └── <round>/
-            ├── grill/<artifactId>.md # immutable versions; latest is derived in the index
-            ├── spec/<artifactId>.md
-            ├── plan/<artifactId>.md
-            ├── eval/<artifactId>.html
-            ├── screenshots/         # harvested from the worktree
-            └── runlog/<runId>.log
-```
-
-This folder lives with the jeeves app, **outside the repo under review** — no `.gitignore`
-juggling, and the VPS migration is "copy the SQLite file + `data/`". Keep the path configurable.
+Canonical artifacts live under `<repo>/.jeeves/data/cards/…`. VPS migration and backup: copy
+the target repo including `.jeeves/` (or back up that folder separately).
 
 ### Invariants
 
 - **Immutability by round and version.** Re-running a step creates a unique destination (for
   example `plan/<artifactId>.md`), never an overwrite—even within the same round. Known worktree
-  paths such as `.jeeves/plan.md` are exchange paths only. Supersession is derived — latest
+  paths such as `.jeeves/plan.md` are exchange files only. Supersession is derived — latest
   `created_at` per `(card, step, round, kind)` wins — not stored as a status flag.
 - **`git_sha` on every evaluation.** The evaluation is not committed to the branch, so the SHA
   recorded in its artifact row and HTML metadata is the *only* link back to the exact diff it
@@ -72,7 +90,7 @@ juggling, and the VPS migration is "copy the SQLite file + `data/`". Keep the pa
 
 ### Discoverability for the AI
 
-- **Deterministic exchange paths + per-card `manifest.json`** (regenerable from the DB) listing every
+- **Deterministic exchange files + per-card `manifest.json`** (regenerable from the DB) listing every
   artifact with step, round, kind, path, git_sha. Agents read the manifest first instead
   of globbing; the agent worktree needs no DB access.
 - **The runner injects inputs — the AI never hunts.** Each skill invocation gets the resolved
@@ -87,13 +105,14 @@ Two production contexts, two flows:
 - **Host-produced** (grill summary, spec, chat transcripts, finalized run logs): written or
   finalized by the Hono server. A live log belongs to its mutable `run`; on success or failure
   it is closed and registered as an immutable `runlog` artifact.
-- **Worktree-produced** (Plan, eval HTML, screenshots, structured JSON sidecars): generated
+- **Worktree-produced** (Plan, eval HTML, screenshots, structured JSON exchange files): generated
   inside the agent's worktree via `@cursor/sdk` local. `AgentRunner` invokes an `ExecutionEngine`
-  finalization callback before cleanup; it harvests declared paths from the host worktree path
-  (e.g. `.jeeves/plan.md`, `.jeeves/eval.html`, `.jeeves/screenshots/`, `.jeeves/notifications.json`,
-  `.jeeves/to-tasks.json`), validates them, records metadata, and removes exchange sidecars. A
-  missing required artifact fails the run and preserves diagnostics. Structured sidecars are
-  Zod-validated before DB mutations.
+  finalization callback before cleanup; it harvests declared exchange files from the host
+  worktree path (e.g. `<worktree>/.jeeves/plan.md`, `.jeeves/eval.html`, `.jeeves/screenshots/`,
+  `.jeeves/notifications.json`, `.jeeves/to-tasks.json`), validates them, copies into
+  `<repo>/.jeeves/data/`, records metadata, and removes exchange files. A missing required
+  artifact fails the run and preserves diagnostics. Structured exchange files are Zod-validated before
+  DB mutations.
 
 ### Serving artifacts
 

@@ -183,7 +183,7 @@ describe("ExecutionEngine", () => {
     expect(artifactStore.readContent(plan!)).toContain("Tracer plan.");
   });
 
-  it("fails Plan when the exchange sidecar is missing at finalize", async () => {
+  it("fails Plan when the exchange file is missing at finalize", async () => {
     const card = queuedCard();
     const runnerWithoutSidecar: AgentRunner = {
       async *run(_promptFile, options) {
@@ -228,7 +228,7 @@ describe("ExecutionEngine", () => {
     expect(artifactStore.readBody(diag!)).toContain("Workspace diagnostics");
   });
 
-  it("fails Plan when the exchange sidecar is empty at finalize", async () => {
+  it("fails Plan when the exchange file is empty at finalize", async () => {
     const card = queuedCard();
     const runnerWithEmptyPlan: AgentRunner = {
       async *run(_promptFile, options) {
@@ -266,7 +266,7 @@ describe("ExecutionEngine", () => {
     ).toBeUndefined();
   });
 
-  it("fails Plan when the agent edits source files beyond the exchange sidecar", async () => {
+  it("fails Plan when the agent edits source files beyond the exchange file", async () => {
     const card = queuedCard();
     const runnerWithSourceEdit: AgentRunner = {
       async *run(_promptFile, options) {

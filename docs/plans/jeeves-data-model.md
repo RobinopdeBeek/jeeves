@@ -14,6 +14,10 @@
 >    `card_steps`) hold one mutable row per thing, no round column. Tables that say *what
 >    happened* (`artifacts`, `runs`, `change_requests`, `decisions`, `notifications`) hold
 >    immutable round-scoped rows. History is never reconstructed from current-state tables.
+>
+> 3. **Project store colocation.** Each project's SQLite file and artifact tree live at
+>    `<repo>/.jeeves/` on disk (gitignored). `projects.repo_path` is the anchor — see
+>    [ADR 0011](../adr/0011-project-store-in-target-repo-gitignored.md).
 
 ### Tables
 
@@ -21,7 +25,7 @@
 projects
   id            pk
   name          text
-  repo_path     text        -- worktree base for the runner
+  repo_path     text        -- target repo; implies store at <repo>/.jeeves/
   default_branch text       -- explicit local base ref; never inferred from host HEAD
   preview_config text/json, nullable
                               -- Jeeves-owned host-process setup/dev/port/readiness/env policy
@@ -77,7 +81,7 @@ runs                         -- one row per SKILL INVOCATION (not per step)
   tokens_in, tokens_out int
   cost          real
   error         text, nullable  -- short message; full context in the log file
-  log_path      text            -- log lives in the artifact folder, never in the DB
+  log_path      text            -- log lives in <repo>/.jeeves/data/…, never in the DB
   base_sha      text, nullable  -- exact ref resolved before the run
   head_sha      text, nullable  -- workspace HEAD when finalization completed
 
@@ -105,7 +109,7 @@ decisions                    -- one immutable row per review exit
   qa_complete   boolean      -- the QA-gate snapshot at decision time
   created_at
 
-notifications                -- inserted at harvest from eval-assemble's sidecar JSON
+notifications                -- inserted at harvest from eval-assemble's exchange file
   id            pk
   card_id       fk → cards
   round         int
@@ -117,7 +121,7 @@ notifications                -- inserted at harvest from eval-assemble's sidecar
 ### The unified card model
 
 Draft tasks are **not** a separate entity: the moment `/to-tasks` (or the rework breakdown
-skill) produces a harvested, Zod-validated JSON sidecar and the runner creates card rows,
+skill) produces a harvested, Zod-validated JSON exchange file and the runner creates card rows,
 a real `cards` row exists with `status = 'draft'`. Fan-out is a status flip to `active`, not
 a copy. What falls out:
 

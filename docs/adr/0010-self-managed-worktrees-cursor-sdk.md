@@ -12,7 +12,7 @@ Production implications from the spike:
 
 - Branch naming: `jeeves/card-<id>` (durable branch, ephemeral worktree per run)
 - After `run.cancel()`, treat `ConnectError: [canceled]` on `run.wait()` / dispose as success
-- Harvest copies exchange sidecars from the host worktree path before teardown
+- Harvest copies exchange files from the host worktree path before teardown
 
 ## Sandbox policy
 

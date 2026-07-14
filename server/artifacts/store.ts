@@ -100,14 +100,14 @@ export class ArtifactStore {
     for (const decl of declarations) {
       const exchangeAbs = path.resolve(workspacePath, decl.exchangePath);
       if (!fs.existsSync(exchangeAbs)) {
-        throw new ArtifactStoreError(`missing required exchange sidecar: ${decl.exchangePath}`);
+        throw new ArtifactStoreError(`missing required exchange file: ${decl.exchangePath}`);
       }
       const raw = fs.readFileSync(exchangeAbs, "utf8");
       if (!raw.trim()) {
-        throw new ArtifactStoreError(`exchange sidecar is empty: ${decl.exchangePath}`);
+        throw new ArtifactStoreError(`exchange file is empty: ${decl.exchangePath}`);
       }
       if (decl.kind === "plan" && !planHasUsefulContent(raw)) {
-        throw new ArtifactStoreError(`exchange sidecar has no useful content: ${decl.exchangePath}`);
+        throw new ArtifactStoreError(`exchange file has no useful content: ${decl.exchangePath}`);
       }
       harvested.push(
         this.save({
@@ -256,7 +256,7 @@ function stripFrontmatter(raw: string): string {
   return raw.slice(end + 5);
 }
 
-/** Plan sidecars need prose beyond headings and empty bullets. */
+/** Plan exchange files need prose beyond headings and empty bullets. */
 function planHasUsefulContent(raw: string): boolean {
   const body = stripFrontmatter(raw)
     .replace(/^#+\s+.*$/gm, "")

@@ -21,12 +21,12 @@ needed, without losing context on what you were doing.
 Your laptop (always on, lid open)
   ├── Hono server (Node.js, single process)
   │     ├── Serves React board UI (responsive, all devices)
-  │     ├── REST API  →  SQLite via Drizzle
+  │     ├── REST API  →  per-project SQLite at <repo>/.jeeves/jeeves.db
   │     ├── /ws/chat  →  AcpBridge → AI SDK UIMessage stream (AI Chat steps)
   │     └── Execution queue → AgentRunner → @cursor/sdk local (composer-2.5)
-  ├── Git (worktree create/remove for agent runs)
+  ├── Git (worktree create/remove under <repo>/.jeeves/worktrees/)
   ├── Cursor CLI + CURSOR_API_KEY (ACP chat + SDK local runs)
-  └── Your repo (Cursor-indexed, warm)
+  └── Target repo(s) — application source; `.jeeves/` store gitignored per repo
 
 Tailscale
   └── Phone / tablet / other machines reach the board privately
@@ -177,7 +177,7 @@ See [ADR 0010](../adr/0010-self-managed-worktrees-cursor-sdk.md) for preview pol
 6. **Feature auto-advance trigger** — needs an "all children merged" event; implement as a check in
    the queue after each child card's Human Review approval
 7. **Evaluation: inline vs standalone HTML** — *resolved:* the prototype inlines it; production
-   generates a self-contained HTML file, harvested into the artifact folder and rendered in a
+   generates a self-contained HTML file, harvested into `<repo>/.jeeves/data/` and rendered in a
    `sandbox="allow-scripts"` iframe; the parent owns browser-local QA state and validates
    `postMessage` (see [Artifact Strategy](./jeeves-artifacts.md)).
 8. **Worktree lifecycle + manual testing** — *resolved:* branches are durable, worktrees are
@@ -187,3 +187,6 @@ See [ADR 0010](../adr/0010-self-managed-worktrees-cursor-sdk.md) for preview pol
    [Worktree lifecycle](./jeeves-branching.md#worktree-lifecycle-branches-are-durable-worktrees-are-ephemeral),
    [Testing a card in Human Review](./jeeves-branching.md#testing-a-card-in-human-review), and
    [ADR 0009](../adr/0009-branches-durable-worktrees-ephemeral.md)).
+9. **Where project state lives** — *resolved:* per-target-repo project store at
+   `<repo>/.jeeves/` (SQLite + `data/` + `worktrees/`), gitignored on disk; evaluations remain
+   uncommitted with mandatory `git_sha` ([ADR 0011](../adr/0011-project-store-in-target-repo-gitignored.md)).

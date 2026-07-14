@@ -44,13 +44,15 @@ blocker relationship can be built in parallel or reordered.
    native Windows (PARTIAL GO — sandbox unavailable, runs without it). *Demo: Implement now →,
    watch Plan go ai-working → done from the board.* (Blocked by 2.)
 4. **Artifact round-trip.** `ArtifactStore`: finalize the host-written run log plus harvest a
-   required uncommitted `.jeeves/plan.md`; store immutable, root-relative indexed versions;
-   serve over HTTP; render formatted read-only Plan beneath a collapsible run log. Completed
-   logs load collapsed but do not collapse while watched. Markdown uses GFM without raw HTML.
-   *Demo: a run's Plan and frozen log viewable from the phone.* (Blocked by 3.) The runner uses
-   a fresh `createWorktree()` per run and a pre-cleanup finalization callback; harvest failure
-   fails atomically. The branch becomes `jeeves/card-<id>` (no per-step suffix), with explicit
-   local default branch/base SHA. See [ADR 0009](../adr/0009-branches-durable-worktrees-ephemeral.md).
+   required uncommitted exchange file `.jeeves/plan.md` from the worktree; store immutable,
+   root-relative indexed versions under `<repo>/.jeeves/data/`; serve over HTTP; render formatted
+   read-only Plan beneath a collapsible run log. Completed logs load collapsed but do not collapse
+   while watched. Markdown uses GFM without raw HTML. *Demo: a run's Plan and frozen log viewable
+   from the phone.* (Blocked by 3.) The runner uses a fresh `createWorktree()` per run and a
+   pre-cleanup finalization callback; harvest failure fails atomically. The branch becomes
+   `jeeves/card-<id>` (no per-step suffix), with explicit local default branch/base SHA. See
+   [ADR 0009](../adr/0009-branches-durable-worktrees-ephemeral.md) and
+   [ADR 0011](../adr/0011-project-store-in-target-repo-gitignored.md).
 5. **Grill end-to-end.** Establish the chat stack: `useChat` + assistant-ui over a custom
    WebSocket `ChatTransport`; `AcpBridge` projects ACP JSON-RPC into AI SDK `UIMessage` parts
    server-side (including permission-request custom parts). `StepGrill` renders streaming
@@ -68,7 +70,7 @@ This will be used as input to /to-spec.
 6. **Spec step.** MDXEditor + AI side-chat reusing the chat stack from slice 5; spec artifact
    with the acceptance-criteria checklist. *Demo: author a spec collaboratively from the
    tablet.* (Blocked by 5.)
-7. **Fan-out.** `/to-tasks` writes a structured JSON sidecar in the worktree (vertical
+7. **Fan-out.** `/to-tasks` writes a structured JSON exchange file in the worktree (vertical
    slices + blocked-by); the runner harvests it and validates with a Zod schema before creating
    draft cards (retry loop on parse failure). Draft cards (real `cards` rows, `status =
    'draft'`) with add/delete/edit and blocker edges; "Implement →" flips drafts to `active`;
@@ -81,7 +83,7 @@ This will be used as input to /to-spec.
    standalone), with step-specific postconditions.
    *Demo: a child task runs all three steps unattended.* (Blocked by 4 and 7.)
 9. **Evaluation walking skeleton.** `eval-assemble` only — a minimal HTML evaluation (Tests +
-   QA checklist), `notifications.json` sidecar, harvested, rendered with
+   QA checklist), `notifications.json` exchange file, harvested, rendered with
    `sandbox="allow-scripts"`. Parent-owned browser storage synchronizes QA through validated
    `postMessage` and drives the QA-gated Approve button. A preview-manager sub-slice wires
    Start Server → readiness → Open in Browser + Stop against the evaluation's exact SHA using

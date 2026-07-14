@@ -4,9 +4,9 @@
 
 The quality of the entire system depends on these skills. Each one is a prompt file under
 `prompts/execution/` (for AI Execution steps) or an ACP session opener (for AI Chat steps).
-The runner **injects inputs explicitly** — skills never hunt the artifact folder or database.
-Agents in the worktree may read the per-card `manifest.json`; everything else arrives in the
-prompt.
+The runner **injects inputs explicitly** — skills never hunt the project store or database.
+Agents in the worktree may read the per-card `manifest.json` from `<repo>/.jeeves/data/`; everything
+else arrives in the prompt.
 
 Two transport modes:
 
@@ -15,10 +15,11 @@ Two transport modes:
 | **AI Chat** | Grill, Spec side-chat, Tasks side-chat | `AcpBridge` → `agent acp` | `UIMessage[]` transcript + optional host-written summary |
 | **AI Execution** | Plan, Implement, AI Review, Tasks, Finalize | `ExecutionEngine` → `@cursor/sdk` local | Harvested artifacts + `runs` row per invocation |
 
-**Structured outputs** (tasks breakdown, notifications) write JSON to a known **exchange path**
-under `.jeeves/` in the worktree. The runner harvests, Zod-validates on the host, and retries
-with parse-error feedback — never `generateObject`. **Prose outputs** write to exchange paths
-(`.jeeves/plan.md`, eval fragment files) or are finalized by the host (grill summary, spec).
+**Structured outputs** (tasks breakdown, notifications) write JSON to a known **exchange file**
+under `<worktree>/.jeeves/` during a run. The runner harvests into `<repo>/.jeeves/data/`,
+Zod-validates on the host, and retries with parse-error feedback — never `generateObject`. **Prose
+outputs** write to exchange files (`.jeeves/plan.md`, eval fragment files) or are finalized by
+the host (grill summary, spec).
 
 Every skill prompt should state: what step it belongs to, what inputs the runner injects, what
 it must produce, step **postconditions** (commits allowed? source changes forbidden?), and
@@ -137,7 +138,7 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
 - **Step:** Define Feature → Tasks (`ai-execution`, first pass)
 - **Inputs (injected):** spec artifact; grill summary; `CONTEXT.md`; module map / ADRs;
   existing merged child tasks of this feature (if any)
-- **Outputs:** `.jeeves/to-tasks.json` sidecar → harvested → `cards` rows (`status = 'draft'`)
+- **Outputs:** `.jeeves/to-tasks.json` exchange file → harvested → `cards` rows (`status = 'draft'`)
   + `card_blockers` edges + `tasks-breakdown` artifact metadata. **No source commits.**
 - **Sidecar schema (Zod-validated):** array of tasks; `depends_on` holds 0-based indices of
   other tasks in the same array (maps to `card_blockers` on harvest):
@@ -169,14 +170,14 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
   `.jeeves/to-tasks.json` (that is the autonomous `/to-tasks` run on first pass or rework).
   Same vertical-slice discipline as `/to-tasks`.
 - **Workflow awareness:** optional refinement before fan-out; does not replace the structured
-  sidecar path for bulk creation.
+  exchange file path for bulk creation.
 
 #### `to-rework-tasks`
 
 - **Step:** Define Feature → Tasks on feature rework (`ai-execution`)
 - **Inputs (injected):** open `change_requests` (one document); spec; prior round's merged
   tasks (read-only context); feature evaluation artifact if present
-- **Outputs:** same sidecar + draft cards as `/to-tasks`; new drafts tagged with
+- **Outputs:** same exchange file + draft cards as `/to-tasks`; new drafts tagged with
   `round = parent.rework_round`
 - **Behavior:** merge overlapping change requests into one task or split a large request across
   slices; may reference prior round tasks but must not mutate them. Requests marked `consumed`
@@ -219,7 +220,7 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
   messages; screenshot paths if already captured
 - **Outputs:** `.jeeves/eval/fragments/summary.md`
 - **Behavior:** what was built, why, and how — written for someone context-switching back.
-  Include screenshot/GIF gallery markup (relative paths harvested into artifact folder).
+  Include screenshot/GIF gallery markup (relative paths harvested into `<repo>/.jeeves/data/`).
 - **Workflow awareness:** first eval fragment; feeds `/eval-assemble`. May emit notifications
   (e.g. "deviation from plan").
 
@@ -283,7 +284,7 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
 #### `eval-assemble`
 
 - **Step:** AI Review pipeline (terminal)
-- **Inputs (injected):** all eval fragments; per-skill notification sidecars; session meta
+- **Inputs (injected):** all eval fragments; per-skill notification exchange files; session meta
   (runs aggregation: duration, tokens, model, cost); `git_sha`
 - **Outputs:** `.jeeves/eval.html` (self-contained HTML, sandboxed iframe) +
   `.jeeves/notifications.json` → harvested → `notifications` table rows. **No source commits.**

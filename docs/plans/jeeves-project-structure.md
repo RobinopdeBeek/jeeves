@@ -4,8 +4,10 @@
 
 ## Project Structure
 
-The app lives at the **repo root** — this repository is jeeves. Planning artifacts
-(`docs/plans/`, `CONTEXT.md`, `prototypes/`, `.agents/`) sit alongside runtime code.
+The app lives at the **repo root** — this repository is the Jeeves application. Planning
+artifacts (`docs/plans/`, `CONTEXT.md`, `prototypes/`, `.agents/`) sit alongside runtime code.
+Per-project board state (SQLite, artifacts, worktrees) lives in each **target repository** at
+`<repo>/.jeeves/` ([ADR 0011](../adr/0011-project-store-in-target-repo-gitignored.md)), not here.
 
 ```
 jeeves/                             # repo root — also the app root
@@ -30,6 +32,7 @@ jeeves/                             # repo root — also the app root
 │
 ├── server/
 │   ├── index.ts                    # Hono app entry, serves client + API + WS
+│   ├── project-store.ts            # ensure <repo>/.jeeves/ layout + .gitignore entry (planned)
 │   ├── db/
 │   │   ├── schema.ts               # Drizzle schema (see docs/plans/jeeves-data-model.md)
 │   │   └── index.ts                # db connection (better-sqlite3)
@@ -55,7 +58,7 @@ jeeves/                             # repo root — also the app root
 │       ├── slice-3-tracer.md
 │       ├── grill-with-docs.md
 │       ├── to-spec.md
-│       ├── to-tasks.md             # writes structured JSON sidecar (harvested + Zod-validated)
+│       ├── to-tasks.md             # writes structured JSON exchange file (harvested + Zod-validated)
 │       ├── plan-implementation.md
 │       ├── implement-task.md
 │       ├── eval-summary.md
@@ -86,6 +89,18 @@ jeeves/                             # repo root — also the app root
 │   └── hooks/
 │       ├── useBoard.ts             # cards + column/step state, SSE for live updates
 │       └── useAcpChat.ts           # useChat (@ai-sdk/react) + custom WebSocket ChatTransport
+```
+
+**Target repository layout** (example: `jeeves-test-pantry-checker/`):
+
+```
+<target-repo>/
+├── src/ …                          # application code (committed)
+├── .gitignore                      # includes `.jeeves/` (Jeeves appends on init if missing)
+└── .jeeves/                        # gitignored project store (Jeeves-owned)
+    ├── jeeves.db
+    ├── data/cards/<cardId>/…
+    └── worktrees/<cardId>/
 ```
 
 > Dropped from v1: `/prototype` (no prototype step in the flow) and `improve-architecture.md` as a

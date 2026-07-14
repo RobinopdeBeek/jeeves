@@ -331,7 +331,7 @@ function checkStepPostconditions(
   return true;
 }
 
-/** Plan runs must leave the target tree unchanged after exchange sidecars are removed. */
+/** Plan runs must leave the target tree unchanged after exchange files are removed. */
 async function assertPlanWorkspaceClean(
   worktrees: WorktreeLifecycle,
   ctx: { workspacePath: string; headSha: string; baseSha: string },

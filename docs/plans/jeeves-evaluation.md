@@ -9,9 +9,10 @@ after `/implement-task`. It's the single artifact that both the AI review (AI Re
 and the human review (Review column) work from.
 
 > In the prototype the evaluation is rendered **inline** as the Human Review tab so its sections
-> are interactive. In production it is a self-contained HTML file harvested into the artifact
-> folder (see [Artifact Strategy](./jeeves-artifacts.md)), served over HTTP, and rendered in a
-> sandboxed iframe (opened via a "View evaluation" affordance). The section content is identical.
+> are interactive. In production it is a self-contained HTML file harvested into
+> `<repo>/.jeeves/data/` (see [Artifact Strategy](./jeeves-artifacts.md)), served over HTTP,
+> and rendered in a sandboxed iframe (opened via a "View evaluation" affordance). The section
+> content is identical.
 
 ### Two levels of evaluation
 
@@ -56,7 +57,8 @@ The evaluation needs interactive checkboxes, syntax-highlighted diffs, a sticky 
 that open in Cursor, and an embedded screenshot gallery. A self-contained HTML file with inline
 CSS handles the document with no dependencies; the parent board provides browser-local checkbox
 persistence over `postMessage` so the AI-generated iframe can remain opaque-origin sandboxed. It
-opens in any browser and lives in the artifact folder pinned to the reviewed commit by `git_sha`.
+opens in any browser and lives in `<repo>/.jeeves/data/` pinned to the reviewed commit by
+`git_sha`.
 
 ### Sections — Task Evaluation
 
@@ -70,8 +72,8 @@ for someone context-switching back after working on a different feature.
 **Notifications**
 Typed alerts raised by any skill in the pipeline that you must look at before approving — e.g.
 Deviation from plan / Test gap / Critical review finding / Unresolved uncertainty. Assembled
-last, shown near the top; also inserted into the `notifications` table at harvest (via a
-sidecar JSON) to drive the unread dot on the card tile.
+last, shown near the top; also inserted into the `notifications` table at harvest (via an
+exchange file) to drive the unread dot on the card tile.
 
 **Code changes** *(narrative diff)*
 Git diff reordered by architectural layer, not file path: schema → migrations → API → business
@@ -121,8 +123,8 @@ Each section is its own skill, run sequentially after `/implement-task`:
 /eval-qa-plan          → Writes QA checklist section
       ↓
 /eval-assemble         → Combines all fragments + consolidates Notifications
-                         → writes self-contained HTML file + notifications.json sidecar (in worktree)
-                         → runner harvests both into the artifact folder / DB
+                         → writes self-contained HTML file + `notifications.json` exchange file (in worktree)
+                         → runner harvests both into `<repo>/.jeeves/data/` / DB
 ```
 
 The Feature Evaluation (`/eval-acceptance`) reuses the same skills, feature-scoped:

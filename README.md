@@ -28,14 +28,23 @@ npm start         # serve board + API on http://0.0.0.0:3939
 
 The server binds `0.0.0.0`, so the board is reachable from phone/tablet over Tailscale.
 
+Point Jeeves at a **target repository** (your application code). On first use Jeeves creates a
+gitignored **project store** at `<repo>/.jeeves/` — SQLite, artifacts, and worktrees for that
+project ([ADR 0011](./docs/adr/0011-project-store-in-target-repo-gitignored.md)). The Jeeves app
+repo itself holds only the board server and UI.
+
 Environment variables (all optional):
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `JEEVES_PORT` | `3939` | API/server HTTP port |
 | `JEEVES_CLIENT_PORT` | `3940` | Vite dev client port |
-| `JEEVES_DB_PATH` | `./data/jeeves.db` | SQLite file |
-| `JEEVES_REPO_PATH` | repo root | Target repository of the default project |
+| `JEEVES_REPO_PATH` | Jeeves repo root | Target repository of the default project; store lives at `<repo>/.jeeves/` |
+| `JEEVES_DB_PATH` | `<repo>/.jeeves/jeeves.db` | Override SQLite path for the active project store |
+| `JEEVES_WORKTREE_ROOT` | `<repo>/.jeeves/worktrees` | Override ephemeral worktree directory |
+
+For dogfooding with the Pantry Checker fixture, set `JEEVES_REPO_PATH` to the sibling repo path
+(see [`.env.example`](./.env.example)).
 
 ## Development
 

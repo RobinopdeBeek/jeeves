@@ -40,6 +40,7 @@ Human Review column, just before Finalize.
 > Full rationale → [ADR 0009](../adr/0009-branches-durable-worktrees-ephemeral.md).
 
 The **branch** is durable (it persists until merge); each run's **worktree** is disposable.
+Worktrees are created under `<repo>/.jeeves/worktrees/<cardId>/` ([ADR 0011](../adr/0011-project-store-in-target-repo-gitignored.md)).
 Consequences that shape the code:
 
 - **One branch per task, one fresh worktree per run.** Plan → Implement → AI Review are separate

@@ -26,7 +26,7 @@ describe("ArtifactStore", () => {
     fs.rmSync(artifactRoot, { recursive: true, force: true });
   });
 
-  it("harvests a declared plan sidecar into an indexed immutable file", () => {
+  it("harvests a declared plan exchange file into an indexed immutable file", () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-wt-"));
     const exchangeDir = path.join(workspace, ".jeeves");
     fs.mkdirSync(exchangeDir, { recursive: true });
@@ -104,7 +104,7 @@ describe("ArtifactStore", () => {
     expect(() => artifacts.resolveServePath("other-card", saved.path)).toThrow(ArtifactStoreError);
   });
 
-  it("throws when a required exchange sidecar is missing", () => {
+  it("throws when a required exchange file is missing", () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-wt-"));
     expect(() =>
       artifacts.harvest(
@@ -116,7 +116,7 @@ describe("ArtifactStore", () => {
     fs.rmSync(workspace, { recursive: true, force: true });
   });
 
-  it("throws when a plan sidecar is whitespace-only", () => {
+  it("throws when a plan exchange file is whitespace-only", () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-wt-"));
     const exchangeDir = path.join(workspace, ".jeeves");
     fs.mkdirSync(exchangeDir, { recursive: true });
@@ -133,7 +133,7 @@ describe("ArtifactStore", () => {
     fs.rmSync(workspace, { recursive: true, force: true });
   });
 
-  it("throws when a plan sidecar has no useful content beyond headings", () => {
+  it("throws when a plan exchange file has no useful content beyond headings", () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-wt-"));
     const exchangeDir = path.join(workspace, ".jeeves");
     fs.mkdirSync(exchangeDir, { recursive: true });

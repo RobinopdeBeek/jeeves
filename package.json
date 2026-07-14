@@ -7,7 +7,7 @@
     "dev": "npm run dev:guard && npm run dev:ports && concurrently -n server,client -c blue,green \"npm run dev:server\" \"npm run dev:client\"",
     "dev:guard": "tsx scripts/dev-guard.ts",
     "dev:ports": "tsx scripts/ensure-ports.ts",
-    "dev:client": "vite",
+    "dev:client": "tsx scripts/wait-for-server.ts && vite",
     "dev:server": "nodemon --watch server --ext ts --exec \"tsx server/index.ts\"",
     "build": "vite build",
     "start": "tsx server/index.ts",

@@ -24,3 +24,20 @@ export function logOpenAfterFinish(wasLive: boolean): boolean {
 export function usesFrozenArtifacts(mode: StepExecutionMode): boolean {
   return mode === "frozen";
 }
+
+/** Whether to fetch the plan artifact from the API (successful runs only). */
+export function shouldLoadPlanArtifact(
+  stepKey: string,
+  stepStatus: StepStatus | undefined,
+): boolean {
+  return stepKey === "plan" && stepStatus === "done";
+}
+
+/** Plan markdown is shown only after a successful run — not on failed attempts. */
+export function showPlanArtifact(
+  stepKey: string,
+  stepStatus: StepStatus | undefined,
+  planArtifact: unknown,
+): boolean {
+  return stepKey === "plan" && stepStatus === "done" && planArtifact != null;
+}

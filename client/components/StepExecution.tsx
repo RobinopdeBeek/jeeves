@@ -8,6 +8,8 @@ import { appendLogLine, formatRunLogText } from "@/lib/run-log";
 import {
   initialLogOpen,
   logOpenAfterFinish,
+  shouldLoadPlanArtifact,
+  showPlanArtifact,
   stepExecutionMode,
   usesFrozenArtifacts,
 } from "@/lib/step-execution-view";
@@ -52,7 +54,7 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
 
   async function loadArtifacts() {
     const [plan, runlog] = await Promise.all([
-      stepKey === "plan"
+      shouldLoadPlanArtifact(stepKey, step?.status)
         ? fetchArtifact(card.id, stepKey, round, "plan")
         : Promise.resolve(null),
       fetchArtifact(card.id, stepKey, round, "runlog"),
@@ -151,7 +153,7 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
 
   const failed = step?.status === "needs-user" && latestRun?.status === "failed";
   const frozen = usesFrozenArtifacts(mode);
-  const showPlan = frozen && stepKey === "plan" && planArtifact;
+  const showPlan = frozen && showPlanArtifact(stepKey, step?.status, planArtifact);
 
   function renderLogBody() {
     return (

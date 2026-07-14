@@ -163,6 +163,19 @@ export class ArtifactStore {
     return stripFrontmatter(this.readContent(artifact)).trim();
   }
 
+  /** Host path for a mutable run log; frozen as a runlog artifact when the run ends. */
+  liveLogPath(cardId: string, round: number, runId: string): string {
+    const relativePath = path.posix.join(
+      "cards",
+      cardId,
+      String(round),
+      `run-${runId}.log`,
+    );
+    const absPath = this.assertUnderRoot(relativePath);
+    fs.mkdirSync(path.dirname(absPath), { recursive: true });
+    return absPath;
+  }
+
   resolveServePath(cardId: string, relativePath: string): string {
     const normalized = relativePath.replace(/\\/g, "/");
     const expectedPrefix = `cards/${cardId}/`;

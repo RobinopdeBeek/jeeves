@@ -31,6 +31,23 @@ export type StepStatus =
 
 export type StepKind = "human" | "ai-chat" | "ai-execution";
 
+export const stepKeys = [
+  "info",
+  "grill",
+  "spec",
+  "tasks",
+  "plan",
+  "impl",
+  "airev",
+  "review",
+  "document",
+  "deploy",
+] as const satisfies readonly StepKey[];
+
+export function isStepKey(value: unknown): value is StepKey {
+  return typeof value === "string" && (stepKeys as readonly string[]).includes(value);
+}
+
 export type KindPath = "feature" | "standalone";
 
 export type CardKind = "feature" | "task";

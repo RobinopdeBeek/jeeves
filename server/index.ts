@@ -45,7 +45,6 @@ const engine = new ExecutionEngine({
   worktrees,
   artifacts,
   events,
-  artifactRoot: paths.artifactRoot,
   repoRoot: rootDir,
 });
 

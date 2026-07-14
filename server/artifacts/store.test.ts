@@ -88,6 +88,12 @@ describe("ArtifactStore", () => {
     expect(artifacts.readContent(latest!)).toContain("# Second plan");
   });
 
+  it("resolves live log paths under the card round folder", () => {
+    const logPath = artifacts.liveLogPath(cardId, 0, "run-abc");
+    expect(logPath).toBe(path.join(artifactRoot, "cards", cardId, "0", "run-run-abc.log"));
+    expect(fs.existsSync(path.dirname(logPath))).toBe(true);
+  });
+
   it("resolves serve paths only inside the card artifact folder", () => {
     const saved = artifacts.save({
       cardId,

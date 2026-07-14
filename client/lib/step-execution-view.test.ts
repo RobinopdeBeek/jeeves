@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   initialLogOpen,
   logOpenAfterFinish,
+  shouldLoadPlanArtifact,
+  showPlanArtifact,
   stepExecutionMode,
   usesFrozenArtifacts,
 } from "./step-execution-view";
@@ -45,6 +47,21 @@ describe("step-execution-view", () => {
       expect(usesFrozenArtifacts("live")).toBe(false);
       expect(usesFrozenArtifacts("queued")).toBe(false);
       expect(stepExecutionMode("needs-user")).toBe("frozen");
+    });
+  });
+
+  describe("plan artifact visibility", () => {
+    it("loads plan artifacts only after a successful run", () => {
+      expect(shouldLoadPlanArtifact("plan", "done")).toBe(true);
+      expect(shouldLoadPlanArtifact("plan", "needs-user")).toBe(false);
+      expect(shouldLoadPlanArtifact("plan", "ai-working")).toBe(false);
+      expect(shouldLoadPlanArtifact("impl", "done")).toBe(false);
+    });
+
+    it("shows plan markdown only when the step succeeded", () => {
+      expect(showPlanArtifact("plan", "done", { content: "# Plan" })).toBe(true);
+      expect(showPlanArtifact("plan", "needs-user", { content: "# Plan" })).toBe(false);
+      expect(showPlanArtifact("plan", "done", null)).toBe(false);
     });
   });
 });

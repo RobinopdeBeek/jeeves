@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { artifactKinds, type ArtifactKind } from "../db/schema.js";
 import type { ArtifactStore } from "../artifacts/store.js";
-import type { StepKey } from "../pipelines.js";
+import { isStepKey } from "../pipelines.js";
 
 function isArtifactKind(value: unknown): value is ArtifactKind {
   return typeof value === "string" && (artifactKinds as readonly string[]).includes(value);
@@ -13,11 +13,11 @@ export function artifactRoutes(artifacts: ArtifactStore) {
 
   app.get("/latest", (c) => {
     const cardId = c.req.param("id");
-    const stepKey = c.req.query("stepKey") as StepKey | undefined;
+    const stepKey = c.req.query("stepKey");
     const kind = c.req.query("kind");
     const round = Number(c.req.query("round") ?? "0");
 
-    if (!stepKey || !isArtifactKind(kind) || Number.isNaN(round)) {
+    if (!isStepKey(stepKey) || !isArtifactKind(kind) || Number.isNaN(round)) {
       return c.json({ error: "stepKey, kind, and round are required" }, 400);
     }
 

@@ -1,179 +1,46 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ArtifactStore } from "../artifacts/store.js";
-import { openDb, type Db } from "../db/index.js";
-import { CardStore, type CardWithSteps } from "../cards/store.js";
-import { EventBus, type JeevesEvent } from "./events.js";
-import { ExecutionEngine } from "./engine.js";
-import { RunStore } from "./run-store.js";
 import type { AgentRunner, RunAgentOptions, RunEvent } from "./runner.js";
 import type { WorktreeLifecycle } from "./worktree-manager.js";
-
-/**
- * Scripted fake AgentRunner. Each run() call consumes the next script in
- * FIFO order; a script either yields events, throws, or waits on a gate
- * so tests can control run lifetime.
- */
-type Script =
-  | { events: RunEvent[] }
-  | { error: Error }
-  | { gate: Promise<RunEvent[]> };
-
-function fakeRunner(scripts: Script[]) {
-  const calls: Array<{ promptFile: string; options: RunAgentOptions }> = [];
-  const runner: AgentRunner = {
-    async *run(promptFile, options) {
-      calls.push({ promptFile, options });
-      const script = scripts.shift();
-      if (!script) throw new Error("fake runner: no script left");
-      if ("error" in script) throw script.error;
-      const events =
-        "gate" in script
-          ? await abortable(script.gate, options.signal)
-          : script.events;
-      options.signal?.throwIfAborted();
-      for (const event of events) {
-        if (event.type === "log") {
-          fs.appendFileSync(options.logPath, `${event.line}\n`);
-        }
-        if (event.type === "result" && event.status === "finished" && options.onFinalize) {
-          const planDir = path.join(options.worktreePath, ".jeeves");
-          fs.mkdirSync(planDir, { recursive: true });
-          fs.writeFileSync(path.join(planDir, "plan.md"), "# Plan\n\nTracer plan.\n");
-          await options.onFinalize({
-            workspacePath: options.worktreePath,
-            headSha: options.baseSha,
-            baseSha: options.baseSha,
-          });
-        }
-        yield event;
-      }
-    },
-  };
-  return { runner, calls };
-}
-
-function fakeWorktrees(root: string): WorktreeLifecycle {
-  return {
-    worktreePathFor(cardId) {
-      return path.join(root, "worktrees", cardId);
-    },
-    async resolveRef() {
-      return "abc123def456";
-    },
-    async create(_branch, _baseSha, worktreePath) {
-      fs.mkdirSync(worktreePath, { recursive: true });
-    },
-    async remove(worktreePath) {
-      fs.rmSync(worktreePath, { recursive: true, force: true });
-    },
-    async captureDiagnostics(cwd) {
-      const entries: string[] = [];
-      const walk = (dir: string, prefix: string) => {
-        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-          const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-          if (entry.isDirectory()) {
-            if (entry.name === ".jeeves") continue;
-            walk(path.join(dir, entry.name), rel);
-          } else if (!rel.startsWith(".jeeves/")) {
-            entries.push(`?? ${rel}`);
-          }
-        }
-      };
-      if (fs.existsSync(cwd)) walk(cwd, "");
-      return {
-        status: entries.join("\n"),
-        diff: entries.length ? `diff --git a/${entries[0].slice(3)}` : "",
-        diffCached: "",
-        headSha: "abc123def456",
-      };
-    },
-    async cleanupOrphans() {},
-  };
-}
-
-const ok = (): RunEvent[] => [
-  { type: "log", line: "working…" },
-  { type: "result", status: "finished" },
-];
+import {
+  createEngineHarness,
+  expectDiagnosticAttachment,
+  fakeRunner,
+  fakeWorktrees,
+  makeEngine,
+  makeEngineWithRunner,
+  ok,
+  queuedCard,
+  runnerWithFinalize,
+  stepStatus,
+  tick,
+  type EngineTestHarness,
+} from "./engine.test-helpers.js";
 
 describe("ExecutionEngine", () => {
-  let db: Db;
-  let store: CardStore;
-  let runStore: RunStore;
-  let artifactStore: ArtifactStore;
-  let events: EventBus;
-  let received: JeevesEvent[];
-  let artifactRoot: string;
-  const repoRoot = path.join(os.tmpdir(), "jeeves-repo-root");
+  let harness: EngineTestHarness;
 
   beforeEach(() => {
-    db = openDb(":memory:");
-    store = new CardStore(db);
-    runStore = new RunStore(db);
-    artifactRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-engine-"));
-    artifactStore = new ArtifactStore(db, artifactRoot);
-    events = new EventBus();
-    received = [];
-    events.subscribe((e) => received.push(e));
-    fs.mkdirSync(repoRoot, { recursive: true });
+    harness = createEngineHarness();
   });
 
   afterEach(() => {
-    fs.rmSync(artifactRoot, { recursive: true, force: true });
-    fs.rmSync(repoRoot, { recursive: true, force: true });
+    harness.dispose();
   });
 
-  function makeEngine(scripts: Script[]) {
-    const { runner, calls } = fakeRunner(scripts);
-    const engine = new ExecutionEngine({
-      store,
-      runs: runStore,
-      runner,
-      worktrees: fakeWorktrees(artifactRoot),
-      artifacts: artifactStore,
-      events,
-      artifactRoot,
-      repoRoot,
-    });
-    return { engine, calls };
-  }
-
-  function queuedCard(title = "Rest timer"): CardWithSteps {
-    const projectId = store.ensureDefaultProject("jeeves", "C:/target-repo").id;
-    const card = store.createCard(projectId);
-    store.updateCard(card.id, { title });
-    return store.decideKind(card.id, "standalone");
-  }
-
-  function stepStatus(cardId: string, stepKey: string) {
-    return store.getCard(cardId)!.steps.find((s) => s.key === stepKey)?.status;
-  }
-
-  function expectDiagnosticAttachment(cardId: string) {
-    const diag = artifactStore.latest(cardId, {
-      stepKey: "plan",
-      round: 0,
-      kind: "attachment",
-    });
-    expect(diag).toBeDefined();
-    expect(artifactStore.readBody(diag!)).toContain("Workspace diagnostics");
-  }
-
   it("runs a queued Plan to done when the agent succeeds", async () => {
-    const card = queuedCard();
-    const { engine, calls } = makeEngine([{ events: ok() }]);
+    const card = queuedCard(harness);
+    const { engine, calls } = makeEngine(harness, [{ events: ok() }]);
 
     engine.enqueue(card.id, "plan");
     await engine.whenIdle();
 
-    expect(stepStatus(card.id, "plan")).toBe("done");
-    expect(stepStatus(card.id, "impl")).toBe("pending");
-    expect(stepStatus(card.id, "airev")).toBe("pending");
+    expect(stepStatus(harness, card.id, "plan")).toBe("done");
+    expect(stepStatus(harness, card.id, "impl")).toBe("pending");
+    expect(stepStatus(harness, card.id, "airev")).toBe("pending");
 
-    const run = runStore.latestForStep(card.id, "plan");
+    const run = harness.runStore.latestForStep(card.id, "plan");
     expect(run?.status).toBe("succeeded");
     expect(run?.skill).toBe("slice-3-tracer");
     expect(run?.logPath).toContain(path.join("cards", card.id, "0"));
@@ -188,221 +55,139 @@ describe("ExecutionEngine", () => {
     expect(calls[0].options.baseSha).toBe("abc123def456");
     expect(calls[0].options.onFinalize).toBeTypeOf("function");
 
-    const plan = artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" });
+    const plan = harness.artifactStore.latest(card.id, {
+      stepKey: "plan",
+      round: 0,
+      kind: "plan",
+    });
     expect(plan).toBeDefined();
-    expect(artifactStore.readContent(plan!)).toContain("Tracer plan.");
+    expect(harness.artifactStore.readContent(plan!)).toContain("Tracer plan.");
   });
 
   it("fails Plan when the exchange file is missing at finalize", async () => {
-    const card = queuedCard();
-    const runnerWithoutSidecar: AgentRunner = {
-      async *run(_promptFile, options) {
-        yield { type: "log", line: "working…" };
-        fs.appendFileSync(options.logPath, "working…\n");
-        if (options.onFinalize) {
-          await options.onFinalize({
-            workspacePath: options.worktreePath,
-            headSha: options.baseSha,
-            baseSha: options.baseSha,
-          });
-        }
-        yield { type: "result", status: "finished" };
-      },
-    };
-    const engine = new ExecutionEngine({
-      store,
-      runs: runStore,
-      runner: runnerWithoutSidecar,
-      worktrees: fakeWorktrees(artifactRoot),
-      artifacts: artifactStore,
-      events,
-      artifactRoot,
-      repoRoot,
-    });
+    const card = queuedCard(harness);
+    const engine = makeEngineWithRunner(harness, runnerWithFinalize(() => {}));
 
     engine.enqueue(card.id, "plan");
     await engine.whenIdle();
 
-    expect(stepStatus(card.id, "plan")).toBe("needs-user");
-    expect(runStore.latestForStep(card.id, "plan")?.status).toBe("failed");
+    expect(stepStatus(harness, card.id, "plan")).toBe("needs-user");
+    expect(harness.runStore.latestForStep(card.id, "plan")?.status).toBe("failed");
     expect(
-      artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" }),
+      harness.artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" }),
     ).toBeUndefined();
-
-    expectDiagnosticAttachment(card.id);
+    expectDiagnosticAttachment(harness, card.id);
   });
 
   it("fails Plan when the exchange file is empty at finalize", async () => {
-    const card = queuedCard();
-    const runnerWithEmptyPlan: AgentRunner = {
-      async *run(_promptFile, options) {
+    const card = queuedCard(harness);
+    const engine = makeEngineWithRunner(
+      harness,
+      runnerWithFinalize((options) => {
         const planDir = path.join(options.worktreePath, ".jeeves");
         fs.mkdirSync(planDir, { recursive: true });
         fs.writeFileSync(path.join(planDir, "plan.md"), "  \n");
-        if (options.onFinalize) {
-          await options.onFinalize({
-            workspacePath: options.worktreePath,
-            headSha: options.baseSha,
-            baseSha: options.baseSha,
-          });
-        }
-        yield { type: "result", status: "finished" };
-      },
-    };
-    const engine = new ExecutionEngine({
-      store,
-      runs: runStore,
-      runner: runnerWithEmptyPlan,
-      worktrees: fakeWorktrees(artifactRoot),
-      artifacts: artifactStore,
-      events,
-      artifactRoot,
-      repoRoot,
-    });
+      }),
+    );
 
     engine.enqueue(card.id, "plan");
     await engine.whenIdle();
 
-    expect(stepStatus(card.id, "plan")).toBe("needs-user");
-    expect(runStore.latestForStep(card.id, "plan")?.error).toMatch(/empty/);
+    expect(stepStatus(harness, card.id, "plan")).toBe("needs-user");
+    expect(harness.runStore.latestForStep(card.id, "plan")?.error).toMatch(/empty/);
     expect(
-      artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" }),
+      harness.artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" }),
     ).toBeUndefined();
-    expectDiagnosticAttachment(card.id);
+    expectDiagnosticAttachment(harness, card.id);
   });
 
   it("fails Plan when the exchange file has no useful content at finalize", async () => {
-    const card = queuedCard();
-    const runnerWithInvalidPlan: AgentRunner = {
-      async *run(_promptFile, options) {
+    const card = queuedCard(harness);
+    const engine = makeEngineWithRunner(
+      harness,
+      runnerWithFinalize((options) => {
         const planDir = path.join(options.worktreePath, ".jeeves");
         fs.mkdirSync(planDir, { recursive: true });
         fs.writeFileSync(path.join(planDir, "plan.md"), "# Plan\n\n## Steps\n");
-        if (options.onFinalize) {
-          await options.onFinalize({
-            workspacePath: options.worktreePath,
-            headSha: options.baseSha,
-            baseSha: options.baseSha,
-          });
-        }
-        yield { type: "result", status: "finished" };
-      },
-    };
-    const engine = new ExecutionEngine({
-      store,
-      runs: runStore,
-      runner: runnerWithInvalidPlan,
-      worktrees: fakeWorktrees(artifactRoot),
-      artifacts: artifactStore,
-      events,
-      artifactRoot,
-      repoRoot,
-    });
+      }),
+    );
 
     engine.enqueue(card.id, "plan");
     await engine.whenIdle();
 
-    expect(stepStatus(card.id, "plan")).toBe("needs-user");
-    expect(runStore.latestForStep(card.id, "plan")?.error).toMatch(/useful content/);
+    expect(stepStatus(harness, card.id, "plan")).toBe("needs-user");
+    expect(harness.runStore.latestForStep(card.id, "plan")?.error).toMatch(/useful content/);
     expect(
-      artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" }),
+      harness.artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" }),
     ).toBeUndefined();
-    expectDiagnosticAttachment(card.id);
+    expectDiagnosticAttachment(harness, card.id);
   });
 
   it("fails Plan when the agent edits source files beyond the exchange file", async () => {
-    const card = queuedCard();
-    const runnerWithSourceEdit: AgentRunner = {
-      async *run(_promptFile, options) {
+    const card = queuedCard(harness);
+    const engine = makeEngineWithRunner(
+      harness,
+      runnerWithFinalize((options) => {
         const planDir = path.join(options.worktreePath, ".jeeves");
         fs.mkdirSync(planDir, { recursive: true });
         fs.writeFileSync(path.join(planDir, "plan.md"), "# Plan\n\nDo the thing.\n");
         fs.writeFileSync(path.join(options.worktreePath, "hello.txt"), "oops\n");
-        if (options.onFinalize) {
-          await options.onFinalize({
-            workspacePath: options.worktreePath,
-            headSha: options.baseSha,
-            baseSha: options.baseSha,
-          });
-        }
-        yield { type: "result", status: "finished" };
-      },
-    };
-    const engine = new ExecutionEngine({
-      store,
-      runs: runStore,
-      runner: runnerWithSourceEdit,
-      worktrees: fakeWorktrees(artifactRoot),
-      artifacts: artifactStore,
-      events,
-      artifactRoot,
-      repoRoot,
-    });
+      }),
+    );
 
     engine.enqueue(card.id, "plan");
     await engine.whenIdle();
 
-    expect(stepStatus(card.id, "plan")).toBe("needs-user");
-    expect(runStore.latestForStep(card.id, "plan")?.error).toMatch(/dirty/);
+    expect(stepStatus(harness, card.id, "plan")).toBe("needs-user");
+    expect(harness.runStore.latestForStep(card.id, "plan")?.error).toMatch(/dirty/);
     expect(
-      artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" }),
-    ).toBeDefined();
-    expect(fs.existsSync(path.join(artifactRoot, "worktrees", card.id))).toBe(false);
-    expectDiagnosticAttachment(card.id);
+      harness.artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" }),
+    ).toBeUndefined();
+    expect(fs.existsSync(path.join(harness.artifactRoot, "worktrees", card.id))).toBe(false);
+    expectDiagnosticAttachment(harness, card.id);
   });
 
   it("fails Plan when the agent commits to the card branch", async () => {
-    const card = queuedCard();
-    const runnerWithCommit: AgentRunner = {
-      async *run(_promptFile, options) {
-        const planDir = path.join(options.worktreePath, ".jeeves");
-        fs.mkdirSync(planDir, { recursive: true });
-        fs.writeFileSync(path.join(planDir, "plan.md"), "# Plan\n\nDo the thing.\n");
-        if (options.onFinalize) {
-          await options.onFinalize({
-            workspacePath: options.worktreePath,
-            headSha: "newcommit999",
-            baseSha: options.baseSha,
-          });
-        }
-        yield { type: "result", status: "finished" };
-      },
-    };
-    const engine = new ExecutionEngine({
-      store,
-      runs: runStore,
-      runner: runnerWithCommit,
-      worktrees: fakeWorktrees(artifactRoot),
-      artifacts: artifactStore,
-      events,
-      artifactRoot,
-      repoRoot,
-    });
+    const card = queuedCard(harness);
+    const engine = makeEngineWithRunner(
+      harness,
+      runnerWithFinalize(
+        (options) => {
+          const planDir = path.join(options.worktreePath, ".jeeves");
+          fs.mkdirSync(planDir, { recursive: true });
+          fs.writeFileSync(path.join(planDir, "plan.md"), "# Plan\n\nDo the thing.\n");
+        },
+        () => "newcommit999",
+      ),
+    );
 
     engine.enqueue(card.id, "plan");
     await engine.whenIdle();
 
-    expect(stepStatus(card.id, "plan")).toBe("needs-user");
-    expect(runStore.latestForStep(card.id, "plan")?.error).toMatch(/commits/);
-    expectDiagnosticAttachment(card.id);
+    expect(stepStatus(harness, card.id, "plan")).toBe("needs-user");
+    expect(harness.runStore.latestForStep(card.id, "plan")?.error).toMatch(/commits/);
+    expect(
+      harness.artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" }),
+    ).toBeUndefined();
+    expectDiagnosticAttachment(harness, card.id);
   });
 
   it("moves Plan to needs-user with a failed run when the agent errors", async () => {
-    const card = queuedCard();
-    const { engine } = makeEngine([{ error: new Error("sdk exploded") }]);
+    const card = queuedCard(harness);
+    const { engine } = makeEngine(harness, [{ error: new Error("sdk exploded") }]);
 
     engine.enqueue(card.id, "plan");
     await engine.whenIdle();
 
-    expect(stepStatus(card.id, "plan")).toBe("needs-user");
-    const run = runStore.latestForStep(card.id, "plan");
+    expect(stepStatus(harness, card.id, "plan")).toBe("needs-user");
+    const run = harness.runStore.latestForStep(card.id, "plan");
     expect(run?.status).toBe("failed");
     expect(run?.error).toBe("sdk exploded");
   });
 
   it("treats a cancelled run as failed", async () => {
-    const card = queuedCard();
-    const { engine } = makeEngine([
+    const card = queuedCard(harness);
+    const { engine } = makeEngine(harness, [
       {
         events: [
           { type: "log", line: "working…" },
@@ -414,126 +199,124 @@ describe("ExecutionEngine", () => {
     engine.enqueue(card.id, "plan");
     await engine.whenIdle();
 
-    expect(stepStatus(card.id, "plan")).toBe("needs-user");
-    const run = runStore.latestForStep(card.id, "plan");
+    expect(stepStatus(harness, card.id, "plan")).toBe("needs-user");
+    const run = harness.runStore.latestForStep(card.id, "plan");
     expect(run?.status).toBe("failed");
     expect(run?.error).toMatch(/cancel/i);
   });
 
   it("runs one card at a time — second stays queued until the first finishes", async () => {
-    const first = queuedCard("First");
-    const second = queuedCard("Second");
+    const first = queuedCard(harness, "First");
+    const second = queuedCard(harness, "Second");
     let release!: (events: RunEvent[]) => void;
     const gate = new Promise<RunEvent[]>((r) => (release = r));
-    const { engine } = makeEngine([{ gate }, { events: ok() }]);
+    const { engine } = makeEngine(harness, [{ gate }, { events: ok() }]);
 
     engine.enqueue(first.id, "plan");
     engine.enqueue(second.id, "plan");
     await tick();
 
-    expect(stepStatus(first.id, "plan")).toBe("ai-working");
-    expect(stepStatus(second.id, "plan")).toBe("queued");
+    expect(stepStatus(harness, first.id, "plan")).toBe("ai-working");
+    expect(stepStatus(harness, second.id, "plan")).toBe("queued");
 
     release(ok());
     await engine.whenIdle();
 
-    expect(stepStatus(first.id, "plan")).toBe("done");
-    expect(stepStatus(second.id, "plan")).toBe("done");
+    expect(stepStatus(harness, first.id, "plan")).toBe("done");
+    expect(stepStatus(harness, second.id, "plan")).toBe("done");
   });
 
   it("emits card.updated, run.log, and run.finished to subscribers", async () => {
-    const card = queuedCard();
-    const { engine } = makeEngine([{ events: ok() }]);
+    const card = queuedCard(harness);
+    const { engine } = makeEngine(harness, [{ events: ok() }]);
 
     engine.enqueue(card.id, "plan");
     await engine.whenIdle();
 
-    const run = runStore.latestForStep(card.id, "plan")!;
-    const types = received.map((e) => e.type);
+    const run = harness.runStore.latestForStep(card.id, "plan")!;
+    const types = harness.received.map((e) => e.type);
     expect(types).toEqual([
-      "card.updated", // ai-working
+      "card.updated",
       "run.log",
       "run.finished",
-      "card.updated", // done
+      "card.updated",
     ]);
-    const log = received.find((e) => e.type === "run.log");
+    const log = harness.received.find((e) => e.type === "run.log");
     expect(log).toMatchObject({ runId: run.id, cardId: card.id, line: "working…" });
-    const finished = received.find((e) => e.type === "run.finished");
+    const finished = harness.received.find((e) => e.type === "run.finished");
     expect(finished).toMatchObject({ runId: run.id, status: "succeeded" });
   });
 
   describe("boot", () => {
     it("fails orphaned running runs and moves their steps to needs-user", async () => {
-      const card = queuedCard();
-      // Simulate a crash mid-run: step ai-working, run row still running.
-      store.setStepStatus(card.id, "plan", "ai-working");
-      const logDir = path.join(artifactRoot, "cards", card.id, "0");
-      fs.mkdirSync(logDir, { recursive: true });
-      const logPath = path.join(logDir, "run-orphan.log");
-      fs.writeFileSync(logPath, "orphan partial log\n");
-      const orphan = runStore.create({
+      const card = queuedCard(harness);
+      harness.store.setStepStatus(card.id, "plan", "ai-working");
+      const orphan = harness.runStore.create({
         cardId: card.id,
         stepKey: "plan",
         skill: "slice-3-tracer",
-        logPath,
+        logPath: "",
       });
-      const { engine, calls } = makeEngine([]);
+      const logPath = harness.artifactStore.liveLogPath(card.id, 0, orphan.id);
+      fs.writeFileSync(logPath, "orphan partial log\n");
+      harness.runStore.setLogPath(orphan.id, logPath);
+      const { engine, calls } = makeEngine(harness, []);
 
       engine.boot();
       await engine.whenIdle();
 
-      expect(runStore.get(orphan.id)?.status).toBe("failed");
-      expect(stepStatus(card.id, "plan")).toBe("needs-user");
-      const runlog = artifactStore.latest(card.id, {
+      expect(harness.runStore.get(orphan.id)?.status).toBe("failed");
+      expect(stepStatus(harness, card.id, "plan")).toBe("needs-user");
+      const runlog = harness.artifactStore.latest(card.id, {
         stepKey: "plan",
         round: 0,
         kind: "runlog",
       });
-      expect(artifactStore.readBody(runlog!)).toContain("orphan partial log");
-      expect(calls).toHaveLength(0); // orphan must not be re-enqueued
+      expect(harness.artifactStore.readBody(runlog!)).toContain("orphan partial log");
+      expect(calls).toHaveLength(0);
     });
 
     it("re-enqueues steps left queued by a restart", async () => {
-      const card = queuedCard(); // decideKind left plan queued, nothing consumed it
-      const { engine } = makeEngine([{ events: ok() }]);
+      const card = queuedCard(harness);
+      const { engine } = makeEngine(harness, [{ events: ok() }]);
 
       engine.boot();
       await engine.whenIdle();
 
-      expect(stepStatus(card.id, "plan")).toBe("done");
+      expect(stepStatus(harness, card.id, "plan")).toBe("done");
     });
   });
 
   it("stop() aborts the in-flight run, failing it to needs-user", async () => {
-    const card = queuedCard();
-    const gate = new Promise<RunEvent[]>(() => {}); // never resolves
-    const { engine } = makeEngine([{ gate }]);
+    const card = queuedCard(harness);
+    const gate: Promise<RunEvent[]> = new Promise(() => {});
+    const { engine } = makeEngine(harness, [{ gate }]);
 
     engine.enqueue(card.id, "plan");
     await tick();
-    expect(stepStatus(card.id, "plan")).toBe("ai-working");
+    expect(stepStatus(harness, card.id, "plan")).toBe("ai-working");
 
     await engine.stop();
 
-    expect(stepStatus(card.id, "plan")).toBe("needs-user");
-    expect(runStore.latestForStep(card.id, "plan")?.status).toBe("failed");
+    expect(stepStatus(harness, card.id, "plan")).toBe("needs-user");
+    expect(harness.runStore.latestForStep(card.id, "plan")?.status).toBe("failed");
   });
 
   it("retry re-queues a failed step and starts a fresh run row", async () => {
-    const card = queuedCard();
-    const { engine } = makeEngine([
+    const card = queuedCard(harness);
+    const { engine } = makeEngine(harness, [
       { error: new Error("first attempt died") },
       { events: ok() },
     ]);
 
     engine.enqueue(card.id, "plan");
     await engine.whenIdle();
-    expect(stepStatus(card.id, "plan")).toBe("needs-user");
+    expect(stepStatus(harness, card.id, "plan")).toBe("needs-user");
 
-    received.length = 0;
+    harness.received.length = 0;
     const retried = engine.retry(card.id, "plan");
     expect(retried.steps.find((s) => s.key === "plan")?.status).toBe("queued");
-    expect(received[0]).toEqual(
+    expect(harness.received[0]).toEqual(
       expect.objectContaining({
         type: "card.updated",
         card: expect.objectContaining({
@@ -546,15 +329,15 @@ describe("ExecutionEngine", () => {
     );
     await engine.whenIdle();
 
-    expect(stepStatus(card.id, "plan")).toBe("done");
-    const runsForCard = runStore.listForCard(card.id);
+    expect(stepStatus(harness, card.id, "plan")).toBe("done");
+    const runsForCard = harness.runStore.listForCard(card.id);
     expect(runsForCard).toHaveLength(2);
     expect(runsForCard.map((r) => r.status).sort()).toEqual(["failed", "succeeded"]);
   });
 
   it("rejects retry when the step has no failed run", () => {
-    const card = queuedCard();
-    const { engine } = makeEngine([]);
+    const card = queuedCard(harness);
+    const { engine } = makeEngine(harness, []);
     expect(() => engine.retry(card.id, "plan")).toThrow(
       expect.objectContaining({ status: 409 }),
     );
@@ -585,27 +368,18 @@ describe("ExecutionEngine", () => {
     }
 
     it("records base_sha on the first run and replays it on retry without re-resolving main", async () => {
-      const card = queuedCard();
-      const { worktrees, createCalls } = worktreesWithAdvancingMain(artifactRoot);
+      const card = queuedCard(harness);
+      const { worktrees, createCalls } = worktreesWithAdvancingMain(harness.artifactRoot);
       const { runner, calls } = fakeRunner([
         { error: new Error("first attempt died") },
         { events: ok() },
       ]);
-      const engine = new ExecutionEngine({
-        store,
-        runs: runStore,
-        runner,
-        worktrees,
-        artifacts: artifactStore,
-        events,
-        artifactRoot,
-        repoRoot,
-      });
+      const engine = makeEngineWithRunner(harness, runner, worktrees);
 
       engine.enqueue(card.id, "plan");
       await engine.whenIdle();
 
-      const failedRun = runStore.listForCard(card.id).find((r) => r.status === "failed");
+      const failedRun = harness.runStore.listForCard(card.id).find((r) => r.status === "failed");
       expect(failedRun?.baseSha).toBe("sha-v1");
       expect(createCalls[0].baseSha).toBe("sha-v1");
 
@@ -615,15 +389,15 @@ describe("ExecutionEngine", () => {
       expect(createCalls).toHaveLength(2);
       expect(createCalls[1].baseSha).toBe("sha-v1");
       expect(calls[1].options.baseSha).toBe("sha-v1");
-      const succeededRun = runStore.latestForStep(card.id, "plan");
+      const succeededRun = harness.runStore.latestForStep(card.id, "plan");
       expect(succeededRun?.baseSha).toBe("sha-v1");
     });
 
     it("creates a fresh worktree on retry without contamination from the failed attempt", async () => {
-      const card = queuedCard();
+      const card = queuedCard(harness);
       const createCalls: Array<{ worktreePath: string; hadContamination: boolean }> = [];
       const worktrees: WorktreeLifecycle = {
-        ...fakeWorktrees(artifactRoot),
+        ...fakeWorktrees(harness.artifactRoot),
         async create(_branch, _baseSha, worktreePath) {
           const contaminated = fs.existsSync(path.join(worktreePath, "contamination.txt"));
           createCalls.push({ worktreePath, hadContamination: contaminated });
@@ -654,16 +428,7 @@ describe("ExecutionEngine", () => {
           yield { type: "result", status: "finished" };
         },
       };
-      const engine = new ExecutionEngine({
-        store,
-        runs: runStore,
-        runner,
-        worktrees,
-        artifacts: artifactStore,
-        events,
-        artifactRoot,
-        repoRoot,
-      });
+      const engine = makeEngineWithRunner(harness, runner, worktrees);
 
       engine.enqueue(card.id, "plan");
       await engine.whenIdle();
@@ -672,27 +437,27 @@ describe("ExecutionEngine", () => {
 
       expect(createCalls).toHaveLength(2);
       expect(createCalls[1].hadContamination).toBe(false);
-      expect(stepStatus(card.id, "plan")).toBe("done");
+      expect(stepStatus(harness, card.id, "plan")).toBe("done");
       expect(
         fs.existsSync(path.join(createCalls[1].worktreePath, "contamination.txt")),
       ).toBe(false);
     });
 
     it("preserves prior failed artifacts and latest lookup returns the newest success", async () => {
-      const card = queuedCard();
-      const { engine } = makeEngine([
+      const card = queuedCard(harness);
+      const { engine } = makeEngine(harness, [
         { error: new Error("first attempt died") },
         { events: ok() },
       ]);
 
       engine.enqueue(card.id, "plan");
       await engine.whenIdle();
-      const failedRunlog = artifactStore.latest(card.id, {
+      const failedRunlog = harness.artifactStore.latest(card.id, {
         stepKey: "plan",
         round: 0,
         kind: "runlog",
       });
-      const failedAttachment = artifactStore.latest(card.id, {
+      const failedAttachment = harness.artifactStore.latest(card.id, {
         stepKey: "plan",
         round: 0,
         kind: "attachment",
@@ -703,28 +468,28 @@ describe("ExecutionEngine", () => {
       engine.retry(card.id, "plan");
       await engine.whenIdle();
 
-      const runlogs = artifactStore
+      const runlogs = harness.artifactStore
         .list(card.id)
         .filter((a) => a.kind === "runlog" && a.stepKey === "plan");
-      const plans = artifactStore
+      const plans = harness.artifactStore
         .list(card.id)
         .filter((a) => a.kind === "plan" && a.stepKey === "plan");
-      const attachments = artifactStore
+      const attachments = harness.artifactStore
         .list(card.id)
         .filter((a) => a.kind === "attachment" && a.stepKey === "plan");
 
       expect(runlogs).toHaveLength(2);
       expect(attachments).toHaveLength(1);
       expect(plans).toHaveLength(1);
-      expect(artifactStore.readContent(plans[0])).toContain("Tracer plan.");
-      expect(artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" })?.id).toBe(
-        plans[0].id,
-      );
-      expect(artifactStore.readBody(failedRunlog!)).toBeDefined();
+      expect(harness.artifactStore.readContent(plans[0])).toContain("Tracer plan.");
+      expect(
+        harness.artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" })?.id,
+      ).toBe(plans[0].id);
+      expect(harness.artifactStore.readBody(failedRunlog!)).toBeDefined();
     });
 
-    it("creates a new plan artifact on retry success without replacing the failed attempt's runlog", async () => {
-      const card = queuedCard();
+    it("creates a plan artifact on retry success after a dirty first attempt", async () => {
+      const card = queuedCard(harness);
       let attempt = 0;
       const runner: AgentRunner = {
         async *run(_promptFile, options) {
@@ -748,87 +513,74 @@ describe("ExecutionEngine", () => {
           yield { type: "result", status: "finished" };
         },
       };
-      const engine = new ExecutionEngine({
-        store,
-        runs: runStore,
-        runner,
-        worktrees: fakeWorktrees(artifactRoot),
-        artifacts: artifactStore,
-        events,
-        artifactRoot,
-        repoRoot,
-      });
+      const engine = makeEngineWithRunner(harness, runner);
 
       engine.enqueue(card.id, "plan");
       await engine.whenIdle();
-      expect(stepStatus(card.id, "plan")).toBe("needs-user");
+      expect(stepStatus(harness, card.id, "plan")).toBe("needs-user");
+      expect(
+        harness.artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" }),
+      ).toBeUndefined();
 
       engine.retry(card.id, "plan");
       await engine.whenIdle();
 
-      const plans = artifactStore
+      const plans = harness.artifactStore
         .list(card.id)
         .filter((a) => a.kind === "plan" && a.stepKey === "plan");
-      expect(plans).toHaveLength(2);
-      const latest = artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" });
-      expect(artifactStore.readContent(latest!)).toContain("Clean retry plan.");
+      expect(plans).toHaveLength(1);
+      const latest = harness.artifactStore.latest(card.id, {
+        stepKey: "plan",
+        round: 0,
+        kind: "plan",
+      });
+      expect(harness.artifactStore.readContent(latest!)).toContain("Clean retry plan.");
       expect(
-        artifactStore.list(card.id).filter((a) => a.kind === "runlog" && a.stepKey === "plan"),
+        harness.artifactStore.list(card.id).filter((a) => a.kind === "runlog" && a.stepKey === "plan"),
       ).toHaveLength(2);
     });
 
     it("replays base_sha after server restart when the step was left queued for retry", async () => {
-      const card = queuedCard();
-      const { worktrees, createCalls } = worktreesWithAdvancingMain(artifactRoot);
-      const engine1 = new ExecutionEngine({
-        store,
-        runs: runStore,
-        runner: fakeRunner([{ error: new Error("first attempt died") }]).runner,
+      const card = queuedCard(harness);
+      const { worktrees, createCalls } = worktreesWithAdvancingMain(harness.artifactRoot);
+      const engine1 = makeEngineWithRunner(
+        harness,
+        fakeRunner([{ error: new Error("first attempt died") }]).runner,
         worktrees,
-        artifacts: artifactStore,
-        events,
-        artifactRoot,
-        repoRoot,
-      });
+      );
 
       engine1.enqueue(card.id, "plan");
       await engine1.whenIdle();
-      expect(runStore.latestForStep(card.id, "plan")?.baseSha).toBe("sha-v1");
+      expect(harness.runStore.latestForStep(card.id, "plan")?.baseSha).toBe("sha-v1");
 
-      // Retry persisted to DB; in-memory queue is lost on restart.
-      store.setStepStatus(card.id, "plan", "queued");
+      harness.store.setStepStatus(card.id, "plan", "queued");
 
-      const engine2 = new ExecutionEngine({
-        store,
-        runs: runStore,
-        runner: fakeRunner([{ events: ok() }]).runner,
+      const engine2 = makeEngineWithRunner(
+        harness,
+        fakeRunner([{ events: ok() }]).runner,
         worktrees,
-        artifacts: artifactStore,
-        events,
-        artifactRoot,
-        repoRoot,
-      });
+      );
       engine2.boot();
       await engine2.whenIdle();
 
-      expect(stepStatus(card.id, "plan")).toBe("done");
+      expect(stepStatus(harness, card.id, "plan")).toBe("done");
       expect(createCalls.at(-1)?.baseSha).toBe("sha-v1");
     });
   });
 
   describe("run log freeze", () => {
     it("does not index a runlog artifact while the run is still in flight", async () => {
-      const card = queuedCard();
+      const card = queuedCard(harness);
       let release!: (events: RunEvent[]) => void;
       const gate = new Promise<RunEvent[]>((r) => (release = r));
-      const { engine } = makeEngine([{ gate }]);
+      const { engine } = makeEngine(harness, [{ gate }]);
 
       engine.enqueue(card.id, "plan");
       await tick();
 
-      expect(stepStatus(card.id, "plan")).toBe("ai-working");
+      expect(stepStatus(harness, card.id, "plan")).toBe("ai-working");
       expect(
-        artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "runlog" }),
+        harness.artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "runlog" }),
       ).toBeUndefined();
 
       release(ok());
@@ -836,24 +588,24 @@ describe("ExecutionEngine", () => {
     });
 
     it("freezes the final log as a runlog artifact after a successful run", async () => {
-      const card = queuedCard();
-      const { engine } = makeEngine([{ events: ok() }]);
+      const card = queuedCard(harness);
+      const { engine } = makeEngine(harness, [{ events: ok() }]);
 
       engine.enqueue(card.id, "plan");
       await engine.whenIdle();
 
-      const runlog = artifactStore.latest(card.id, {
+      const runlog = harness.artifactStore.latest(card.id, {
         stepKey: "plan",
         round: 0,
         kind: "runlog",
       });
       expect(runlog).toBeDefined();
-      expect(artifactStore.readBody(runlog!)).toContain("working…");
+      expect(harness.artifactStore.readBody(runlog!)).toContain("working…");
       expect(runlog!.path).toMatch(new RegExp(`^cards/${card.id}/0/runlog/.+\\.log$`));
     });
 
     it("freezes the final log as a runlog artifact after a failed run", async () => {
-      const card = queuedCard();
+      const card = queuedCard(harness);
       const runnerWithLogThenError: AgentRunner = {
         async *run(_promptFile, options) {
           yield { type: "log", line: "partial output" };
@@ -861,37 +613,27 @@ describe("ExecutionEngine", () => {
           throw new Error("sdk exploded");
         },
       };
-      const engine = new ExecutionEngine({
-        store,
-        runs: runStore,
-        runner: runnerWithLogThenError,
-        worktrees: fakeWorktrees(artifactRoot),
-        artifacts: artifactStore,
-        events,
-        artifactRoot,
-        repoRoot,
-      });
+      const engine = makeEngineWithRunner(harness, runnerWithLogThenError);
 
       engine.enqueue(card.id, "plan");
       await engine.whenIdle();
 
-      const runlog = artifactStore.latest(card.id, {
+      const runlog = harness.artifactStore.latest(card.id, {
         stepKey: "plan",
         round: 0,
         kind: "runlog",
       });
       expect(runlog).toBeDefined();
-      expect(artifactStore.readBody(runlog!)).toContain("partial output");
+      expect(harness.artifactStore.readBody(runlog!)).toContain("partial output");
       expect(runlog!.gitSha).toBeNull();
     });
 
     it("does not index a runlog while the step is still queued", async () => {
-      const card = queuedCard();
-      const { engine } = makeEngine([{ events: ok() }]);
-      // Plan is queued after decideKind but before enqueue — no run row yet.
-      expect(runStore.latestForStep(card.id, "plan")).toBeUndefined();
+      const card = queuedCard(harness);
+      const { engine } = makeEngine(harness, [{ events: ok() }]);
+      expect(harness.runStore.latestForStep(card.id, "plan")).toBeUndefined();
       expect(
-        artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "runlog" }),
+        harness.artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "runlog" }),
       ).toBeUndefined();
 
       engine.enqueue(card.id, "plan");
@@ -899,19 +641,3 @@ describe("ExecutionEngine", () => {
     });
   });
 });
-
-const tick = () => new Promise((r) => setTimeout(r, 0));
-
-/** Rejects when the signal aborts — mirrors how the SDK cancels a run. */
-function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) return promise;
-  return new Promise<T>((resolve, reject) => {
-    signal.throwIfAborted();
-    signal.addEventListener(
-      "abort",
-      () => reject(signal.reason ?? new Error("aborted")),
-      { once: true },
-    );
-    promise.then(resolve, reject);
-  });
-}

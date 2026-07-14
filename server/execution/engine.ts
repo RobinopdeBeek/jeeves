@@ -9,14 +9,7 @@ import type { RunStore } from "./run-store.js";
 import type { AgentRunner, RunEvent } from "./runner.js";
 import type { WorktreeDiagnostics, WorktreeLifecycle } from "./worktree-manager.js";
 import { WorktreeManager } from "./worktree-manager.js";
-
-/** Which skill an ai-execution step runs (slice 3: Plan → tracer only). */
-const STEP_SKILLS: Partial<Record<StepKey, { skill: string; promptFile: string }>> = {
-  plan: {
-    skill: "slice-3-tracer",
-    promptFile: path.join("prompts", "execution", "slice-3-tracer.md"),
-  },
-};
+import { meetsPostconditions, stepPolicy } from "./step-policies.js";
 
 const DEFAULT_BASE_REF = "main";
 
@@ -27,8 +20,6 @@ export interface ExecutionEngineDeps {
   worktrees: WorktreeLifecycle;
   artifacts: ArtifactStore;
   events: EventBus;
-  /** The artifact folder root — run logs land under `cards/<id>/<round>/`. */
-  artifactRoot: string;
   /** Repo root — prompt files resolve relative to this. */
   repoRoot: string;
 }
@@ -113,16 +104,12 @@ export class ExecutionEngine {
   }
 
   private async execute(cardId: string, stepKey: StepKey): Promise<void> {
-    const { store, runs, runner, worktrees, artifacts, events, artifactRoot, repoRoot } =
-      this.deps;
-    const skill = STEP_SKILLS[stepKey];
+    const { store, runs, runner, worktrees, artifacts, events, repoRoot } = this.deps;
+    const policy = stepPolicy(stepKey);
     const card = store.getCard(cardId);
-    if (!skill || !card) return;
+    if (!policy || !card) return;
 
-    const round = 0;
-    const logDir = path.join(artifactRoot, "cards", cardId, String(round));
-    fs.mkdirSync(logDir, { recursive: true });
-
+    const round = currentRound(cardId);
     const priorRun = runs.latestForStep(cardId, stepKey);
     let baseSha: string;
     if (priorRun?.status === "failed" && priorRun.baseSha) {
@@ -134,12 +121,12 @@ export class ExecutionEngine {
     const run = runs.create({
       cardId,
       stepKey,
-      skill: skill.skill,
+      skill: policy.skill,
       round,
       logPath: "",
       baseSha,
     });
-    const logPath = path.join(logDir, `run-${run.id}.log`);
+    const logPath = artifacts.liveLogPath(cardId, round, run.id);
     runs.setLogPath(run.id, logPath);
 
     events.emit({
@@ -157,7 +144,7 @@ export class ExecutionEngine {
         run,
         stepKey,
         round,
-        skill.skill,
+        policy.skill,
         worktreePath,
         headSha,
       );
@@ -169,7 +156,7 @@ export class ExecutionEngine {
       await worktrees.create(branch, baseSha, worktreePath);
 
       let result: Extract<RunEvent, { type: "result" }> | undefined;
-      const iterable = runner.run(path.resolve(repoRoot, skill.promptFile), {
+      const iterable = runner.run(path.resolve(repoRoot, policy.promptFile), {
         cwd: repoPath,
         branch,
         worktreePath,
@@ -178,7 +165,7 @@ export class ExecutionEngine {
         signal: this.abort.signal,
         onFinalize: async (ctx) => {
           headSha = ctx.headSha;
-          await this.finalizeStep(cardId, stepKey, round, skill.skill, ctx);
+          await this.finalizeStep(cardId, stepKey, round, policy.skill, ctx);
         },
       });
       for await (const event of iterable) {
@@ -188,8 +175,11 @@ export class ExecutionEngine {
           result = event;
         }
       }
-      if (result?.status === "finished" && checkStepPostconditions(stepKey, artifacts, cardId, round)) {
-        this.freezeRunLog(run, stepKey, round, skill.skill, headSha);
+      if (
+        result?.status === "finished" &&
+        meetsPostconditions(stepKey, artifacts, cardId, round)
+      ) {
+        this.freezeRunLog(run, stepKey, round, policy.skill, headSha);
         runs.finish(run.id, {
           status: "succeeded",
           model: result.model,
@@ -229,7 +219,7 @@ export class ExecutionEngine {
         content = fs.readFileSync(logPath, "utf8");
       }
     } catch {
-      return;
+      // Degraded freeze — still index an empty runlog so the UI does not lie.
     }
     this.deps.artifacts.save({
       cardId: run.cardId,
@@ -249,13 +239,17 @@ export class ExecutionEngine {
     sourceSkill: string,
     ctx: { workspacePath: string; headSha: string; baseSha: string },
   ): Promise<void> {
-    if (stepKey !== "plan") return;
-    this.deps.artifacts.harvest(
-      ctx.workspacePath,
-      [{ exchangePath: ".jeeves/plan.md", kind: "plan", stepKey: "plan" }],
-      { cardId, round, sourceSkill, gitSha: ctx.headSha },
-    );
-    await assertPlanWorkspaceClean(this.deps.worktrees, ctx);
+    const policy = stepPolicy(stepKey);
+    if (!policy?.harvest) return;
+    if (policy.assertWorkspace) {
+      await policy.assertWorkspace(this.deps.worktrees, ctx);
+    }
+    this.deps.artifacts.harvest(ctx.workspacePath, policy.harvest, {
+      cardId,
+      round,
+      sourceSkill,
+      gitSha: ctx.headSha,
+    });
   }
 
   private async preserveFailureEvidence(
@@ -323,34 +317,9 @@ export class ExecutionEngine {
   }
 }
 
-/** Slice 4 — per-step success checks beyond runner terminal status. */
-function checkStepPostconditions(
-  stepKey: StepKey,
-  artifacts: ArtifactStore,
-  cardId: string,
-  round: number,
-): boolean {
-  if (stepKey === "plan") {
-    return (
-      artifacts.latest(cardId, { stepKey: "plan", round, kind: "plan" }) !== undefined
-    );
-  }
-  return true;
-}
-
-/** Plan runs must leave the target tree unchanged after exchange files are removed. */
-async function assertPlanWorkspaceClean(
-  worktrees: WorktreeLifecycle,
-  ctx: { workspacePath: string; headSha: string; baseSha: string },
-): Promise<void> {
-  if (ctx.headSha !== ctx.baseSha) {
-    throw new Error("plan step must not create commits on the card branch");
-  }
-  const diag = await worktrees.captureDiagnostics(ctx.workspacePath);
-  if (diag.status) {
-    const summary = diag.status.split("\n")[0] ?? "dirty tree";
-    throw new Error(`plan step left source tree dirty: ${summary}`);
-  }
+/** Slice 4 — rework rounds land in slice 8; centralize the pin here. */
+function currentRound(_cardId: string): number {
+  return 0;
 }
 
 function formatWorkspaceDiagnostics(diag: WorktreeDiagnostics): string {

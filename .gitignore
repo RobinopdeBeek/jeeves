@@ -9,15 +9,6 @@ node_modules/
 # Local scratch (agent drafts, spike notes)
 .scratch/
 
-# Ephemeral git worktrees (legacy app-local layout; see ADR 0011)
-data/worktrees/
-
-# Legacy local data (pre-ADR-0011; per-project store is now <target-repo>/.jeeves/)
-data/
-*.db
-*.db-wal
-*.db-shm
-
 # Build output
 client/dist/
 dist/

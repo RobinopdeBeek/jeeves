@@ -80,6 +80,8 @@ export const runs = sqliteTable("runs", {
   cost: real("cost"),
   error: text("error"),
   logPath: text("log_path"),
+  /** Exact ref the worktree was created from — replayed on retry. */
+  baseSha: text("base_sha"),
 });
 
 export const artifactKinds = [

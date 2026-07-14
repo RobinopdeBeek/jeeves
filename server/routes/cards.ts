@@ -76,7 +76,7 @@ export function cardRoutes(
   app.post("/:id/steps/:stepKey/retry", (c) => {
     const stepKey = c.req.param("stepKey");
     if (stepKey !== "plan") {
-      return c.json({ error: "only the plan step is retryable in slice 3" }, 400);
+      return c.json({ error: "only the plan step is retryable in slice 4" }, 400);
     }
     try {
       return c.json(deps.engine.retry(c.req.param("id"), stepKey));

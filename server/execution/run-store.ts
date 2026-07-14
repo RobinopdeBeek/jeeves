@@ -18,6 +18,7 @@ export class RunStore {
     logPath: string;
     round?: number;
     model?: string;
+    baseSha?: string;
   }): Run {
     const run: Run = {
       id: nanoid(10),
@@ -34,6 +35,7 @@ export class RunStore {
       cost: null,
       error: null,
       logPath: input.logPath,
+      baseSha: input.baseSha ?? null,
     };
     this.db.insert(runs).values(run).run();
     return run;

@@ -123,12 +123,21 @@ export class ExecutionEngine {
     const logDir = path.join(artifactRoot, "cards", cardId, String(round));
     fs.mkdirSync(logDir, { recursive: true });
 
+    const priorRun = runs.latestForStep(cardId, stepKey);
+    let baseSha: string;
+    if (priorRun?.status === "failed" && priorRun.baseSha) {
+      baseSha = priorRun.baseSha;
+    } else {
+      baseSha = await worktrees.resolveRef(DEFAULT_BASE_REF);
+    }
+
     const run = runs.create({
       cardId,
       stepKey,
       skill: skill.skill,
       round,
       logPath: "",
+      baseSha,
     });
     const logPath = path.join(logDir, `run-${run.id}.log`);
     runs.setLogPath(run.id, logPath);
@@ -141,7 +150,6 @@ export class ExecutionEngine {
     const repoPath = store.getRepoPath(cardId);
     const branch = WorktreeManager.cardBranch(cardId);
     const worktreePath = worktrees.worktreePathFor(cardId);
-    let baseSha = "";
     let headSha: string | undefined;
 
     const fail = async (message: string) => {
@@ -158,7 +166,6 @@ export class ExecutionEngine {
     };
 
     try {
-      baseSha = await worktrees.resolveRef(DEFAULT_BASE_REF);
       await worktrees.create(branch, baseSha, worktreePath);
 
       let result: Extract<RunEvent, { type: "result" }> | undefined;

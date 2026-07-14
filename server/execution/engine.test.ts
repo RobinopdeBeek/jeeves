@@ -563,6 +563,259 @@ describe("ExecutionEngine", () => {
     );
   });
 
+  describe("retry from recorded base_sha (slice 4D)", () => {
+    function worktreesWithAdvancingMain(root: string) {
+      let resolveCount = 0;
+      const createCalls: Array<{ baseSha: string; worktreePath: string }> = [];
+      const base = fakeWorktrees(root);
+      return {
+        createCalls,
+        worktrees: {
+          ...base,
+          async resolveRef() {
+            resolveCount++;
+            return resolveCount === 1 ? "sha-v1" : "sha-v2-advanced-main";
+          },
+          async create(_branch: string, baseSha: string, worktreePath: string) {
+            createCalls.push({ baseSha, worktreePath });
+            await base.create(_branch, baseSha, worktreePath);
+          },
+        } satisfies WorktreeLifecycle,
+      };
+    }
+
+    it("records base_sha on the first run and replays it on retry without re-resolving main", async () => {
+      const card = queuedCard();
+      const { worktrees, createCalls } = worktreesWithAdvancingMain(artifactRoot);
+      const { runner, calls } = fakeRunner([
+        { error: new Error("first attempt died") },
+        { events: ok() },
+      ]);
+      const engine = new ExecutionEngine({
+        store,
+        runs: runStore,
+        runner,
+        worktrees,
+        artifacts: artifactStore,
+        events,
+        artifactRoot,
+        repoRoot,
+      });
+
+      engine.enqueue(card.id, "plan");
+      await engine.whenIdle();
+
+      const failedRun = runStore.listForCard(card.id).find((r) => r.status === "failed");
+      expect(failedRun?.baseSha).toBe("sha-v1");
+      expect(createCalls[0].baseSha).toBe("sha-v1");
+
+      engine.retry(card.id, "plan");
+      await engine.whenIdle();
+
+      expect(createCalls).toHaveLength(2);
+      expect(createCalls[1].baseSha).toBe("sha-v1");
+      expect(calls[1].options.baseSha).toBe("sha-v1");
+      const succeededRun = runStore.latestForStep(card.id, "plan");
+      expect(succeededRun?.baseSha).toBe("sha-v1");
+    });
+
+    it("creates a fresh worktree on retry without contamination from the failed attempt", async () => {
+      const card = queuedCard();
+      const createCalls: Array<{ worktreePath: string; hadContamination: boolean }> = [];
+      const worktrees: WorktreeLifecycle = {
+        ...fakeWorktrees(artifactRoot),
+        async create(_branch, _baseSha, worktreePath) {
+          const contaminated = fs.existsSync(path.join(worktreePath, "contamination.txt"));
+          createCalls.push({ worktreePath, hadContamination: contaminated });
+          fs.mkdirSync(worktreePath, { recursive: true });
+        },
+      };
+      let attempt = 0;
+      const runner: AgentRunner = {
+        async *run(_promptFile, options) {
+          attempt++;
+          if (attempt === 1) {
+            fs.writeFileSync(
+              path.join(options.worktreePath, "contamination.txt"),
+              "left by failed agent\n",
+            );
+            throw new Error("agent left a mess");
+          }
+          const planDir = path.join(options.worktreePath, ".jeeves");
+          fs.mkdirSync(planDir, { recursive: true });
+          fs.writeFileSync(path.join(planDir, "plan.md"), "# Plan\n\nClean retry.\n");
+          if (options.onFinalize) {
+            await options.onFinalize({
+              workspacePath: options.worktreePath,
+              headSha: options.baseSha,
+              baseSha: options.baseSha,
+            });
+          }
+          yield { type: "result", status: "finished" };
+        },
+      };
+      const engine = new ExecutionEngine({
+        store,
+        runs: runStore,
+        runner,
+        worktrees,
+        artifacts: artifactStore,
+        events,
+        artifactRoot,
+        repoRoot,
+      });
+
+      engine.enqueue(card.id, "plan");
+      await engine.whenIdle();
+      engine.retry(card.id, "plan");
+      await engine.whenIdle();
+
+      expect(createCalls).toHaveLength(2);
+      expect(createCalls[1].hadContamination).toBe(false);
+      expect(stepStatus(card.id, "plan")).toBe("done");
+      expect(
+        fs.existsSync(path.join(createCalls[1].worktreePath, "contamination.txt")),
+      ).toBe(false);
+    });
+
+    it("preserves prior failed artifacts and latest lookup returns the newest success", async () => {
+      const card = queuedCard();
+      const { engine } = makeEngine([
+        { error: new Error("first attempt died") },
+        { events: ok() },
+      ]);
+
+      engine.enqueue(card.id, "plan");
+      await engine.whenIdle();
+      const failedRunlog = artifactStore.latest(card.id, {
+        stepKey: "plan",
+        round: 0,
+        kind: "runlog",
+      });
+      const failedAttachment = artifactStore.latest(card.id, {
+        stepKey: "plan",
+        round: 0,
+        kind: "attachment",
+      });
+      expect(failedRunlog).toBeDefined();
+      expect(failedAttachment).toBeDefined();
+
+      engine.retry(card.id, "plan");
+      await engine.whenIdle();
+
+      const runlogs = artifactStore
+        .list(card.id)
+        .filter((a) => a.kind === "runlog" && a.stepKey === "plan");
+      const plans = artifactStore
+        .list(card.id)
+        .filter((a) => a.kind === "plan" && a.stepKey === "plan");
+      const attachments = artifactStore
+        .list(card.id)
+        .filter((a) => a.kind === "attachment" && a.stepKey === "plan");
+
+      expect(runlogs).toHaveLength(2);
+      expect(attachments).toHaveLength(1);
+      expect(plans).toHaveLength(1);
+      expect(artifactStore.readContent(plans[0])).toContain("Tracer plan.");
+      expect(artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" })?.id).toBe(
+        plans[0].id,
+      );
+      expect(artifactStore.readBody(failedRunlog!)).toBeDefined();
+    });
+
+    it("creates a new plan artifact on retry success without replacing the failed attempt's runlog", async () => {
+      const card = queuedCard();
+      let attempt = 0;
+      const runner: AgentRunner = {
+        async *run(_promptFile, options) {
+          attempt++;
+          const planDir = path.join(options.worktreePath, ".jeeves");
+          fs.mkdirSync(planDir, { recursive: true });
+          fs.writeFileSync(
+            path.join(planDir, "plan.md"),
+            attempt === 1 ? "# Plan\n\nDirty first attempt.\n" : "# Plan\n\nClean retry plan.\n",
+          );
+          if (attempt === 1) {
+            fs.writeFileSync(path.join(options.worktreePath, "oops.txt"), "dirty\n");
+          }
+          if (options.onFinalize) {
+            await options.onFinalize({
+              workspacePath: options.worktreePath,
+              headSha: options.baseSha,
+              baseSha: options.baseSha,
+            });
+          }
+          yield { type: "result", status: "finished" };
+        },
+      };
+      const engine = new ExecutionEngine({
+        store,
+        runs: runStore,
+        runner,
+        worktrees: fakeWorktrees(artifactRoot),
+        artifacts: artifactStore,
+        events,
+        artifactRoot,
+        repoRoot,
+      });
+
+      engine.enqueue(card.id, "plan");
+      await engine.whenIdle();
+      expect(stepStatus(card.id, "plan")).toBe("needs-user");
+
+      engine.retry(card.id, "plan");
+      await engine.whenIdle();
+
+      const plans = artifactStore
+        .list(card.id)
+        .filter((a) => a.kind === "plan" && a.stepKey === "plan");
+      expect(plans).toHaveLength(2);
+      const latest = artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "plan" });
+      expect(artifactStore.readContent(latest!)).toContain("Clean retry plan.");
+      expect(
+        artifactStore.list(card.id).filter((a) => a.kind === "runlog" && a.stepKey === "plan"),
+      ).toHaveLength(2);
+    });
+
+    it("replays base_sha after server restart when the step was left queued for retry", async () => {
+      const card = queuedCard();
+      const { worktrees, createCalls } = worktreesWithAdvancingMain(artifactRoot);
+      const engine1 = new ExecutionEngine({
+        store,
+        runs: runStore,
+        runner: fakeRunner([{ error: new Error("first attempt died") }]).runner,
+        worktrees,
+        artifacts: artifactStore,
+        events,
+        artifactRoot,
+        repoRoot,
+      });
+
+      engine1.enqueue(card.id, "plan");
+      await engine1.whenIdle();
+      expect(runStore.latestForStep(card.id, "plan")?.baseSha).toBe("sha-v1");
+
+      // Retry persisted to DB; in-memory queue is lost on restart.
+      store.setStepStatus(card.id, "plan", "queued");
+
+      const engine2 = new ExecutionEngine({
+        store,
+        runs: runStore,
+        runner: fakeRunner([{ events: ok() }]).runner,
+        worktrees,
+        artifacts: artifactStore,
+        events,
+        artifactRoot,
+        repoRoot,
+      });
+      engine2.boot();
+      await engine2.whenIdle();
+
+      expect(stepStatus(card.id, "plan")).toBe("done");
+      expect(createCalls.at(-1)?.baseSha).toBe("sha-v1");
+    });
+  });
+
   describe("run log freeze", () => {
     it("does not index a runlog artifact while the run is still in flight", async () => {
       const card = queuedCard();

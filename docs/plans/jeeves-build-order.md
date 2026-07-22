@@ -22,7 +22,7 @@ modules, not modules of their own.
 | `CardStore` | CRUD, kind decision, fan-out, blocker edges, derived queries ("X of Y", queue candidates, Round N history) | SQLite/Drizzle, the unified draft/active/merged model, every derivation rule |
 | `ArtifactStore` | `save`, `harvest(worktree, declarations)`, `list(card)`, serve-path resolution | atomic/versioned files, metadata, containment, manifest regeneration, lineage, rounds, supersession |
 | `ExecutionEngine` | `enqueue(card, step)` + run events; `startPreview(card, gitSha)` / `stopPreview()` | `AgentRunner` (today: `@cursor/sdk` local), `WorktreeManager`, per-run worktrees/finalization, branch strategy, sequential queue, host-process preview lifecycle, blocker checks, restart recovery, eval-skill sequencing |
-| `AcpBridge` | `openSession(skillPrompt)` → `UIMessage` stream | spawning `agent acp`, ACP→`UIMessage` projection, permission responses, JSON-RPC piping, disconnect/summary handling |
+| `AcpBridge` | `openSession(skillPrompt)` → `UIMessage` stream; session registry acquire/reattach | spawning `agent acp`, ACP→`UIMessage` projection, permission responses, JSON-RPC piping, warm session registry (cap + eviction), disconnect/hand-off close |
 
 ### The slice sequence
 
@@ -59,6 +59,15 @@ blocker relationship can be built in parallel or reordered.
    chat; conversation summary saved as a `UIMessage[]` artifact on hand-off. *Demo: a
    `/grill-with-docs` session from the phone.* (Blocked by 1 only — independent of 3–4, can
    run in parallel.)
+
+   **5E — Warm ACP session registry** (after 5C/5D): detach ACP lifetime from the WebSocket.
+   A server-side registry keyed by `(cardId, stepKey, round)` keeps up to **5** live bridges.
+   Leaving Grill detaches the subscriber but does not kill an in-flight turn; reopening
+   reattaches and catches mid-stream chunks. Cap eviction: longest-inactive idle session
+   first; if all five are `ai-working`, wait until the longest-running turn finishes and its
+   transcript is persisted, then evict. Permission with no attached client → `needs-user`.
+   Hand-off / step completion closes the registry entry. No warm process pool (defer until
+   cold start is still annoying). Applies to Grill now and future ACP chat steps later.
 
    **Grill → Spec hand-off summary prompt:**
 ```

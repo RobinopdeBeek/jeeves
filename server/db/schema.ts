@@ -93,6 +93,7 @@ export const artifactKinds = [
   "screenshot",
   "runlog",
   "attachment",
+  "transcript",
 ] as const;
 
 export const artifacts = sqliteTable("artifacts", {

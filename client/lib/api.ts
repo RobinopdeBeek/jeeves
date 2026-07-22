@@ -94,6 +94,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ path }),
     }),
+  createSpec: (id: string) =>
+    request<Card>(`/api/cards/${id}/create-spec`, { method: "POST" }),
   deleteCard: (id: string) =>
     request<{ ok: boolean }>(`/api/cards/${id}`, { method: "DELETE" }),
   listRuns: (cardId: string) => request<Run[]>(`/api/cards/${cardId}/runs`),

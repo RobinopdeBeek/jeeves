@@ -1,8 +1,9 @@
-import { serve } from "@hono/node-server";
+import { serve, upgradeWebSocket } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { WebSocketServer } from "ws";
 import { ArtifactStore } from "./artifacts/store.js";
 import { CardStore } from "./cards/store.js";
 import { openDb } from "./db/index.js";
@@ -12,10 +13,14 @@ import { ExecutionEngine } from "./execution/engine.js";
 import { EventBus } from "./execution/events.js";
 import { RunStore } from "./execution/run-store.js";
 import { WorktreeManager } from "./execution/worktree-manager.js";
+import { isStepKey } from "./pipelines.js";
 import { cardRoutes } from "./routes/cards.js";
 import { eventRoutes } from "./routes/events.js";
 import { artifactRoutes } from "./routes/artifacts.js";
 import { runRoutes } from "./routes/runs.js";
+import { ChatSessionRegistry } from "./ws/session-registry.js";
+import { spawnAcp } from "./ws/acp-process.js";
+import { ChatConnection } from "./ws/attach.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 try {
@@ -48,23 +53,84 @@ const engine = new ExecutionEngine({
   repoRoot: rootDir,
 });
 
+const chatSessions = new ChatSessionRegistry();
+const chatDeps = {
+  store,
+  artifacts,
+  events,
+  spawn: spawnAcp,
+  promptsRoot: path.join(rootDir, "prompts"),
+  sessions: chatSessions,
+};
+
 const app = new Hono();
 
 app.get("/api/project", (c) => c.json(project));
-app.route("/api/cards", cardRoutes(store, project, { engine, runs, events, artifacts }));
+app.route(
+  "/api/cards",
+  cardRoutes(store, project, {
+    engine,
+    runs,
+    events,
+    artifacts,
+    sessions: chatSessions,
+  }),
+);
 app.route("/api/runs", runRoutes(runs));
 app.route("/api/events", eventRoutes(events));
+
+app.get(
+  "/ws/chat",
+  upgradeWebSocket((c) => {
+    const cardId = c.req.query("cardId");
+    const stepKey = c.req.query("stepKey");
+    const round = Number(c.req.query("round") ?? "0");
+    if (!cardId || !isStepKey(stepKey) || Number.isNaN(round)) {
+      return {
+        onOpen(_event, ws) {
+          ws.send(JSON.stringify({ type: "error", error: "cardId, stepKey, and round required" }));
+          ws.close();
+        },
+      };
+    }
+
+    let connection: ChatConnection | null = null;
+    return {
+      onOpen(_event, ws) {
+        connection = new ChatConnection(ws, { cardId, stepKey, round }, chatDeps);
+        void connection.start();
+      },
+      onMessage(event, _ws) {
+        const data = typeof event.data === "string" ? event.data : String(event.data);
+        void connection?.onClientMessage(data);
+      },
+      onClose() {
+        connection?.close();
+        connection = null;
+      },
+    };
+  }),
+);
 
 // Production client build. serveStatic roots are relative to the process
 // cwd, so run the server from the repo root (npm start does).
 app.use("/*", serveStatic({ root: "./client/dist" }));
 app.get("*", serveStatic({ path: "./client/dist/index.html" }));
 
-const server = serve({ fetch: app.fetch, port, hostname: "0.0.0.0" }, (info) => {
-  console.log(`jeeves board on http://0.0.0.0:${info.port} (project: ${project.name})`);
-  // Boot hooks after listen: orphan recovery first, then queued-step scan.
-  engine.boot();
-});
+const wss = new WebSocketServer({ noServer: true });
+const server = serve(
+  {
+    fetch: app.fetch,
+    port,
+    hostname: "0.0.0.0",
+    websocket: { server: wss },
+  },
+  (info) => {
+    console.log(`jeeves board on http://0.0.0.0:${info.port} (project: ${project.name})`);
+    // Boot hooks after listen: orphan recovery first, then queued-step scan.
+    engine.boot();
+  },
+);
 
 let shuttingDown = false;
 async function shutdown(signal: string) {

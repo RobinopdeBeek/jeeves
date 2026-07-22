@@ -81,10 +81,10 @@ File-shaped artifacts for a card, under `<repo>/.jeeves/data/cards/<cardId>/<rou
 _Avoid_: Jeeves app `data/` (retired layout)
 
 **Exchange file**:
-A short-lived file an agent writes under `<worktree>/.jeeves/` during a run (e.g. `plan.md`, `to-tasks.json`). Harvest copies it into the project store and removes it from the worktree. Not the same as the durable project store at `<repo>/.jeeves/`.
+A short-lived file an agent writes for the host to harvest into a durable artifact — never the final artifact destination. Execution runs write under `<worktree>/.jeeves/` (e.g. `plan.md`, `to-tasks.json`); AI Chat synthesis (e.g. Spec) writes under the project store's exchange area (e.g. `<repo>/.jeeves/exchange/<cardId>/spec.md`). Not the durable artifact tree under `<repo>/.jeeves/data/`.
 
 **Harvest**:
-The runner copying worktree-produced **exchange files** from the host worktree path into the project store's artifact folder (and notifications into the database) before worktree teardown. Exchange files are removed from the worktree after a successful harvest.
+Copying an **exchange file** into the project store's artifact folder (and notifications into the database), then removing the exchange file. Happens before worktree teardown for execution runs, and after a completed ACP turn or headless synthesis for AI Chat document writes.
 
 **Fan-out**:
 Activating a feature's draft tasks into child cards on the board.

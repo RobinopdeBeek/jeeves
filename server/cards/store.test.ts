@@ -172,4 +172,52 @@ describe("CardStore", () => {
       { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-execution", column: "define" },
     ]);
   });
+
+  describe("handOffGrillToSpec", () => {
+    function featureInGrill(): string {
+      const card = store.createCard(projectId);
+      store.updateCard(card.id, { title: "Workout streaks" });
+      return store.decideKind(card.id, "feature").id;
+    }
+
+    it("marks grill done and promotes spec to needs-user", () => {
+      const id = featureInGrill();
+      const handed = store.handOffGrillToSpec(id);
+      expect(handed.steps.find((s) => s.key === "grill")?.status).toBe("done");
+      expect(handed.steps.find((s) => s.key === "spec")?.status).toBe("needs-user");
+      expect(handed.steps.find((s) => s.key === "tasks")?.status).toBe("pending");
+      expect(handed.column).toBe("define");
+    });
+
+    it("rejects missing card with 404", () => {
+      expect(() => store.handOffGrillToSpec("missing")).toThrow(
+        expect.objectContaining({ status: 404 }),
+      );
+    });
+
+    it("rejects when grill is ai-working with 409", () => {
+      const id = featureInGrill();
+      store.setStepStatus(id, "grill", "ai-working");
+      expect(() => store.handOffGrillToSpec(id)).toThrow(
+        expect.objectContaining({ status: 409 }),
+      );
+    });
+
+    it("rejects when grill is already done with 409", () => {
+      const id = featureInGrill();
+      store.handOffGrillToSpec(id);
+      expect(() => store.handOffGrillToSpec(id)).toThrow(
+        expect.objectContaining({ status: 409 }),
+      );
+    });
+
+    it("rejects standalone task cards with 409", () => {
+      const card = store.createCard(projectId);
+      store.updateCard(card.id, { title: "Rest timer" });
+      const id = store.decideKind(card.id, "standalone").id;
+      expect(() => store.handOffGrillToSpec(id)).toThrow(
+        expect.objectContaining({ status: 409 }),
+      );
+    });
+  });
 });

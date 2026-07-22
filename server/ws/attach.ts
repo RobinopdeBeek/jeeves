@@ -4,11 +4,13 @@ import path from "node:path";
 import type { ArtifactStore } from "../artifacts/store.js";
 import type { CardStore } from "../cards/store.js";
 import type { EventBus } from "../execution/events.js";
-import { AcpBridge, type SpawnAcp } from "./chat.js";
+import type { SpawnAcp } from "./chat.js";
 import { buildGrillOpeningPrompt } from "./grill-prompt.js";
 import {
   ChatSessionRegistry,
+  type ChunkSubscriber,
   type SessionKey,
+  type WarmSessionHandle,
 } from "./session-registry.js";
 
 export type { SessionKey };
@@ -18,9 +20,9 @@ export type WsClientMessage =
   | { type: "permission-response"; requestId: string; optionId: string };
 
 export type WsServerMessage =
-  | { type: "ready"; messages: UIMessage[] }
+  | { type: "ready"; messages: UIMessage[]; streaming?: boolean }
   /** ACP handshake finished — client may send user turns. */
-  | { type: "session"; status: "open" }
+  | { type: "session"; status: "open"; streaming?: boolean }
   | { type: "chunk"; chunk: UIMessageChunk }
   | { type: "status"; status: "ai-working" | "needs-user" }
   | { type: "displaced"; reason: string }
@@ -32,19 +34,23 @@ export interface ChatWsDeps {
   events: EventBus;
   spawn: SpawnAcp;
   promptsRoot: string;
-  /** Shared across sockets — last connection wins per session key. */
+  /** Shared across sockets — last connection wins per session key; owns warm bridges. */
   sessions: ChatSessionRegistry;
 }
 
 /**
- * One WebSocket ↔ AcpBridge binding for a card step.
- * Outbound payloads are AI SDK types only (ADR 0008).
+ * WebSocket subscriber for a warm ACP session.
+ * Outbound payloads are AI SDK types only (ADR 0008). Detach on close does not
+ * kill the bridge — the registry owns lifetime (issue #24).
  */
 export class ChatConnection {
-  private bridge: AcpBridge | null = null;
+  private handle: WarmSessionHandle | null = null;
   private closed = false;
   private sending = false;
   private displaced = false;
+  private readonly subscriber: ChunkSubscriber = {
+    onChunk: (chunk) => this.send({ type: "chunk", chunk }),
+  };
 
   constructor(
     private readonly ws: WSContext,
@@ -74,42 +80,50 @@ export class ChatConnection {
       this.deps.promptsRoot,
     );
 
-    this.bridge = new AcpBridge({
-      spawn: this.deps.spawn,
-      onStatus: (status) => {
-        const updated = this.deps.store.setStepStatus(
-          this.key.cardId,
-          this.key.stepKey,
-          status,
-        );
-        this.deps.events.emit({ type: "card.updated", card: updated });
-        this.send({ type: "status", status });
-      },
-      onTranscript: (messages) => {
-        this.deps.artifacts.upsertTranscript(
-          this.key.cardId,
-          this.key.stepKey,
-          this.key.round,
-          messages,
-        );
-      },
-    });
-
     // Transcript first so the client can paint history while `agent acp`
-    // cold-starts (often 1–3s). Send stays gated on `session` below.
-    this.send({ type: "ready", messages: history });
-
+    // cold-starts (or while we reattach to a warm session).
+    this.send({
+      type: "ready",
+      messages: history,
+      streaming: this.deps.sessions.isAiWorking(this.key),
+    });
     if (this.closed) return;
 
     try {
-      const opening = await this.bridge.openSession({
+      this.handle = await this.deps.sessions.acquire(this.key, {
+        spawn: this.deps.spawn,
         cwd,
         openingPrompt,
         history,
+        onStatus: (status) => {
+          const updated = this.deps.store.setStepStatus(
+            this.key.cardId,
+            this.key.stepKey,
+            status,
+          );
+          this.deps.events.emit({ type: "card.updated", card: updated });
+          this.send({ type: "status", status });
+        },
+        onTranscript: (messages) => {
+          this.deps.artifacts.upsertTranscript(
+            this.key.cardId,
+            this.key.stepKey,
+            this.key.round,
+            messages,
+          );
+        },
       });
-      if (this.closed) return;
-      this.send({ type: "session", status: "open" });
-      await this.forwardChunks(opening);
+      if (this.closed) {
+        // Detached while acquiring — leave the warm session in the registry.
+        return;
+      }
+
+      this.handle.attach(this.subscriber);
+      this.send({
+        type: "session",
+        status: "open",
+        streaming: this.deps.sessions.isAiWorking(this.key),
+      });
     } catch (err) {
       if (this.closed) return;
       this.send({
@@ -120,7 +134,7 @@ export class ChatConnection {
   }
 
   async onClientMessage(raw: string): Promise<void> {
-    if (!this.bridge || this.closed) return;
+    if (!this.handle || this.closed) return;
 
     let msg: WsClientMessage;
     try {
@@ -136,7 +150,7 @@ export class ChatConnection {
         return;
       }
       try {
-        this.bridge.respondToPermission(msg.requestId, msg.optionId);
+        this.handle.respondToPermission(msg.requestId, msg.optionId);
       } catch (err) {
         this.send({
           type: "error",
@@ -154,8 +168,7 @@ export class ChatConnection {
 
     this.sending = true;
     try {
-      const stream = await this.bridge.sendMessage(msg.text.trim());
-      await this.forwardChunks(stream);
+      await this.handle.sendMessage(msg.text.trim());
     } catch (err) {
       this.send({
         type: "error",
@@ -167,8 +180,8 @@ export class ChatConnection {
   }
 
   /**
-   * Last-connection-wins: notify the client, tear down the ACP session, and
-   * close the socket. Does not release the registry slot (the new owner claimed it).
+   * Last-connection-wins: notify the client and close the socket. Detaches the
+   * subscriber but keeps the warm bridge for the new claimer (issue #24).
    */
   displace(reason: string): void {
     if (this.closed || this.displaced) return;
@@ -189,17 +202,10 @@ export class ChatConnection {
   private shutdown(opts: { releaseSlot: boolean }): void {
     if (this.closed) return;
     this.closed = true;
-    this.bridge?.close();
-    this.bridge = null;
+    this.handle?.detach(this.subscriber);
+    this.handle = null;
     if (opts.releaseSlot) {
       this.deps.sessions.release(this.key, this);
-    }
-  }
-
-  private async forwardChunks(stream: AsyncIterable<UIMessageChunk>): Promise<void> {
-    for await (const chunk of stream) {
-      if (this.closed) break;
-      this.send({ type: "chunk", chunk });
     }
   }
 

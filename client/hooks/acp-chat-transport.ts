@@ -17,8 +17,8 @@ export type PermissionRequestData = {
 };
 
 type WsServerMessage =
-  | { type: "ready"; messages: UIMessage[] }
-  | { type: "session"; status: "open" }
+  | { type: "ready"; messages: UIMessage[]; streaming?: boolean }
+  | { type: "session"; status: "open"; streaming?: boolean }
   | { type: "chunk"; chunk: UIMessageChunk }
   | { type: "status"; status: "ai-working" | "needs-user" }
   | { type: "displaced"; reason: string }
@@ -246,8 +246,9 @@ export class AcpChatTransport {
         this.resolveReady?.(msg.messages);
         this.resolveReady = null;
         this.rejectReady = null;
-        // Empty history ⇒ server will stream an opening turn; non-empty ⇒ done.
-        if (msg.messages.length > 0) {
+        // Empty history ⇒ server will stream an opening turn.
+        // Non-empty history ⇒ opening is done unless warm reattach is mid-stream.
+        if (msg.messages.length > 0 && !msg.streaming) {
           this.markOpeningDone();
         }
         break;
@@ -257,6 +258,10 @@ export class AcpChatTransport {
           this.resolveSession?.();
           this.resolveSession = null;
           this.rejectSession = null;
+          // Authoritative: turn may have finished between ready and attach.
+          if (!msg.streaming) {
+            this.markOpeningDone();
+          }
         }
         break;
       case "chunk":

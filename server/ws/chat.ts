@@ -13,6 +13,8 @@ export type SpawnAcp = (cwd: string) => AcpProcess | Promise<AcpProcess>;
 export interface AcpBridgeCallbacks {
   onStatus?: (status: "ai-working" | "needs-user") => void;
   onTranscript?: (messages: UIMessage[]) => void;
+  /** Fires synchronously for every projected chunk (warm-registry catch-up). */
+  onChunk?: (chunk: UIMessageChunk) => void;
 }
 
 export interface OpenSessionOptions {
@@ -253,6 +255,7 @@ export class AcpBridge {
   }
 
   private pushChunk(chunk: UIMessageChunk | null): void {
+    if (chunk) this.deps.onChunk?.(chunk);
     this.chunkPush?.(chunk);
   }
 

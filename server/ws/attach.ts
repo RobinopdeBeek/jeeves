@@ -12,6 +12,8 @@ export type WsClientMessage = { type: "user-message"; text: string };
 
 export type WsServerMessage =
   | { type: "ready"; messages: UIMessage[] }
+  /** ACP handshake finished — client may send user turns. */
+  | { type: "session"; status: "open" }
   | { type: "chunk"; chunk: UIMessageChunk }
   | { type: "status"; status: "ai-working" | "needs-user" }
   | { type: "error"; error: string };
@@ -85,15 +87,17 @@ export class ChatConnection {
       },
     });
 
+    // Transcript first so the client can paint history while `agent acp`
+    // cold-starts (often 1–3s). Send stays gated on `session` below.
+    this.send({ type: "ready", messages: history });
+
     try {
-      // Spawn + handshake before `ready` so a missing `agent` CLI fails the
-      // client connect() instead of hanging on "Starting grill session…".
       const opening = await this.bridge.openSession({
         cwd,
         openingPrompt,
         history,
       });
-      this.send({ type: "ready", messages: history });
+      this.send({ type: "session", status: "open" });
       await this.forwardChunks(opening);
     } catch (err) {
       this.send({

@@ -12,7 +12,13 @@ export interface UseAcpChatOptions {
 
 export type AcpChatState =
   | { status: "connecting" }
-  | { status: "ready"; transport: AcpChatTransport; messages: UIMessage[] }
+  | {
+      status: "ready";
+      transport: AcpChatTransport;
+      messages: UIMessage[];
+      /** ACP handshake done — composer send is allowed. */
+      sessionOpen: boolean;
+    }
   | { status: "error"; error: string };
 
 /**
@@ -38,9 +44,28 @@ export function useAcpChat({
       void transport
         .connect()
         .then((history) => {
-          if (!cancelled) {
-            setState({ status: "ready", transport, messages: history });
-          }
+          if (cancelled) return;
+          setState({
+            status: "ready",
+            transport,
+            messages: history,
+            sessionOpen: transport.isSessionOpen(),
+          });
+          void transport
+            .whenSessionOpen()
+            .then(() => {
+              if (cancelled) return;
+              setState((prev) =>
+                prev.status === "ready" ? { ...prev, sessionOpen: true } : prev,
+              );
+            })
+            .catch((err: unknown) => {
+              if (cancelled) return;
+              setState({
+                status: "error",
+                error: err instanceof Error ? err.message : String(err),
+              });
+            });
         })
         .catch((err: unknown) => {
           if (!cancelled) {

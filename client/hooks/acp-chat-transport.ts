@@ -2,6 +2,7 @@ import type { ChatTransport, UIMessage, UIMessageChunk } from "ai";
 
 type WsServerMessage =
   | { type: "ready"; messages: UIMessage[] }
+  | { type: "session"; status: "open" }
   | { type: "chunk"; chunk: UIMessageChunk }
   | { type: "status"; status: "ai-working" | "needs-user" }
   | { type: "error"; error: string };
@@ -22,6 +23,11 @@ export class AcpChatTransport {
   private resolveReady: ((messages: UIMessage[]) => void) | null = null;
   private rejectReady: ((err: Error) => void) | null = null;
 
+  private session: Promise<void> | null = null;
+  private resolveSession: (() => void) | null = null;
+  private rejectSession: ((err: Error) => void) | null = null;
+  private sessionOpen = false;
+
   /** Chunks for the eager opening turn, buffered until reconnectToStream reads them. */
   private openingBuffer: UIMessageChunk[] = [];
   private openingDone = false;
@@ -34,6 +40,23 @@ export class AcpChatTransport {
 
   constructor(private readonly options: AcpChatTransportOptions) {}
 
+  /** True once the ACP session handshake finished (send is allowed). */
+  isSessionOpen(): boolean {
+    return this.sessionOpen;
+  }
+
+  /** Resolves when the server signals the ACP session is ready for user turns. */
+  whenSessionOpen(): Promise<void> {
+    if (this.sessionOpen) return Promise.resolve();
+    if (!this.session) {
+      this.session = new Promise<void>((resolve, reject) => {
+        this.resolveSession = resolve;
+        this.rejectSession = reject;
+      });
+    }
+    return this.session;
+  }
+
   /** Ensures the socket is up and returns the server's ready history. */
   async connect(): Promise<UIMessage[]> {
     if (this.ready) return this.ready;
@@ -42,6 +65,12 @@ export class AcpChatTransport {
       this.resolveReady = resolve;
       this.rejectReady = reject;
     });
+    if (!this.session) {
+      this.session = new Promise<void>((resolve, reject) => {
+        this.resolveSession = resolve;
+        this.rejectSession = reject;
+      });
+    }
 
     const round = this.options.round ?? 0;
     const qs = new URLSearchParams({
@@ -59,14 +88,10 @@ export class AcpChatTransport {
       this.handleServerMessage(String(event.data));
     };
     socket.onerror = () => {
-      this.rejectReady?.(new Error("WebSocket error"));
-      this.openingController?.error(new Error("WebSocket error"));
-      this.replyController?.error(new Error("WebSocket error"));
+      this.failConnect(new Error("WebSocket error"));
     };
     socket.onclose = () => {
-      this.rejectReady?.(new Error("WebSocket closed before grill session was ready"));
-      this.resolveReady = null;
-      this.rejectReady = null;
+      this.failConnect(new Error("WebSocket closed before grill session was ready"));
       this.markOpeningDone();
       this.replyController?.close();
       this.replyController = null;
@@ -82,6 +107,7 @@ export class AcpChatTransport {
     ReadableStream<UIMessageChunk>
   > {
     await this.connect();
+    await this.whenSessionOpen();
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
     const text = lastUser
       ? lastUser.parts
@@ -143,6 +169,8 @@ export class AcpChatTransport {
     socket.onclose = null;
     this.resolveReady = null;
     this.rejectReady = null;
+    this.resolveSession = null;
+    this.rejectSession = null;
 
     if (socket.readyState === WebSocket.CONNECTING) {
       // Closing while CONNECTING triggers Chrome's "closed before the
@@ -153,6 +181,19 @@ export class AcpChatTransport {
     if (socket.readyState === WebSocket.OPEN) {
       socket.close();
     }
+  }
+
+  private failConnect(err: Error): void {
+    this.rejectReady?.(err);
+    this.rejectSession?.(err);
+    this.resolveReady = null;
+    this.rejectReady = null;
+    this.resolveSession = null;
+    this.rejectSession = null;
+    this.openingController?.error(err);
+    this.replyController?.error(err);
+    this.openingController = null;
+    this.replyController = null;
   }
 
   private handleServerMessage(raw: string): void {
@@ -171,6 +212,14 @@ export class AcpChatTransport {
         // Empty history ⇒ server will stream an opening turn; non-empty ⇒ done.
         if (msg.messages.length > 0) {
           this.markOpeningDone();
+        }
+        break;
+      case "session":
+        if (msg.status === "open") {
+          this.sessionOpen = true;
+          this.resolveSession?.();
+          this.resolveSession = null;
+          this.rejectSession = null;
         }
         break;
       case "chunk":
@@ -193,11 +242,7 @@ export class AcpChatTransport {
         }
         break;
       case "error":
-        this.rejectReady?.(new Error(msg.error));
-        this.openingController?.error(new Error(msg.error));
-        this.replyController?.error(new Error(msg.error));
-        this.openingController = null;
-        this.replyController = null;
+        this.failConnect(new Error(msg.error));
         this.markOpeningDone();
         break;
       case "status":

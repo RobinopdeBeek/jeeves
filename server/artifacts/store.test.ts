@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { UIMessage } from "ai";
 import { CardStore } from "../cards/store.js";
 import { openDb, type Db } from "../db/index.js";
 import { ArtifactStore, ArtifactStoreError } from "./store.js";
@@ -139,11 +140,11 @@ describe("ArtifactStore", () => {
     fs.rmSync(workspace, { recursive: true, force: true });
   });
 
-  const sampleTranscript = [
-    { id: "msg-1", role: "user" as const, parts: [{ type: "text", text: "What should we build?" }] },
+  const sampleTranscript: UIMessage[] = [
+    { id: "msg-1", role: "user", parts: [{ type: "text", text: "What should we build?" }] },
     {
       id: "msg-2",
-      role: "assistant" as const,
+      role: "assistant",
       parts: [{ type: "text", text: "Let's start with the domain model." }],
     },
   ];
@@ -164,9 +165,9 @@ describe("ArtifactStore", () => {
     });
     expect(first.path).toBe(`cards/${cardId}/0/transcript/transcript.json`);
 
-    const updatedTranscript = [
+    const updatedTranscript: UIMessage[] = [
       ...sampleTranscript,
-      { id: "msg-3", role: "user" as const, parts: [{ type: "text", text: "Sounds good." }] },
+      { id: "msg-3", role: "user", parts: [{ type: "text", text: "Sounds good." }] },
     ];
     const second = artifacts.upsertTranscript(cardId, "grill", 0, updatedTranscript);
 

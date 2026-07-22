@@ -1,7 +1,8 @@
-import { and, desc, eq } from "drizzle-orm";
+import { nanoid } from "nanoid";
+import type { UIMessage } from "ai";
 import fs from "node:fs";
 import path from "node:path";
-import { nanoid } from "nanoid";
+import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import {
   artifacts,
@@ -11,12 +12,7 @@ import {
 } from "../db/schema.js";
 import type { StepKey } from "../pipelines.js";
 
-/** Matches AI SDK `UIMessage` shape; swap for `import type { UIMessage } from "ai"` in slice 5B. */
-export interface UIMessage {
-  id: string;
-  role: "user" | "assistant" | "system";
-  parts: unknown[];
-}
+export type { UIMessage };
 
 const TRANSCRIPT_FILE_ID = "transcript";
 

@@ -1,28 +1,85 @@
-import { IconPaperclip } from "@tabler/icons-react";
+import {
+  AuiIf,
+  ComposerPrimitive,
+  MessagePrimitive,
+  ThreadPrimitive,
+} from "@assistant-ui/react";
+import { IconPaperclip, IconSend } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { AcpChatProvider, useAcpChat } from "@/hooks/useAcpChat";
 import type { StepPanelProps } from "./step-panel-types";
 
-/** Grill tab layout — message area + composer chrome; live AI arrives in slice 5. */
-export function StepGrill(_props: StepPanelProps) {
-  return (
-    <div className="flex flex-1 flex-col overflow-hidden rounded-lg border">
-      <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-4">
-        <p className="text-sm text-muted-foreground">
-          Grill chat will appear here. Start a session in a later slice.
-        </p>
+/** Grill tab — assistant-ui thread + composer over AcpBridge WebSocket. */
+export function StepGrill({ card }: StepPanelProps) {
+  const chat = useAcpChat({ cardId: card.id, stepKey: "grill", round: 0 });
+
+  if (!chat) {
+    return (
+      <div className="flex flex-1 items-center justify-center p-4">
+        <p className="text-muted-foreground">Starting grill session…</p>
       </div>
+    );
+  }
+
+  return (
+    <AcpChatProvider transport={chat.transport} messages={chat.messages}>
+      <GrillThread />
+    </AcpChatProvider>
+  );
+}
+
+function GrillThread() {
+  return (
+    <ThreadPrimitive.Root className="flex flex-1 flex-col overflow-hidden">
+      <ThreadPrimitive.Viewport className="flex flex-1 flex-col gap-3 overflow-y-auto p-4">
+        <AuiIf condition={(s) => s.thread.isEmpty}>
+          <p className="text-muted-foreground">Waiting for the agent…</p>
+        </AuiIf>
+
+        <ThreadPrimitive.Messages>
+          {({ message }) =>
+            message.role === "user" ? <UserMessage /> : <AssistantMessage />
+          }
+        </ThreadPrimitive.Messages>
+      </ThreadPrimitive.Viewport>
+
       <div className="flex items-end gap-2 border-t p-3">
         <Button variant="ghost" size="icon-sm" disabled title="Attach files">
           <IconPaperclip />
         </Button>
-        <Textarea
-          rows={1}
-          disabled
-          placeholder="Message…"
-          className="min-h-9 resize-none"
-        />
+        <ComposerPrimitive.Root className="flex flex-1 items-end gap-2">
+          <ComposerPrimitive.Input
+            rows={1}
+            placeholder="Message…"
+            className="min-h-9 flex-1 resize-none"
+          />
+          <ComposerPrimitive.Send asChild>
+            <Button size="icon-sm" title="Send">
+              <IconSend />
+            </Button>
+          </ComposerPrimitive.Send>
+        </ComposerPrimitive.Root>
       </div>
-    </div>
+    </ThreadPrimitive.Root>
+  );
+}
+
+function UserMessage() {
+  return (
+    <MessagePrimitive.Root className="flex justify-end">
+      <div className="max-w-[85%]">
+        <MessagePrimitive.Parts />
+      </div>
+    </MessagePrimitive.Root>
+  );
+}
+
+function AssistantMessage() {
+  return (
+    <MessagePrimitive.Root className="flex justify-start">
+      <div className="max-w-[85%]">
+        <MessagePrimitive.Parts />
+      </div>
+    </MessagePrimitive.Root>
   );
 }

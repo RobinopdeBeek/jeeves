@@ -41,4 +41,16 @@ export class ChatSessionRegistry {
       this.active.delete(id);
     }
   }
+
+  /**
+   * Tear down a live writer without a replacement (e.g. grill → spec hand-off).
+   * Displaces the connection so the client sees a reason, then clears the slot.
+   */
+  close(key: SessionKey, reason: string): void {
+    const id = sessionKeyString(key);
+    const conn = this.active.get(id);
+    if (!conn) return;
+    conn.displace(reason);
+    this.active.delete(id);
+  }
 }

@@ -6,6 +6,7 @@ import type { ExecutionEngine } from "../execution/engine.js";
 import type { EventBus } from "../execution/events.js";
 import type { RunStore } from "../execution/run-store.js";
 import type { ArtifactStore } from "../artifacts/store.js";
+import type { ChatSessionRegistry } from "../ws/session-registry.js";
 import { artifactRoutes } from "./artifacts.js";
 
 function isKindPath(value: unknown): value is KindPath {
@@ -17,6 +18,7 @@ export interface CardRouteDeps {
   runs: RunStore;
   events: EventBus;
   artifacts: ArtifactStore;
+  sessions: ChatSessionRegistry;
 }
 
 /** Thin HTTP adapter over the CardStore seam. */
@@ -56,6 +58,26 @@ export function cardRoutes(
       if (card.steps.some((s) => s.key === "plan" && s.status === "queued")) {
         deps.engine.enqueue(card.id, "plan");
       }
+      return c.json(card);
+    } catch (e) {
+      if (e instanceof CardStoreError) {
+        return c.json({ error: e.message }, e.status as 400 | 404 | 409);
+      }
+      throw e;
+    }
+  });
+
+  app.post("/:id/create-spec", (c) => {
+    const cardId = c.req.param("id");
+    try {
+      // Validate before tearing down ACP so a 409 leaves the session intact.
+      store.assertGrillToSpecHandOff(cardId);
+      deps.sessions.close(
+        { cardId, stepKey: "grill", round: 0 },
+        "grill handed off to spec",
+      );
+      const card = store.handOffGrillToSpec(cardId);
+      deps.events.emit({ type: "card.updated", card });
       return c.json(card);
     } catch (e) {
       if (e instanceof CardStoreError) {

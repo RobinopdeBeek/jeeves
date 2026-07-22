@@ -18,9 +18,9 @@ import { cardRoutes } from "./routes/cards.js";
 import { eventRoutes } from "./routes/events.js";
 import { artifactRoutes } from "./routes/artifacts.js";
 import { runRoutes } from "./routes/runs.js";
+import { ChatSessionRegistry } from "./ws/session-registry.js";
 import { spawnAcp } from "./ws/acp-process.js";
 import { ChatConnection } from "./ws/attach.js";
-import { ChatSessionRegistry } from "./ws/session-registry.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 try {
@@ -66,7 +66,16 @@ const chatDeps = {
 const app = new Hono();
 
 app.get("/api/project", (c) => c.json(project));
-app.route("/api/cards", cardRoutes(store, project, { engine, runs, events, artifacts }));
+app.route(
+  "/api/cards",
+  cardRoutes(store, project, {
+    engine,
+    runs,
+    events,
+    artifacts,
+    sessions: chatSessions,
+  }),
+);
 app.route("/api/runs", runRoutes(runs));
 app.route("/api/events", eventRoutes(events));
 

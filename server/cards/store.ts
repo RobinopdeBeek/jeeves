@@ -10,6 +10,7 @@ import {
 } from "../db/schema.js";
 import {
   backlogEnrichedSteps,
+  grillToSpecTransition,
   kindDecisionTransition,
   orderEnrichedSteps,
   type EnrichedStep,
@@ -167,6 +168,38 @@ export class CardStore {
     const card = this.getCard(cardId);
     if (!card) throw new CardStoreError(404, "card not found");
     return card;
+  }
+
+  /**
+   * Grill → Spec hand-off: freeze grill as done and open Spec for the user.
+   * Transition rules live in PipelineEngine; this applies them.
+   */
+  handOffGrillToSpec(cardId: string): CardWithSteps {
+    const transition = this.requireGrillToSpecHandOff(cardId);
+    for (const { key, status } of transition.patches) {
+      this.setStepStatus(cardId, key, status);
+    }
+    return this.getCard(cardId)!;
+  }
+
+  /**
+   * Validate hand-off without mutating — routes use this before closing ACP.
+   */
+  assertGrillToSpecHandOff(cardId: string): void {
+    this.requireGrillToSpecHandOff(cardId);
+  }
+
+  private requireGrillToSpecHandOff(cardId: string): {
+    patches: Array<{ key: StepKey; status: StepStatus }>;
+  } {
+    const card = this.getCard(cardId);
+    if (!card) throw new CardStoreError(404, "card not found");
+
+    const transition = grillToSpecTransition(card.steps);
+    if (!transition.ok) {
+      throw new CardStoreError(409, transition.reason);
+    }
+    return transition;
   }
 
   /** Steps waiting for the ExecutionEngine, oldest card first (boot scan). */

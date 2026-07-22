@@ -21,7 +21,16 @@ const TransportContext = createContext<AcpChatTransport | null>(null);
 
 /** Grill tab — assistant-ui thread + composer over AcpBridge WebSocket. */
 export function StepGrill({ card }: StepPanelProps) {
-  const chat = useAcpChat({ cardId: card.id, stepKey: "grill", round: 0 });
+  const grill = card.steps.find((s) => s.key === "grill");
+  if (grill?.status === "done") {
+    return <CompletedGrill cardId={card.id} />;
+  }
+
+  return <LiveGrill cardId={card.id} />;
+}
+
+function LiveGrill({ cardId }: { cardId: string }) {
+  const chat = useAcpChat({ cardId, stepKey: "grill", round: 0 });
 
   if (chat.status === "error") {
     return (
@@ -39,7 +48,7 @@ export function StepGrill({ card }: StepPanelProps) {
   if (chat.status === "displaced") {
     return (
       <DisplacedGrill
-        cardId={card.id}
+        cardId={cardId}
         reason={chat.reason}
         fallbackMessages={chat.messages}
       />
@@ -53,6 +62,18 @@ export function StepGrill({ card }: StepPanelProps) {
         <GrillThread sessionOpen={chat.sessionOpen} />
       </TransportContext.Provider>
     </AcpChatProvider>
+  );
+}
+
+/**
+ * Completed grill (handed off to Spec): frozen transcript replay, no composer,
+ * no live ACP session.
+ */
+function CompletedGrill({ cardId }: { cardId: string }) {
+  return (
+    <div className="flex flex-1 flex-col overflow-hidden">
+      <ReadOnlyTranscript cardId={cardId} fallbackMessages={[]} />
+    </div>
   );
 }
 
@@ -103,11 +124,32 @@ function DisplacedGrill({
   reason: string;
   fallbackMessages: UIMessage[];
 }) {
-  const [messages, setMessages] = useState<UIMessage[]>(fallbackMessages);
   const banner =
     reason === "session continued elsewhere"
       ? "Session continued elsewhere"
       : reason;
+
+  return (
+    <div className="flex flex-1 flex-col overflow-hidden">
+      <div
+        className="border-b bg-muted px-4 py-2 text-center text-sm text-muted-foreground"
+        role="status"
+      >
+        {banner}
+      </div>
+      <ReadOnlyTranscript cardId={cardId} fallbackMessages={fallbackMessages} />
+    </div>
+  );
+}
+
+function ReadOnlyTranscript({
+  cardId,
+  fallbackMessages,
+}: {
+  cardId: string;
+  fallbackMessages: UIMessage[];
+}) {
+  const [messages, setMessages] = useState<UIMessage[]>(fallbackMessages);
 
   useEffect(() => {
     let cancelled = false;
@@ -130,22 +172,14 @@ function DisplacedGrill({
   }, [cardId]);
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden">
-      <div
-        className="border-b bg-muted px-4 py-2 text-center text-sm text-muted-foreground"
-        role="status"
-      >
-        {banner}
-      </div>
-      <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-4">
-        {messages.length === 0 ? (
-          <p className="text-muted-foreground">No transcript yet.</p>
-        ) : (
-          messages.map((message) => (
-            <ReadOnlyMessage key={message.id} message={message} />
-          ))
-        )}
-      </div>
+    <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-4">
+      {messages.length === 0 ? (
+        <p className="text-muted-foreground">No transcript yet.</p>
+      ) : (
+        messages.map((message) => (
+          <ReadOnlyMessage key={message.id} message={message} />
+        ))
+      )}
     </div>
   );
 }

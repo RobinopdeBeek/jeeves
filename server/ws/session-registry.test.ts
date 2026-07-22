@@ -58,4 +58,26 @@ describe("ChatSessionRegistry", () => {
       "c1:grill:0",
     );
   });
+
+  it("close displaces the writer and clears the slot", () => {
+    const registry = new ChatSessionRegistry();
+    const key = { cardId: "card-1", stepKey: "grill" as const, round: 0 };
+    const conn = fakeConn();
+    registry.claim(key, conn);
+
+    registry.close(key, "grill handed off to spec");
+
+    expect(conn.displacedWith).toEqual(["grill handed off to spec"]);
+    expect(registry.get(key)).toBeUndefined();
+  });
+
+  it("close is a no-op when no session is claimed", () => {
+    const registry = new ChatSessionRegistry();
+    expect(() =>
+      registry.close(
+        { cardId: "card-1", stepKey: "grill", round: 0 },
+        "grill handed off to spec",
+      ),
+    ).not.toThrow();
+  });
 });

@@ -27,6 +27,7 @@ export function CardView() {
   const [missing, setMissing] = useState(false);
   const [tabOverride, setTabOverride] = useState<string | null>(null);
   const [deciding, setDeciding] = useState(false);
+  const [creatingSpec, setCreatingSpec] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -69,6 +70,20 @@ export function CardView() {
     }
   }
 
+  async function createSpec() {
+    if (!card) return;
+    setCreatingSpec(true);
+    try {
+      const updated = await api.createSpec(card.id);
+      setCard(updated);
+      setTabOverride(null); // activeTabKey prefers Spec once needs-user
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setCreatingSpec(false);
+    }
+  }
+
   if (missing) {
     return (
       <div className="flex h-dvh flex-col items-center justify-center gap-4">
@@ -90,6 +105,11 @@ export function CardView() {
   const Panel = STEP_PANELS[activeKey];
   const inBacklog = card.column === "backlog";
   const hasTitle = card.title.trim().length > 0;
+  const grillStep = card.steps.find((s) => s.key === "grill");
+  const showCreateSpec =
+    activeKey === "grill" && grillStep !== undefined && grillStep.status !== "done";
+  const createSpecDisabled =
+    creatingSpec || grillStep?.status === "ai-working" || grillStep?.status !== "needs-user";
 
   return (
     <div className="mx-auto flex h-dvh max-w-3xl flex-col">
@@ -156,6 +176,15 @@ export function CardView() {
             </Button>
             <Button disabled={!hasTitle || deciding} onClick={() => decide("feature")}>
               Grill me →
+            </Button>
+          </>
+        )}
+
+        {showCreateSpec && (
+          <>
+            <div className="flex-1" />
+            <Button disabled={createSpecDisabled} onClick={createSpec}>
+              Create Spec →
             </Button>
           </>
         )}

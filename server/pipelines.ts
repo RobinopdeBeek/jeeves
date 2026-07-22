@@ -167,6 +167,35 @@ export function kindDecisionTransition(path: KindPath): {
   };
 }
 
+/**
+ * Grill → Spec hand-off: grill must be needs-user and spec pending.
+ * Returns the status patches to apply, or a rejection reason.
+ */
+export function grillToSpecTransition(
+  steps: Array<{ key: StepKey; status: StepStatus }>,
+):
+  | { ok: true; patches: Array<{ key: StepKey; status: StepStatus }> }
+  | { ok: false; reason: string } {
+  const grill = steps.find((s) => s.key === "grill");
+  const spec = steps.find((s) => s.key === "spec");
+  if (!grill || !spec) {
+    return { ok: false, reason: "grill hand-off requires grill and spec steps" };
+  }
+  if (grill.status !== "needs-user") {
+    return { ok: false, reason: "grill must be needs-user to hand off" };
+  }
+  if (spec.status !== "pending") {
+    return { ok: false, reason: "spec must be pending to receive hand-off" };
+  }
+  return {
+    ok: true,
+    patches: [
+      { key: "grill", status: "done" },
+      { key: "spec", status: "needs-user" },
+    ],
+  };
+}
+
 /** Backlog cards — only the Info step is persisted. */
 export function backlogEnrichedSteps(
   rows: Array<{ stepKey: StepKey; status: StepStatus }>,

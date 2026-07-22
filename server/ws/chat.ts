@@ -22,6 +22,29 @@ export interface OpenSessionOptions {
   history?: UIMessage[];
 }
 
+/** Client-visible permission option projected from ACP (no ACP types leak). */
+export interface PermissionOptionPart {
+  optionId: string;
+  name: string;
+  kind: string;
+}
+
+/** AI SDK `data-permission` payload for inline approve/deny UI. */
+export interface PermissionRequestData {
+  requestId: string;
+  toolCallId?: string;
+  title?: string;
+  options: PermissionOptionPart[];
+  status: "pending" | "resolved";
+  selectedOptionId?: string;
+}
+
+type PermissionPart = {
+  type: "data-permission";
+  id: string;
+  data: PermissionRequestData;
+};
+
 export class AcpBridge {
   private process: AcpProcess | null = null;
   private sessionId: string | null = null;
@@ -30,6 +53,8 @@ export class AcpBridge {
     number,
     { resolve: (value: unknown) => void; reject: (err: unknown) => void }
   >();
+  /** ACP JSON-RPC ids awaiting a user permission choice. */
+  private readonly pendingPermissions = new Map<string, number>();
   private messages: UIMessage[] = [];
   private currentTextId: string | null = null;
   private currentAssistant: UIMessage | null = null;
@@ -41,6 +66,39 @@ export class AcpBridge {
 
   getMessages(): UIMessage[] {
     return this.messages;
+  }
+
+  /** Request ids for open `session/request_permission` calls awaiting the user. */
+  getPendingPermissionIds(): string[] {
+    return [...this.pendingPermissions.keys()];
+  }
+
+  /**
+   * Resolve a projected permission request. Writes the ACP JSON-RPC result and
+   * updates the in-flight `data-permission` part (status → resolved).
+   */
+  respondToPermission(requestId: string, optionId: string): void {
+    const rpcId = this.pendingPermissions.get(requestId);
+    if (rpcId == null) throw new Error(`unknown permission request: ${requestId}`);
+    this.pendingPermissions.delete(requestId);
+
+    this.respond(rpcId, {
+      outcome: { outcome: "selected", optionId },
+    });
+
+    const part = this.findPermissionPart(requestId);
+    if (part) {
+      part.data = {
+        ...part.data,
+        status: "resolved",
+        selectedOptionId: optionId,
+      };
+      this.pushChunk({
+        type: "data-permission",
+        id: requestId,
+        data: part.data,
+      } as UIMessageChunk);
+    }
   }
 
   /**
@@ -82,6 +140,7 @@ export class AcpBridge {
   }
 
   close(): void {
+    this.pendingPermissions.clear();
     this.process?.kill();
     this.process = null;
     this.sessionId = null;
@@ -208,6 +267,8 @@ export class AcpBridge {
           sessionUpdate?: string;
           content?: { type?: string; text?: string };
         };
+        toolCall?: { toolCallId?: string; title?: string };
+        options?: Array<{ optionId?: string; name?: string; kind?: string }>;
       };
     };
     try {
@@ -250,11 +311,79 @@ export class AcpBridge {
     }
 
     if (msg.method === "session/request_permission" && msg.id != null) {
-      // Slice 5B: auto-allow so tools work in demos. Permission UI parts → later slice.
-      this.respond(msg.id, {
-        outcome: { outcome: "selected", optionId: "allow-once" },
-      });
+      this.projectPermissionRequest(msg.id, msg.params);
     }
+  }
+
+  private projectPermissionRequest(
+    rpcId: number,
+    params:
+      | {
+          toolCall?: { toolCallId?: string; title?: string };
+          options?: Array<{ optionId?: string; name?: string; kind?: string }>;
+        }
+      | undefined,
+  ): void {
+    const requestId = String(rpcId);
+    const options: PermissionOptionPart[] = (params?.options ?? [])
+      .filter((o): o is { optionId: string; name: string; kind: string } =>
+        typeof o.optionId === "string" &&
+        typeof o.name === "string" &&
+        typeof o.kind === "string",
+      )
+      .map((o) => ({ optionId: o.optionId, name: o.name, kind: o.kind }));
+
+    const data: PermissionRequestData = {
+      requestId,
+      toolCallId: params?.toolCall?.toolCallId,
+      title: params?.toolCall?.title,
+      options,
+      status: "pending",
+    };
+
+    const part: PermissionPart = {
+      type: "data-permission",
+      id: requestId,
+      data,
+    };
+
+    if (this.currentAssistant) {
+      this.currentAssistant.parts.push(part as UIMessage["parts"][number]);
+    } else {
+      // Permission outside an in-flight turn — still surface as an assistant message.
+      this.currentAssistant = {
+        id: nanoid(10),
+        role: "assistant",
+        parts: [part as UIMessage["parts"][number]],
+      };
+      this.pushChunk({ type: "start", messageId: this.currentAssistant.id });
+    }
+
+    this.pendingPermissions.set(requestId, rpcId);
+    this.pushChunk({
+      type: "data-permission",
+      id: requestId,
+      data,
+    } as UIMessageChunk);
+  }
+
+  private findPermissionPart(requestId: string): PermissionPart | undefined {
+    const fromCurrent = this.currentAssistant?.parts.find(
+      (p): p is PermissionPart =>
+        (p as { type?: string }).type === "data-permission" &&
+        (p as PermissionPart).id === requestId,
+    );
+    if (fromCurrent) return fromCurrent;
+
+    for (const message of this.messages) {
+      const part = message.parts.find(
+        (p): p is PermissionPart =>
+          (p as { type?: string }).type === "data-permission" &&
+          (p as PermissionPart).id === requestId,
+      );
+      if (part) return part;
+    }
+    return undefined;
   }
 
   private rpc(method: string, params: unknown): Promise<unknown> {

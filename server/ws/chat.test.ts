@@ -222,6 +222,152 @@ describe("AcpBridge", () => {
     ).toContain("Pantry expiry alerts");
   });
 
+  it("projects session/request_permission into a data-permission part and round-trips approve/deny", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-perm");
+
+    const bridge = new AcpBridge({
+      spawn: () => process,
+    });
+
+    const streamPromise = bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: "Grill this feature",
+      history: [],
+    });
+    await viWaitFor(() => process.prompts().length === 1);
+
+    const promptReq = process.written.find(
+      (m): m is { id: number; method: string } =>
+        (m as { method?: string }).method === "session/prompt",
+    )!;
+
+    // Agent asks for permission mid-turn (before the prompt RPC resolves).
+    process.emit({
+      jsonrpc: "2.0",
+      id: 99,
+      method: "session/request_permission",
+      params: {
+        sessionId: "sess-perm",
+        toolCall: {
+          toolCallId: "call_read_1",
+          title: "Read file CONTEXT.md",
+        },
+        options: [
+          { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+          { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+        ],
+      },
+    });
+
+    const stream = await streamPromise;
+    await viWaitFor(() => bridge.getPendingPermissionIds().includes("99"));
+
+    bridge.respondToPermission("99", "allow-once");
+
+    const rpcReply = process.written.find(
+      (m): m is { id: number; result: unknown } =>
+        (m as { id?: number; result?: unknown }).id === 99 &&
+        (m as { result?: unknown }).result !== undefined,
+    );
+    expect(rpcReply?.result).toEqual({
+      outcome: { outcome: "selected", optionId: "allow-once" },
+    });
+    expect(bridge.getPendingPermissionIds()).toEqual([]);
+
+    process.emit({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "sess-perm",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "I can read CONTEXT.md." },
+        },
+      },
+    });
+    process.emit({
+      jsonrpc: "2.0",
+      id: promptReq.id,
+      result: { stopReason: "end_turn" },
+    });
+
+    const chunks = await collectChunks(stream);
+    const permChunks = chunks.filter(
+      (c) => typeof c.type === "string" && c.type === "data-permission",
+    );
+    expect(permChunks[0]).toMatchObject({
+      type: "data-permission",
+      id: "99",
+      data: {
+        requestId: "99",
+        toolCallId: "call_read_1",
+        title: "Read file CONTEXT.md",
+        status: "pending",
+        options: [
+          { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+          { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+        ],
+      },
+    });
+    expect(
+      permChunks.find((c) => (c as { data?: { status?: string } }).data?.status === "resolved"),
+    ).toMatchObject({
+      type: "data-permission",
+      id: "99",
+      data: {
+        requestId: "99",
+        status: "resolved",
+        selectedOptionId: "allow-once",
+      },
+    });
+
+    const assistant = bridge.getMessages().find((m) => m.role === "assistant");
+    const part = assistant?.parts.find((p) => p.type === "data-permission") as {
+      data: { status: string; selectedOptionId?: string };
+    };
+    expect(part.data.status).toBe("resolved");
+    expect(part.data.selectedOptionId).toBe("allow-once");
+
+    // Deny path on a follow-up turn.
+    const replyPromise = bridge.sendMessage("Continue");
+    await viWaitFor(() => process.prompts().length === 2);
+    process.emit({
+      jsonrpc: "2.0",
+      id: 100,
+      method: "session/request_permission",
+      params: {
+        sessionId: "sess-perm",
+        toolCall: { toolCallId: "call_2", title: "Write file" },
+        options: [
+          { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+          { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+        ],
+      },
+    });
+    await viWaitFor(() => bridge.getPendingPermissionIds().includes("100"));
+    bridge.respondToPermission("100", "reject-once");
+    const denyReply = process.written.find(
+      (m): m is { id: number; result: unknown } =>
+        (m as { id?: number }).id === 100 &&
+        (m as { result?: unknown }).result !== undefined,
+    );
+    expect(denyReply?.result).toEqual({
+      outcome: { outcome: "selected", optionId: "reject-once" },
+    });
+
+    const prompt2 = process.written.filter(
+      (m): m is { id: number; method: string } =>
+        (m as { method?: string }).method === "session/prompt",
+    )[1]!;
+    process.emit({
+      jsonrpc: "2.0",
+      id: prompt2.id,
+      result: { stopReason: "end_turn" },
+    });
+    await collectChunks(await replyPromise);
+  });
+
   it("persists transcript and flips grill status through bridge callbacks", async () => {
     const { openDb } = await import("../db/index.js");
     const { CardStore } = await import("../cards/store.js");

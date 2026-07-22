@@ -20,6 +20,7 @@ import { artifactRoutes } from "./routes/artifacts.js";
 import { runRoutes } from "./routes/runs.js";
 import { spawnAcp } from "./ws/acp-process.js";
 import { ChatConnection } from "./ws/attach.js";
+import { ChatSessionRegistry } from "./ws/session-registry.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 try {
@@ -52,12 +53,14 @@ const engine = new ExecutionEngine({
   repoRoot: rootDir,
 });
 
+const chatSessions = new ChatSessionRegistry();
 const chatDeps = {
   store,
   artifacts,
   events,
   spawn: spawnAcp,
   promptsRoot: path.join(rootDir, "prompts"),
+  sessions: chatSessions,
 };
 
 const app = new Hono();

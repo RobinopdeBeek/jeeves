@@ -19,6 +19,12 @@ export type AcpChatState =
       /** ACP handshake done — composer send is allowed. */
       sessionOpen: boolean;
     }
+  | {
+      status: "displaced";
+      reason: string;
+      /** Last messages seen on the live socket before displacement (may be stale). */
+      messages: UIMessage[];
+    }
   | { status: "error"; error: string };
 
 /**
@@ -33,7 +39,7 @@ export function useAcpChat({
 
   useEffect(() => {
     let cancelled = false;
-    const transport = new AcpChatTransport({ cardId, stepKey, round });
+    let transport: AcpChatTransport | null = null;
     setState({ status: "connecting" });
 
     // Defer past React Strict Mode's sync mount→cleanup→remount. Opening the
@@ -41,10 +47,25 @@ export function useAcpChat({
     // logs a browser warning and an ECONNRESET on Vite's WS proxy.
     const startId = window.setTimeout(() => {
       if (cancelled) return;
+
+      transport = new AcpChatTransport({
+        cardId,
+        stepKey,
+        round,
+        onDisplaced: (reason) => {
+          if (cancelled) return;
+          setState((prev) => ({
+            status: "displaced",
+            reason,
+            messages: prev.status === "ready" ? prev.messages : [],
+          }));
+        },
+      });
+
       void transport
         .connect()
         .then((history) => {
-          if (cancelled) return;
+          if (cancelled || !transport) return;
           setState({
             status: "ready",
             transport,
@@ -61,17 +82,23 @@ export function useAcpChat({
             })
             .catch((err: unknown) => {
               if (cancelled) return;
-              setState({
-                status: "error",
-                error: err instanceof Error ? err.message : String(err),
+              setState((prev) => {
+                if (prev.status === "displaced") return prev;
+                return {
+                  status: "error",
+                  error: err instanceof Error ? err.message : String(err),
+                };
               });
             });
         })
         .catch((err: unknown) => {
           if (!cancelled) {
-            setState({
-              status: "error",
-              error: err instanceof Error ? err.message : String(err),
+            setState((prev) => {
+              if (prev.status === "displaced") return prev;
+              return {
+                status: "error",
+                error: err instanceof Error ? err.message : String(err),
+              };
             });
           }
         });
@@ -80,7 +107,7 @@ export function useAcpChat({
     return () => {
       cancelled = true;
       window.clearTimeout(startId);
-      transport.close();
+      transport?.close();
     };
   }, [cardId, stepKey, round]);
 

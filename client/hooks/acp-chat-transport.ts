@@ -1,16 +1,34 @@
 import type { ChatTransport, UIMessage, UIMessageChunk } from "ai";
 
+export type PermissionOptionPart = {
+  optionId: string;
+  name: string;
+  kind: string;
+};
+
+/** Matches AcpBridge `data-permission` payload (ADR 0008 — no ACP types). */
+export type PermissionRequestData = {
+  requestId: string;
+  toolCallId?: string;
+  title?: string;
+  options: PermissionOptionPart[];
+  status: "pending" | "resolved";
+  selectedOptionId?: string;
+};
+
 type WsServerMessage =
   | { type: "ready"; messages: UIMessage[] }
   | { type: "session"; status: "open" }
   | { type: "chunk"; chunk: UIMessageChunk }
   | { type: "status"; status: "ai-working" | "needs-user" }
+  | { type: "displaced"; reason: string }
   | { type: "error"; error: string };
 
 export interface AcpChatTransportOptions {
   cardId: string;
   stepKey: string;
   round?: number;
+  onDisplaced?: (reason: string) => void;
 }
 
 /**
@@ -27,6 +45,7 @@ export class AcpChatTransport {
   private resolveSession: (() => void) | null = null;
   private rejectSession: ((err: Error) => void) | null = null;
   private sessionOpen = false;
+  private displaced = false;
 
   /** Chunks for the eager opening turn, buffered until reconnectToStream reads them. */
   private openingBuffer: UIMessageChunk[] = [];
@@ -42,7 +61,7 @@ export class AcpChatTransport {
 
   /** True once the ACP session handshake finished (send is allowed). */
   isSessionOpen(): boolean {
-    return this.sessionOpen;
+    return this.sessionOpen && !this.displaced;
   }
 
   /** Resolves when the server signals the ACP session is ready for user turns. */
@@ -88,9 +107,16 @@ export class AcpChatTransport {
       this.handleServerMessage(String(event.data));
     };
     socket.onerror = () => {
+      if (this.displaced) return;
       this.failConnect(new Error("WebSocket error"));
     };
     socket.onclose = () => {
+      if (this.displaced) {
+        this.markOpeningDone();
+        this.replyController?.close();
+        this.replyController = null;
+        return;
+      }
       this.failConnect(new Error("WebSocket closed before grill session was ready"));
       this.markOpeningDone();
       this.replyController?.close();
@@ -108,6 +134,9 @@ export class AcpChatTransport {
   > {
     await this.connect();
     await this.whenSessionOpen();
+    if (this.displaced) {
+      return new ReadableStream({ start: (c) => c.close() });
+    }
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
     const text = lastUser
       ? lastUser.parts
@@ -131,6 +160,14 @@ export class AcpChatTransport {
 
     this.socket?.send(JSON.stringify({ type: "user-message", text }));
     return stream;
+  }
+
+  /** Approve/deny an inline `data-permission` part via the WebSocket. */
+  respondToPermission(requestId: string, optionId: string): void {
+    if (!this.socket || this.displaced) return;
+    this.socket.send(
+      JSON.stringify({ type: "permission-response", requestId, optionId }),
+    );
   }
 
   /**
@@ -240,6 +277,19 @@ export class AcpChatTransport {
             this.markOpeningDone();
           }
         }
+        break;
+      case "displaced":
+        this.displaced = true;
+        this.sessionOpen = false;
+        this.options.onDisplaced?.(msg.reason);
+        this.markOpeningDone();
+        this.replyController?.close();
+        this.replyController = null;
+        // Drop reject handlers so the ensuing socket close is not an error.
+        this.resolveReady = null;
+        this.rejectReady = null;
+        this.resolveSession = null;
+        this.rejectSession = null;
         break;
       case "error":
         this.failConnect(new Error(msg.error));

@@ -4,11 +4,18 @@ import path from "node:path";
 import type { ArtifactStore } from "../artifacts/store.js";
 import type { CardStore } from "../cards/store.js";
 import type { EventBus } from "../execution/events.js";
-import type { StepKey } from "../pipelines.js";
 import { AcpBridge, type SpawnAcp } from "./chat.js";
 import { buildGrillOpeningPrompt } from "./grill-prompt.js";
+import {
+  ChatSessionRegistry,
+  type SessionKey,
+} from "./session-registry.js";
 
-export type WsClientMessage = { type: "user-message"; text: string };
+export type { SessionKey };
+
+export type WsClientMessage =
+  | { type: "user-message"; text: string }
+  | { type: "permission-response"; requestId: string; optionId: string };
 
 export type WsServerMessage =
   | { type: "ready"; messages: UIMessage[] }
@@ -16,6 +23,7 @@ export type WsServerMessage =
   | { type: "session"; status: "open" }
   | { type: "chunk"; chunk: UIMessageChunk }
   | { type: "status"; status: "ai-working" | "needs-user" }
+  | { type: "displaced"; reason: string }
   | { type: "error"; error: string };
 
 export interface ChatWsDeps {
@@ -24,12 +32,8 @@ export interface ChatWsDeps {
   events: EventBus;
   spawn: SpawnAcp;
   promptsRoot: string;
-}
-
-export interface SessionKey {
-  cardId: string;
-  stepKey: StepKey;
-  round: number;
+  /** Shared across sockets — last connection wins per session key. */
+  sessions: ChatSessionRegistry;
 }
 
 /**
@@ -40,6 +44,7 @@ export class ChatConnection {
   private bridge: AcpBridge | null = null;
   private closed = false;
   private sending = false;
+  private displaced = false;
 
   constructor(
     private readonly ws: WSContext,
@@ -48,6 +53,9 @@ export class ChatConnection {
   ) {}
 
   async start(): Promise<void> {
+    // Claim before ACP cold-start so a racing second tab displaces us cleanly.
+    this.deps.sessions.claim(this.key, this);
+
     const card = this.deps.store.getCard(this.key.cardId);
     if (!card) {
       this.send({ type: "error", error: "card not found" });
@@ -91,15 +99,19 @@ export class ChatConnection {
     // cold-starts (often 1–3s). Send stays gated on `session` below.
     this.send({ type: "ready", messages: history });
 
+    if (this.closed) return;
+
     try {
       const opening = await this.bridge.openSession({
         cwd,
         openingPrompt,
         history,
       });
+      if (this.closed) return;
       this.send({ type: "session", status: "open" });
       await this.forwardChunks(opening);
     } catch (err) {
+      if (this.closed) return;
       this.send({
         type: "error",
         error: err instanceof Error ? err.message : String(err),
@@ -108,7 +120,7 @@ export class ChatConnection {
   }
 
   async onClientMessage(raw: string): Promise<void> {
-    if (!this.bridge || this.closed || this.sending) return;
+    if (!this.bridge || this.closed) return;
 
     let msg: WsClientMessage;
     try {
@@ -117,6 +129,24 @@ export class ChatConnection {
       this.send({ type: "error", error: "invalid message" });
       return;
     }
+
+    if (msg.type === "permission-response") {
+      if (typeof msg.requestId !== "string" || typeof msg.optionId !== "string") {
+        this.send({ type: "error", error: "invalid permission-response" });
+        return;
+      }
+      try {
+        this.bridge.respondToPermission(msg.requestId, msg.optionId);
+      } catch (err) {
+        this.send({
+          type: "error",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
+
+    if (this.sending) return;
     if (msg.type !== "user-message" || typeof msg.text !== "string" || !msg.text.trim()) {
       this.send({ type: "error", error: "unsupported message" });
       return;
@@ -136,11 +166,34 @@ export class ChatConnection {
     }
   }
 
+  /**
+   * Last-connection-wins: notify the client, tear down the ACP session, and
+   * close the socket. Does not release the registry slot (the new owner claimed it).
+   */
+  displace(reason: string): void {
+    if (this.closed || this.displaced) return;
+    this.displaced = true;
+    this.send({ type: "displaced", reason });
+    this.shutdown({ releaseSlot: false });
+    try {
+      this.ws.close();
+    } catch {
+      // already closed
+    }
+  }
+
   close(): void {
+    this.shutdown({ releaseSlot: !this.displaced });
+  }
+
+  private shutdown(opts: { releaseSlot: boolean }): void {
     if (this.closed) return;
     this.closed = true;
     this.bridge?.close();
     this.bridge = null;
+    if (opts.releaseSlot) {
+      this.deps.sessions.release(this.key, this);
+    }
   }
 
   private async forwardChunks(stream: AsyncIterable<UIMessageChunk>): Promise<void> {

@@ -8,7 +8,7 @@ export interface AcpProcess {
   kill(): void;
 }
 
-export type SpawnAcp = (cwd: string) => AcpProcess;
+export type SpawnAcp = (cwd: string) => AcpProcess | Promise<AcpProcess>;
 
 export interface AcpBridgeCallbacks {
   onStatus?: (status: "ai-working" | "needs-user") => void;
@@ -49,7 +49,7 @@ export class AcpBridge {
    */
   async openSession(options: OpenSessionOptions): Promise<AsyncIterable<UIMessageChunk>> {
     this.messages = options.history ? [...options.history] : [];
-    this.process = this.deps.spawn(options.cwd);
+    this.process = await this.deps.spawn(options.cwd);
     this.process.onLine((line) => this.handleLine(line));
 
     await this.rpc("initialize", {

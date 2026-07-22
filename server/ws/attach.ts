@@ -85,14 +85,15 @@ export class ChatConnection {
       },
     });
 
-    this.send({ type: "ready", messages: history });
-
     try {
+      // Spawn + handshake before `ready` so a missing `agent` CLI fails the
+      // client connect() instead of hanging on "Starting grill session…".
       const opening = await this.bridge.openSession({
         cwd,
         openingPrompt,
         history,
       });
+      this.send({ type: "ready", messages: history });
       await this.forwardChunks(opening);
     } catch (err) {
       this.send({

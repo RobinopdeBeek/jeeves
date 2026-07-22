@@ -1,6 +1,6 @@
 import { useChatRuntime } from "@assistant-ui/react-ai-sdk";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { ChatTransport, UIMessage } from "ai";
 import { AcpChatTransport } from "./acp-chat-transport";
 
@@ -10,39 +10,56 @@ export interface UseAcpChatOptions {
   round?: number;
 }
 
-export interface AcpChatReady {
-  transport: AcpChatTransport;
-  messages: UIMessage[];
-}
+export type AcpChatState =
+  | { status: "connecting" }
+  | { status: "ready"; transport: AcpChatTransport; messages: UIMessage[] }
+  | { status: "error"; error: string };
 
 /**
  * Custom ChatTransport hook: connects Grill (and future ai-chat steps) to AcpBridge.
- * Returns null until the server `ready` handshake arrives with transcript history.
  */
 export function useAcpChat({
   cardId,
   stepKey,
   round = 0,
-}: UseAcpChatOptions): AcpChatReady | null {
-  const transport = useMemo(
-    () => new AcpChatTransport({ cardId, stepKey, round }),
-    [cardId, stepKey, round],
-  );
-  const [messages, setMessages] = useState<UIMessage[] | null>(null);
+}: UseAcpChatOptions): AcpChatState {
+  const [state, setState] = useState<AcpChatState>({ status: "connecting" });
 
   useEffect(() => {
     let cancelled = false;
-    void transport.connect().then((history) => {
-      if (!cancelled) setMessages(history);
-    });
+    const transport = new AcpChatTransport({ cardId, stepKey, round });
+    setState({ status: "connecting" });
+
+    // Defer past React Strict Mode's sync mount→cleanup→remount. Opening the
+    // socket in the first (discarded) setup closes it while CONNECTING, which
+    // logs a browser warning and an ECONNRESET on Vite's WS proxy.
+    const startId = window.setTimeout(() => {
+      if (cancelled) return;
+      void transport
+        .connect()
+        .then((history) => {
+          if (!cancelled) {
+            setState({ status: "ready", transport, messages: history });
+          }
+        })
+        .catch((err: unknown) => {
+          if (!cancelled) {
+            setState({
+              status: "error",
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        });
+    }, 0);
+
     return () => {
       cancelled = true;
+      window.clearTimeout(startId);
       transport.close();
     };
-  }, [transport]);
+  }, [cardId, stepKey, round]);
 
-  if (!messages) return null;
-  return { transport, messages };
+  return state;
 }
 
 /** Mount assistant-ui runtime once the WebSocket handshake has history. */

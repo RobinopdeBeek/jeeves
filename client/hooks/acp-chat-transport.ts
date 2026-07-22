@@ -44,12 +44,12 @@ export class AcpChatTransport {
     });
 
     const round = this.options.round ?? 0;
-    const proto = window.location.protocol === "https:" ? "wss" : "ws";
     const qs = new URLSearchParams({
       cardId: this.options.cardId,
       stepKey: this.options.stepKey,
       round: String(round),
     });
+    const proto = window.location.protocol === "https:" ? "wss" : "ws";
     const url = `${proto}://${window.location.host}/ws/chat?${qs}`;
 
     const socket = new WebSocket(url);
@@ -64,6 +64,9 @@ export class AcpChatTransport {
       this.replyController?.error(new Error("WebSocket error"));
     };
     socket.onclose = () => {
+      this.rejectReady?.(new Error("WebSocket closed before grill session was ready"));
+      this.resolveReady = null;
+      this.rejectReady = null;
       this.markOpeningDone();
       this.replyController?.close();
       this.replyController = null;
@@ -129,8 +132,27 @@ export class AcpChatTransport {
   }
 
   close(): void {
-    this.socket?.close();
+    const socket = this.socket;
     this.socket = null;
+    if (!socket) return;
+
+    // Drop handlers so an intentional teardown doesn't reject `ready` /
+    // streams after the hook has already moved on.
+    socket.onmessage = null;
+    socket.onerror = null;
+    socket.onclose = null;
+    this.resolveReady = null;
+    this.rejectReady = null;
+
+    if (socket.readyState === WebSocket.CONNECTING) {
+      // Closing while CONNECTING triggers Chrome's "closed before the
+      // connection is established" console error; wait for open, then close.
+      socket.addEventListener("open", () => socket.close());
+      return;
+    }
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.close();
+    }
   }
 
   private handleServerMessage(raw: string): void {

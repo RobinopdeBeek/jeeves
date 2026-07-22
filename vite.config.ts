@@ -38,10 +38,15 @@ export default defineConfig({
     port: clientPort,
     strictPort: true,
     proxy: {
-      "/api": `http://127.0.0.1:${serverPort}`,
+      "/api": {
+        target: `http://127.0.0.1:${serverPort}`,
+        changeOrigin: true,
+      },
+      // Use http:// + ws:true (not ws://) — Vite's proxy is unreliable with a ws:// target on Windows.
       "/ws": {
-        target: `ws://127.0.0.1:${serverPort}`,
+        target: `http://127.0.0.1:${serverPort}`,
         ws: true,
+        changeOrigin: true,
       },
     },
   },

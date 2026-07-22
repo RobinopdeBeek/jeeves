@@ -13,10 +13,19 @@ import type { StepPanelProps } from "./step-panel-types";
 export function StepGrill({ card }: StepPanelProps) {
   const chat = useAcpChat({ cardId: card.id, stepKey: "grill", round: 0 });
 
-  if (!chat) {
+  if (chat.status === "connecting") {
     return (
       <div className="flex flex-1 items-center justify-center p-4">
         <p className="text-muted-foreground">Starting grill session…</p>
+      </div>
+    );
+  }
+
+  if (chat.status === "error") {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center">
+        <p className="text-destructive">Could not start grill session</p>
+        <p className="max-w-md text-sm text-muted-foreground">{chat.error}</p>
       </div>
     );
   }

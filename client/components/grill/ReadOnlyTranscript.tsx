@@ -1,5 +1,7 @@
 import type { UIMessage } from "ai";
 import { useEffect, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { PermissionRequestData } from "@/hooks/acp-chat-transport";
 import { api } from "@/lib/api";
 import { PermissionPartView } from "./PermissionPartView";
@@ -55,9 +57,11 @@ function ReadOnlyMessage({ message }: { message: UIMessage }) {
         {message.parts.map((part, i) => {
           if (part.type === "text") {
             return (
-              <p key={i} className="whitespace-pre-wrap text-sm">
-                {part.text}
-              </p>
+              <div key={i} className="text-sm">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {part.text}
+                </ReactMarkdown>
+              </div>
             );
           }
           if (part.type === "data-permission") {

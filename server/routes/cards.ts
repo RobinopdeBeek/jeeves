@@ -115,10 +115,11 @@ export function cardRoutes(
   });
 
   app.delete("/:id", (c) => {
-    const deleted = store.deleteCard(c.req.param("id"));
-    return deleted
-      ? c.json({ ok: true })
-      : c.json({ error: "not found" }, 404);
+    const id = c.req.param("id");
+    const deleted = store.deleteCard(id);
+    if (!deleted) return c.json({ error: "not found" }, 404);
+    deps.artifacts.removeCardFolder(id);
+    return c.json({ ok: true });
   });
 
   return app;

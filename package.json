@@ -22,6 +22,7 @@
     "@ai-sdk/react": "^2.0.220",
     "@assistant-ui/react": "^0.14.27",
     "@assistant-ui/react-ai-sdk": "^1.3.41",
+    "@assistant-ui/react-markdown": "^0.14.6",
     "@cursor/sdk": "^1.0.18",
     "@hono/node-server": "^2.0.8",
     "@tabler/icons-react": "^3.44.0",

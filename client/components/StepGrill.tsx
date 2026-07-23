@@ -6,6 +6,7 @@ import {
 } from "@assistant-ui/react";
 import { IconLoader2, IconPaperclip, IconSend } from "@tabler/icons-react";
 import type { UIMessage } from "ai";
+import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import { Button } from "@/components/ui/button";
 import { AcpChatProvider, useAcpChat } from "@/hooks/useAcpChat";
 import { PermissionDataUI } from "@/components/grill/PermissionPartView";
@@ -194,7 +195,7 @@ function AssistantMessage() {
   return (
     <MessagePrimitive.Root className="flex justify-start">
       <div className="max-w-[85%] space-y-2">
-        <MessagePrimitive.Parts />
+        <MessagePrimitive.Parts components={{ Text: MarkdownText }} />
       </div>
     </MessagePrimitive.Root>
   );

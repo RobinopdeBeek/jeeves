@@ -95,6 +95,25 @@ describe("ArtifactStore", () => {
     expect(fs.existsSync(path.dirname(logPath))).toBe(true);
   });
 
+  it("removes the card artifact folder, including manifest and nested files", () => {
+    artifacts.save({
+      cardId,
+      stepKey: "plan",
+      round: 0,
+      kind: "plan",
+      content: "# Plan",
+      sourceSkill: "slice-3-tracer",
+    });
+    const cardDir = path.join(artifactRoot, "cards", cardId);
+    expect(fs.existsSync(path.join(cardDir, "manifest.json"))).toBe(true);
+
+    artifacts.removeCardFolder(cardId);
+
+    expect(fs.existsSync(cardDir)).toBe(false);
+    // Idempotent when the folder is already gone.
+    expect(() => artifacts.removeCardFolder(cardId)).not.toThrow();
+  });
+
   it("resolves serve paths only inside the card artifact folder", () => {
     const saved = artifacts.save({
       cardId,

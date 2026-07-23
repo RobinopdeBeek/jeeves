@@ -250,6 +250,15 @@ export class ArtifactStore {
     return this.assertUnderRoot(normalized);
   }
 
+  /** Remove `cards/<cardId>/` under the artifact root (idempotent). */
+  removeCardFolder(cardId: string): void {
+    if (!cardId || /[/\\]/.test(cardId) || cardId.includes("..")) {
+      throw new ArtifactStoreError("invalid card id");
+    }
+    const absPath = this.assertUnderRoot(path.posix.join("cards", cardId));
+    fs.rmSync(absPath, { recursive: true, force: true });
+  }
+
   private destinationPath(
     cardId: string,
     round: number,

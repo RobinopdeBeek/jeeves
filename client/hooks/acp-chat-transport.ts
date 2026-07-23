@@ -186,6 +186,8 @@ export class AcpChatTransport {
   private openChunkStream(
     abortSignal?: AbortSignal,
   ): ReadableStream<UIMessageChunk> {
+    let attached: ReadableStreamDefaultController<UIMessageChunk> | null =
+      null;
     return new ReadableStream<UIMessageChunk>({
       start: (controller) => {
         for (const chunk of this.chunkBuffer) {
@@ -196,20 +198,37 @@ export class AcpChatTransport {
           controller.close();
           return;
         }
+        attached = controller;
         this.streamController = controller;
         abortSignal?.addEventListener("abort", () => {
-          if (this.streamController === controller) {
-            controller.close();
-            this.streamController = null;
-          }
+          this.releaseStreamController(controller, { close: true });
         });
+      },
+      // AI SDK / assistant-ui may cancel the resume stream on send or
+      // teardown without our abortSignal — drop the stale controller so
+      // later WS chunks buffer instead of enqueue-into-closed.
+      cancel: () => {
+        if (attached && this.streamController === attached) {
+          this.streamController = null;
+        }
       },
     });
   }
 
   private pushChunk(chunk: UIMessageChunk): void {
-    if (this.streamController) {
-      this.streamController.enqueue(chunk);
+    const controller = this.streamController;
+    if (controller) {
+      try {
+        controller.enqueue(chunk);
+      } catch {
+        // Consumer cancelled/closed the stream out from under us.
+        this.streamController = null;
+        this.chunkBuffer.push(chunk);
+        if (chunk.type === "finish" || chunk.type === "error") {
+          this.markTurnDone();
+        }
+        return;
+      }
       if (chunk.type === "finish" || chunk.type === "error") {
         this.markTurnDone();
       }
@@ -219,6 +238,22 @@ export class AcpChatTransport {
     if (chunk.type === "finish" || chunk.type === "error") {
       this.markTurnDone();
     }
+  }
+
+  /** Close (optional) and drop a controller only if it is still the active one. */
+  private releaseStreamController(
+    controller: ReadableStreamDefaultController<UIMessageChunk>,
+    opts: { close: boolean },
+  ): void {
+    if (this.streamController !== controller) return;
+    if (opts.close) {
+      try {
+        controller.close();
+      } catch {
+        // already closed
+      }
+    }
+    this.streamController = null;
   }
 
   private markTurnDone(): void {

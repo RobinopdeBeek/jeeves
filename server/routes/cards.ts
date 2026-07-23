@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { CardStoreError, type KindPath } from "../cards/store.js";
 import type { CardStore } from "../cards/store.js";
 import type { Project } from "../db/schema.js";
+import { dispatchAdvanceEffects } from "../execution/dispatch-effects.js";
 import type { ExecutionEngine } from "../execution/engine.js";
 import type { EventBus } from "../execution/events.js";
 import type { RunStore } from "../execution/run-store.js";
@@ -50,14 +51,17 @@ export function cardRoutes(
       return c.json({ error: "path must be feature or standalone" }, 400);
     }
     try {
-      const card = store.decideKind(c.req.param("id"), body.path);
+      const { card, sideEffects } = store.decideKind(
+        c.req.param("id"),
+        body.path,
+      );
       // Board tabs open elsewhere only see decide via SSE — not the HTTP response.
       deps.events.emit({ type: "card.updated", card });
-      // Orchestration lives here, not in CardStore (ADR 0006): the
-      // standalone path leaves Plan queued — hand it to the engine.
-      if (card.steps.some((s) => s.key === "plan" && s.status === "queued")) {
-        deps.engine.enqueue(card.id, "plan");
-      }
+      // advance declares enqueue; route only dispatches (ADR 0006).
+      dispatchAdvanceEffects(card.id, sideEffects, {
+        enqueue: (id, step) => deps.engine.enqueue(id, step),
+        sessions: deps.sessions,
+      });
       return c.json(card);
     } catch (e) {
       if (e instanceof CardStoreError) {
@@ -71,12 +75,12 @@ export function cardRoutes(
     const cardId = c.req.param("id");
     try {
       // Validate before tearing down ACP so a 409 leaves the session intact.
-      store.assertGrillToSpecHandOff(cardId);
-      deps.sessions.close(
-        { cardId, stepKey: "grill", round: 0 },
-        "grill handed off to spec",
-      );
-      const card = store.handOffGrillToSpec(cardId);
+      const plan = store.assertGrillToSpecHandOff(cardId);
+      dispatchAdvanceEffects(cardId, plan.sideEffects, {
+        enqueue: (id, step) => deps.engine.enqueue(id, step),
+        sessions: deps.sessions,
+      });
+      const { card } = store.handOffGrillToSpec(cardId);
       deps.events.emit({ type: "card.updated", card });
       return c.json(card);
     } catch (e) {

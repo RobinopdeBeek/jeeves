@@ -1,68 +1,16 @@
 import type { UIMessage, UIMessageChunk } from "ai";
 import { describe, expect, it } from "vitest";
-import { AcpBridge, type AcpProcess } from "./chat.js";
+import { AcpBridge, type ChunkSubscriber } from "./chat.js";
+import { MockAcpProcess, viWaitFor } from "./mock-acp-process.js";
 
-/** In-memory ACP stdio stand-in — records client→agent RPC and can emit agent→client lines. */
-class MockAcpProcess implements AcpProcess {
-  readonly written: unknown[] = [];
-  private readonly lineHandlers: Array<(line: string) => void> = [];
-  private closed = false;
-
-  write(line: string): void {
-    if (this.closed) throw new Error("process closed");
-    this.written.push(JSON.parse(line));
-  }
-
-  onLine(handler: (line: string) => void): void {
-    this.lineHandlers.push(handler);
-  }
-
-  kill(): void {
-    this.closed = true;
-  }
-
-  /** Simulate one newline-delimited JSON-RPC message from agent stdout. */
-  emit(message: unknown): void {
-    const line = JSON.stringify(message);
-    for (const handler of this.lineHandlers) handler(line);
-  }
-
-  /** Auto-answer initialize / authenticate / session/new with fixed sessionId. */
-  autoHandshake(sessionId = "sess-test"): void {
-    const answered = new Set<number>();
-    const originalWrite = this.write.bind(this);
-    this.write = (line: string) => {
-      originalWrite(line);
-      const m = JSON.parse(line) as { id?: number; method?: string };
-      if (m.id == null || m.method == null || answered.has(m.id)) return;
-      let result: unknown;
-      if (m.method === "initialize") result = { protocolVersion: 1 };
-      else if (m.method === "authenticate") result = {};
-      else if (m.method === "session/new") result = { sessionId };
-      else return;
-      answered.add(m.id);
-      queueMicrotask(() => {
-        this.emit({ jsonrpc: "2.0", id: m.id, result });
-      });
-    };
-  }
-
-  prompts(): Array<{ sessionId: string; prompt: unknown }> {
-    return this.written
-      .filter((m): m is { method: string; params: { sessionId: string; prompt: unknown } } => {
-        const msg = m as { method?: string };
-        return msg.method === "session/prompt";
-      })
-      .map((m) => m.params);
-  }
-}
-
-async function collectChunks(
-  stream: AsyncIterable<UIMessageChunk>,
-): Promise<UIMessageChunk[]> {
+function collectingSubscriber(): ChunkSubscriber & { chunks: UIMessageChunk[] } {
   const chunks: UIMessageChunk[] = [];
-  for await (const chunk of stream) chunks.push(chunk);
-  return chunks;
+  return {
+    chunks,
+    onChunk(chunk) {
+      chunks.push(chunk);
+    },
+  };
 }
 
 function textDeltas(chunks: UIMessageChunk[]): string {
@@ -70,6 +18,11 @@ function textDeltas(chunks: UIMessageChunk[]): string {
     .filter((c): c is Extract<UIMessageChunk, { type: "text-delta" }> => c.type === "text-delta")
     .map((c) => c.delta)
     .join("");
+}
+
+function promptText(process: MockAcpProcess, index = 0): string {
+  const prompt = process.prompts()[index]?.prompt as Array<{ text: string }>;
+  return prompt[0]!.text;
 }
 
 describe("AcpBridge", () => {
@@ -86,19 +39,18 @@ describe("AcpBridge", () => {
       onTranscript: (messages) => transcripts.push(messages),
     });
 
-    const streamPromise = bridge.openSession({
+    const sub = collectingSubscriber();
+    bridge.attach(sub);
+
+    await bridge.openSession({
       cwd: "C:/target-repo",
       openingPrompt: "Grill this feature: Pantry checker",
       history: [],
     });
 
-    // Wait until the opening prompt is sent, then stream agent chunks + finish the RPC.
     await viWaitFor(() => process.prompts().length === 1);
 
-    const promptReq = process.written.find(
-      (m): m is { id: number; method: string } =>
-        (m as { method?: string }).method === "session/prompt",
-    )!;
+    const promptReq = process.promptRequest();
 
     process.emit({
       jsonrpc: "2.0",
@@ -128,14 +80,14 @@ describe("AcpBridge", () => {
       result: { stopReason: "end_turn" },
     });
 
-    const chunks = await collectChunks(await streamPromise);
+    await viWaitFor(() => sub.chunks.some((c) => c.type === "finish"));
 
     expect(process.prompts()[0].prompt).toEqual([
       { type: "text", text: "Grill this feature: Pantry checker" },
     ]);
-    expect(textDeltas(chunks)).toBe("What problem are you solving?");
-    expect(chunks.some((c) => c.type === "start")).toBe(true);
-    expect(chunks.some((c) => c.type === "finish")).toBe(true);
+    expect(textDeltas(sub.chunks)).toBe("What problem are you solving?");
+    expect(sub.chunks.some((c) => c.type === "start")).toBe(true);
+    expect(sub.chunks.some((c) => c.type === "finish")).toBe(true);
 
     expect(statuses[0]).toBe("ai-working");
     expect(statuses.at(-1)).toBe("needs-user");
@@ -148,7 +100,7 @@ describe("AcpBridge", () => {
     ]);
   });
 
-  it("streams a user turn into assistant UIMessage parts and appends both to the transcript", async () => {
+  it("streams a user turn into assistant UIMessage parts and seeds prior transcript once", async () => {
     const process = new MockAcpProcess();
     process.autoHandshake("sess-2");
     const transcripts: UIMessage[][] = [];
@@ -158,8 +110,11 @@ describe("AcpBridge", () => {
       onTranscript: (messages) => transcripts.push(messages),
     });
 
-    // Open with existing history so we skip the opener.
-    const openStream = await bridge.openSession({
+    const sub = collectingSubscriber();
+    bridge.attach(sub);
+
+    // Open with existing history so we skip the opener; seed waits for first send.
+    await bridge.openSession({
       cwd: "C:/target-repo",
       openingPrompt: "should not be sent",
       history: [
@@ -170,19 +125,13 @@ describe("AcpBridge", () => {
         },
       ],
     });
-    for await (const _ of openStream) {
-      /* drain empty resume stream */
-    }
 
     expect(process.prompts()).toHaveLength(0);
 
     const replyPromise = bridge.sendMessage("Pantry expiry alerts");
     await viWaitFor(() => process.prompts().length === 1);
 
-    const promptReq = process.written.find(
-      (m): m is { id: number; method: string } =>
-        (m as { method?: string }).method === "session/prompt",
-    )!;
+    const promptReq = process.promptRequest();
 
     process.emit({
       jsonrpc: "2.0",
@@ -201,8 +150,8 @@ describe("AcpBridge", () => {
       result: { stopReason: "end_turn" },
     });
 
-    const chunks = await collectChunks(await replyPromise);
-    expect(textDeltas(chunks)).toBe("Who are the users?");
+    await replyPromise;
+    expect(textDeltas(sub.chunks)).toBe("Who are the users?");
     expect(transcripts.at(-1)?.map((m) => m.role)).toEqual([
       "assistant",
       "user",
@@ -211,15 +160,38 @@ describe("AcpBridge", () => {
     expect(transcripts.at(-1)?.[1].parts).toEqual([
       { type: "text", text: "Pantry expiry alerts" },
     ]);
-    expect(process.prompts()[0].prompt).toEqual([
-      {
-        type: "text",
-        text: expect.stringContaining("Prior grilling transcript"),
+    expect(promptText(process, 0)).toContain("Prior transcript");
+    expect(promptText(process, 0)).toContain("Pantry expiry alerts");
+    expect(promptText(process, 0)).not.toContain("Prior grilling transcript");
+
+    // Second user turn sends latest text only (already seeded).
+    sub.chunks.length = 0;
+    const secondPromise = bridge.sendMessage("Kitchen staff");
+    await viWaitFor(() => process.prompts().length === 2);
+    const prompt2 = process.written.filter(
+      (m): m is { id: number; method: string } =>
+        (m as { method?: string }).method === "session/prompt",
+    )[1]!;
+    process.emit({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "sess-2",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "Got it." },
+        },
       },
-    ]);
-    expect(
-      (process.prompts()[0].prompt as Array<{ text: string }>)[0].text,
-    ).toContain("Pantry expiry alerts");
+    });
+    process.emit({
+      jsonrpc: "2.0",
+      id: prompt2.id,
+      result: { stopReason: "end_turn" },
+    });
+    await secondPromise;
+
+    expect(promptText(process, 1)).toBe("Kitchen staff");
+    expect(promptText(process, 1)).not.toContain("Prior transcript");
   });
 
   it("projects session/request_permission into a data-permission part and round-trips approve/deny", async () => {
@@ -230,17 +202,17 @@ describe("AcpBridge", () => {
       spawn: () => process,
     });
 
-    const streamPromise = bridge.openSession({
+    const sub = collectingSubscriber();
+    bridge.attach(sub);
+
+    await bridge.openSession({
       cwd: "C:/target-repo",
       openingPrompt: "Grill this feature",
       history: [],
     });
     await viWaitFor(() => process.prompts().length === 1);
 
-    const promptReq = process.written.find(
-      (m): m is { id: number; method: string } =>
-        (m as { method?: string }).method === "session/prompt",
-    )!;
+    const promptReq = process.promptRequest();
 
     // Agent asks for permission mid-turn (before the prompt RPC resolves).
     process.emit({
@@ -260,7 +232,6 @@ describe("AcpBridge", () => {
       },
     });
 
-    const stream = await streamPromise;
     await viWaitFor(() => bridge.getPendingPermissionIds().includes("99"));
 
     bridge.respondToPermission("99", "allow-once");
@@ -292,8 +263,9 @@ describe("AcpBridge", () => {
       result: { stopReason: "end_turn" },
     });
 
-    const chunks = await collectChunks(stream);
-    const permChunks = chunks.filter(
+    await viWaitFor(() => sub.chunks.some((c) => c.type === "finish"));
+
+    const permChunks = sub.chunks.filter(
       (c) => typeof c.type === "string" && c.type === "data-permission",
     );
     expect(permChunks[0]).toMatchObject({
@@ -365,7 +337,46 @@ describe("AcpBridge", () => {
       id: prompt2.id,
       result: { stopReason: "end_turn" },
     });
-    await collectChunks(await replyPromise);
+    await replyPromise;
+  });
+
+  it("replays buffered turn chunks on attach", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-buf");
+
+    const bridge = new AcpBridge({
+      spawn: () => process,
+    });
+
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: "Open",
+      history: [],
+    });
+    await viWaitFor(() => process.prompts().length === 1);
+
+    process.emit({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "sess-buf",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "buffered" },
+        },
+      },
+    });
+
+    const sub = collectingSubscriber();
+    bridge.attach(sub);
+    expect(textDeltas(sub.chunks)).toBe("buffered");
+
+    process.emit({
+      jsonrpc: "2.0",
+      id: process.promptRequest().id,
+      result: { stopReason: "end_turn" },
+    });
+    await bridge.whenIdle();
   });
 
   it("persists transcript and flips grill status through bridge callbacks", async () => {
@@ -398,16 +409,16 @@ describe("AcpBridge", () => {
       },
     });
 
-    const streamPromise = bridge.openSession({
+    const sub = collectingSubscriber();
+    bridge.attach(sub);
+
+    await bridge.openSession({
       cwd: "C:/target-repo",
       openingPrompt: "Open the grill",
       history: [],
     });
     await viWaitFor(() => process.prompts().length === 1);
-    const promptReq = process.written.find(
-      (m): m is { id: number; method: string } =>
-        (m as { method?: string }).method === "session/prompt",
-    )!;
+    const promptReq = process.promptRequest();
     process.emit({
       jsonrpc: "2.0",
       method: "session/update",
@@ -424,7 +435,7 @@ describe("AcpBridge", () => {
       id: promptReq.id,
       result: { stopReason: "end_turn" },
     });
-    await collectChunks(await streamPromise);
+    await bridge.whenIdle();
 
     expect(store.getCard(cardId)?.steps.find((s) => s.key === "grill")?.status).toBe(
       "needs-user",
@@ -438,12 +449,3 @@ describe("AcpBridge", () => {
     fs.rmSync(artifactRoot, { recursive: true, force: true });
   });
 });
-
-/** Tiny poll helper — avoids pulling async utilities for one wait. */
-async function viWaitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
-  const start = Date.now();
-  while (!predicate()) {
-    if (Date.now() - start > timeoutMs) throw new Error("viWaitFor timed out");
-    await new Promise((r) => setTimeout(r, 5));
-  }
-}

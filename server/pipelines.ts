@@ -196,6 +196,103 @@ export function grillToSpecTransition(
   };
 }
 
+/** Board/Create Spec affordance — same rules as grill→spec hand-off. */
+export function canCreateSpec(
+  steps: Array<{ key: StepKey; status: StepStatus }>,
+): boolean {
+  return grillToSpecTransition(steps).ok;
+}
+
+/** What triggered a pipeline advance (routes / engine are thin adapters). */
+export type AdvanceTrigger =
+  | { type: "kind-decision"; path: KindPath }
+  | { type: "grill-to-spec" }
+  | {
+      type: "step-finished";
+      stepKey: StepKey;
+      outcome: "succeeded" | "failed";
+    };
+
+/** Declared follow-on work — adapters dispatch; PipelineEngine does not I/O. */
+export type AdvanceSideEffect =
+  | { type: "enqueue"; stepKey: StepKey }
+  | {
+      type: "close-chat";
+      stepKey: StepKey;
+      round: number;
+      reason: string;
+    };
+
+export type AdvancePlan =
+  | {
+      ok: true;
+      cardPatch?: { kind: CardKind; column: ColumnId };
+      /** When set, replace/insert these step rows (kind decision). */
+      ensureSteps?: Array<{ key: StepKey; status: StepStatus }>;
+      stepPatches: Array<{ key: StepKey; status: StepStatus }>;
+      sideEffects: AdvanceSideEffect[];
+    }
+  | { ok: false; reason: string };
+
+/**
+ * Pure workflow transition: patches + side-effects for a trigger.
+ * CardStore persists; routes/engine dispatch effects (enqueue, close-chat).
+ */
+export function advance(
+  card: {
+    kind: CardKind | null;
+    steps: Array<{ key: StepKey; status: StepStatus }>;
+  },
+  trigger: AdvanceTrigger,
+): AdvancePlan {
+  if (trigger.type === "kind-decision") {
+    if (card.kind !== null) {
+      return { ok: false, reason: "kind already set" };
+    }
+    const transition = kindDecisionTransition(trigger.path);
+    const sideEffects: AdvanceSideEffect[] = [];
+    for (const step of transition.steps) {
+      if (step.status === "queued") {
+        sideEffects.push({ type: "enqueue", stepKey: step.key });
+      }
+    }
+    return {
+      ok: true,
+      cardPatch: { kind: transition.kind, column: transition.column },
+      ensureSteps: transition.steps,
+      stepPatches: [],
+      sideEffects,
+    };
+  }
+
+  if (trigger.type === "grill-to-spec") {
+    const transition = grillToSpecTransition(card.steps);
+    if (!transition.ok) return transition;
+    return {
+      ok: true,
+      stepPatches: transition.patches,
+      sideEffects: [
+        {
+          type: "close-chat",
+          stepKey: "grill",
+          round: 0,
+          reason: "grill handed off to spec",
+        },
+      ],
+    };
+  }
+
+  // step-finished: status patch for the completed step; future rules may
+  // enqueue the next step / move columns here (seam exists even if minimal).
+  const stepStatus: StepStatus =
+    trigger.outcome === "succeeded" ? "done" : "needs-user";
+  return {
+    ok: true,
+    stepPatches: [{ key: trigger.stepKey, status: stepStatus }],
+    sideEffects: [],
+  };
+}
+
 /** Backlog cards — only the Info step is persisted. */
 export function backlogEnrichedSteps(
   rows: Array<{ stepKey: StepKey; status: StepStatus }>,

@@ -149,7 +149,7 @@ export class ExecutionEngine {
         headSha,
       );
       runs.finish(run.id, { status: "failed", error: message });
-      this.finishStep(cardId, stepKey, "needs-user", run.id, "failed", message);
+      this.finishStep(cardId, stepKey, run.id, "failed", message);
     };
 
     try {
@@ -186,7 +186,7 @@ export class ExecutionEngine {
           tokensIn: result.tokensIn,
           tokensOut: result.tokensOut,
         });
-        this.finishStep(cardId, stepKey, "done", run.id, "succeeded");
+        this.finishStep(cardId, stepKey, run.id, "succeeded");
       } else if (result?.status === "cancelled") {
         await fail("run cancelled");
       } else {
@@ -303,17 +303,24 @@ export class ExecutionEngine {
   private finishStep(
     cardId: string,
     stepKey: StepKey,
-    stepStatus: "done" | "needs-user",
     runId: string,
     runStatus: "succeeded" | "failed",
     error?: string,
   ): void {
     const { store, events } = this.deps;
+    const outcome = runStatus === "succeeded" ? "succeeded" : "failed";
+    const { card, sideEffects } = store.applyStepFinished(
+      cardId,
+      stepKey,
+      outcome,
+    );
     events.emit({ type: "run.finished", runId, cardId, status: runStatus, error });
-    events.emit({
-      type: "card.updated",
-      card: store.setStepStatus(cardId, stepKey, stepStatus),
-    });
+    events.emit({ type: "card.updated", card });
+    for (const effect of sideEffects) {
+      if (effect.type === "enqueue") {
+        this.enqueue(cardId, effect.stepKey);
+      }
+    }
   }
 }
 

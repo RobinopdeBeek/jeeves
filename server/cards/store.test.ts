@@ -103,9 +103,11 @@ describe("CardStore", () => {
       const card = store.createCard(projectId);
       store.updateCard(card.id, { title: "Workout streaks" });
 
-      const decided = store.decideKind(card.id, "feature");
+      const { card: decided, sideEffects } = store.decideKind(card.id, "feature");
       expect(decided.kind).toBe("feature");
       expect(decided.column).toBe("define");
+      expect(decided.canCreateSpec).toBe(true);
+      expect(sideEffects).toEqual([]);
       expect(decided.steps).toEqual([
         { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
         { key: "grill", status: "needs-user", label: "Grill", stepKind: "ai-chat", column: "define" },
@@ -114,20 +116,22 @@ describe("CardStore", () => {
       ]);
     });
 
-    it("moves to Implement on standalone path with plan queued and no execution", () => {
+    it("moves to Implement on standalone path with plan queued and enqueue effect", () => {
       const card = store.createCard(projectId);
       store.updateCard(card.id, { title: "Rest timer" });
 
-      const decided = store.decideKind(card.id, "standalone");
+      const { card: decided, sideEffects } = store.decideKind(card.id, "standalone");
       expect(decided.kind).toBe("task");
       expect(decided.column).toBe("implement");
+      expect(decided.canCreateSpec).toBe(false);
+      expect(sideEffects).toEqual([{ type: "enqueue", stepKey: "plan" }]);
       expect(decided.steps).toEqual([
         { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
         { key: "plan", status: "queued", label: "Plan", stepKind: "ai-execution", column: "implement" },
         { key: "impl", status: "pending", label: "Implement", stepKind: "ai-execution", column: "implement" },
         { key: "airev", status: "pending", label: "AI Review", stepKind: "ai-execution", column: "implement" },
       ]);
-      // queued is persisted only — ExecutionEngine arrives in slice 3
+      // queued is persisted only — route/engine dispatch the enqueue effect
       const rows = db.select().from(cardSteps).where(eq(cardSteps.cardId, card.id)).all();
       expect(rows).toHaveLength(4);
       expect(rows.find((r) => r.stepKey === "plan")?.status).toBe("queued");
@@ -177,16 +181,25 @@ describe("CardStore", () => {
     function featureInGrill(): string {
       const card = store.createCard(projectId);
       store.updateCard(card.id, { title: "Workout streaks" });
-      return store.decideKind(card.id, "feature").id;
+      return store.decideKind(card.id, "feature").card.id;
     }
 
     it("marks grill done and promotes spec to needs-user", () => {
       const id = featureInGrill();
-      const handed = store.handOffGrillToSpec(id);
+      const { card: handed, sideEffects } = store.handOffGrillToSpec(id);
       expect(handed.steps.find((s) => s.key === "grill")?.status).toBe("done");
       expect(handed.steps.find((s) => s.key === "spec")?.status).toBe("needs-user");
       expect(handed.steps.find((s) => s.key === "tasks")?.status).toBe("pending");
       expect(handed.column).toBe("define");
+      expect(handed.canCreateSpec).toBe(false);
+      expect(sideEffects).toEqual([
+        {
+          type: "close-chat",
+          stepKey: "grill",
+          round: 0,
+          reason: "grill handed off to spec",
+        },
+      ]);
     });
 
     it("rejects missing card with 404", () => {
@@ -214,7 +227,7 @@ describe("CardStore", () => {
     it("rejects standalone task cards with 409", () => {
       const card = store.createCard(projectId);
       store.updateCard(card.id, { title: "Rest timer" });
-      const id = store.decideKind(card.id, "standalone").id;
+      const id = store.decideKind(card.id, "standalone").card.id;
       expect(() => store.handOffGrillToSpec(id)).toThrow(
         expect.objectContaining({ status: 409 }),
       );

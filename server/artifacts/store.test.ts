@@ -187,15 +187,14 @@ describe("ArtifactStore", () => {
     expect(JSON.parse(artifacts.readContent(latest!))).toEqual(sampleTranscript);
   });
 
-  it("rejects transcript writes when the step is done", () => {
+  it("rejects transcript writes when the caller asserts the step is frozen", () => {
     cardWithGrillStep();
     store.setStepStatus(cardId, "grill", "done");
-    expect(() => artifacts.upsertTranscript(cardId, "grill", 0, sampleTranscript)).toThrow(
-      /frozen/i,
-    );
+    expect(() => store.assertTranscriptMutable(cardId, "grill")).toThrow(/frozen/i);
   });
 
-  it("throws when a plan exchange file has no useful content beyond headings", () => {
+  it("throws when a plan exchange file has no useful content beyond headings", async () => {
+    const { assertPlanHasUsefulContent } = await import("../execution/step-policies.js");
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-wt-"));
     const exchangeDir = path.join(workspace, ".jeeves");
     fs.mkdirSync(exchangeDir, { recursive: true });
@@ -204,7 +203,14 @@ describe("ArtifactStore", () => {
     expect(() =>
       artifacts.harvest(
         workspace,
-        [{ exchangePath: ".jeeves/plan.md", kind: "plan", stepKey: "plan" }],
+        [
+          {
+            exchangePath: ".jeeves/plan.md",
+            kind: "plan",
+            stepKey: "plan",
+            validate: assertPlanHasUsefulContent,
+          },
+        ],
         { cardId, round: 0, sourceSkill: "slice-3-tracer" },
       ),
     ).toThrow(/useful content/);

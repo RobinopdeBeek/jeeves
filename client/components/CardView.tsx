@@ -108,8 +108,7 @@ export function CardView() {
   const grillStep = card.steps.find((s) => s.key === "grill");
   const showCreateSpec =
     activeKey === "grill" && grillStep !== undefined && grillStep.status !== "done";
-  const createSpecDisabled =
-    creatingSpec || grillStep?.status === "ai-working" || grillStep?.status !== "needs-user";
+  const createSpecDisabled = creatingSpec || !card.canCreateSpec;
 
   return (
     <div className="mx-auto flex h-dvh max-w-3xl flex-col">

@@ -39,60 +39,42 @@ export function useAcpChat({
 
   useEffect(() => {
     let cancelled = false;
-    let transport: AcpChatTransport | null = null;
     setState({ status: "connecting" });
 
-    // Defer past React Strict Mode's sync mount→cleanup→remount. Opening the
-    // socket in the first (discarded) setup closes it while CONNECTING, which
-    // logs a browser warning and an ECONNRESET on Vite's WS proxy.
-    const startId = window.setTimeout(() => {
-      if (cancelled) return;
+    const transport = new AcpChatTransport({
+      cardId,
+      stepKey,
+      round,
+      onDisplaced: (reason) => {
+        if (cancelled) return;
+        setState((prev) => ({
+          status: "displaced",
+          reason,
+          messages: prev.status === "ready" ? prev.messages : [],
+        }));
+      },
+    });
 
-      transport = new AcpChatTransport({
-        cardId,
-        stepKey,
-        round,
-        onDisplaced: (reason) => {
-          if (cancelled) return;
-          setState((prev) => ({
-            status: "displaced",
-            reason,
-            messages: prev.status === "ready" ? prev.messages : [],
-          }));
-        },
-      });
-
-      void transport
-        .connect()
-        .then((history) => {
-          if (cancelled || !transport) return;
-          setState({
-            status: "ready",
-            transport,
-            messages: history,
-            sessionOpen: transport.isSessionOpen(),
-          });
-          void transport
-            .whenSessionOpen()
-            .then(() => {
-              if (cancelled) return;
-              setState((prev) =>
-                prev.status === "ready" ? { ...prev, sessionOpen: true } : prev,
-              );
-            })
-            .catch((err: unknown) => {
-              if (cancelled) return;
-              setState((prev) => {
-                if (prev.status === "displaced") return prev;
-                return {
-                  status: "error",
-                  error: err instanceof Error ? err.message : String(err),
-                };
-              });
-            });
-        })
-        .catch((err: unknown) => {
-          if (!cancelled) {
+    void transport
+      .connect()
+      .then((history) => {
+        if (cancelled) return;
+        setState({
+          status: "ready",
+          transport,
+          messages: history,
+          sessionOpen: transport.isSessionOpen(),
+        });
+        void transport
+          .whenSessionOpen()
+          .then(() => {
+            if (cancelled) return;
+            setState((prev) =>
+              prev.status === "ready" ? { ...prev, sessionOpen: true } : prev,
+            );
+          })
+          .catch((err: unknown) => {
+            if (cancelled) return;
             setState((prev) => {
               if (prev.status === "displaced") return prev;
               return {
@@ -100,14 +82,24 @@ export function useAcpChat({
                 error: err instanceof Error ? err.message : String(err),
               };
             });
-          }
-        });
-    }, 0);
+          });
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setState((prev) => {
+            if (prev.status === "displaced") return prev;
+            return {
+              status: "error",
+              error: err instanceof Error ? err.message : String(err),
+            };
+          });
+        }
+      });
 
     return () => {
       cancelled = true;
-      window.clearTimeout(startId);
-      transport?.close();
+      // CONNECTING-safe close waits for open before closing (no setTimeout defer).
+      transport.close();
     };
   }, [cardId, stepKey, round]);
 
@@ -124,9 +116,9 @@ export function AcpChatProvider({
   messages: UIMessage[];
   children: ReactNode;
 }) {
-  // `resume` is on useChat; assistant-ui's options type omits it — still forwarded at runtime.
+  // Isolate assistant-ui's incomplete options typing (`resume` omitted upstream).
   const runtime = useChatRuntime({
-    transport: transport as unknown as ChatTransport<UIMessage>,
+    transport: transport as ChatTransport<UIMessage>,
     messages,
     resume: true,
   } as Parameters<typeof useChatRuntime>[0]);

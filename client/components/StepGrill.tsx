@@ -3,21 +3,15 @@ import {
   ComposerPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
-  makeAssistantDataUI,
 } from "@assistant-ui/react";
 import { IconLoader2, IconPaperclip, IconSend } from "@tabler/icons-react";
 import type { UIMessage } from "ai";
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import {
-  type PermissionRequestData,
-  type AcpChatTransport,
-} from "@/hooks/acp-chat-transport";
 import { AcpChatProvider, useAcpChat } from "@/hooks/useAcpChat";
-import { api } from "@/lib/api";
+import { PermissionDataUI } from "@/components/grill/PermissionPartView";
+import { ReadOnlyTranscript } from "@/components/grill/ReadOnlyTranscript";
+import { GrillTransportContext } from "@/components/grill/transport-context";
 import type { StepPanelProps } from "./step-panel-types";
-
-const TransportContext = createContext<AcpChatTransport | null>(null);
 
 /** Grill tab — assistant-ui thread + composer over AcpBridge WebSocket. */
 export function StepGrill({ card }: StepPanelProps) {
@@ -57,10 +51,10 @@ function LiveGrill({ cardId }: { cardId: string }) {
 
   return (
     <AcpChatProvider transport={chat.transport} messages={chat.messages}>
-      <TransportContext.Provider value={chat.transport}>
+      <GrillTransportContext.Provider value={chat.transport}>
         <PermissionDataUI />
         <GrillThread sessionOpen={chat.sessionOpen} />
-      </TransportContext.Provider>
+      </GrillTransportContext.Provider>
     </AcpChatProvider>
   );
 }
@@ -76,12 +70,6 @@ function CompletedGrill({ cardId }: { cardId: string }) {
     </div>
   );
 }
-
-/** Registers a renderer for AI SDK `data-permission` parts. */
-const PermissionDataUI = makeAssistantDataUI<PermissionRequestData>({
-  name: "permission",
-  render: ({ data }) => <PermissionPartView data={data} />,
-});
 
 /** Thread chrome while waiting for transcript `ready` (usually <100ms). */
 function GrillThreadShell() {
@@ -138,76 +126,6 @@ function DisplacedGrill({
         {banner}
       </div>
       <ReadOnlyTranscript cardId={cardId} fallbackMessages={fallbackMessages} />
-    </div>
-  );
-}
-
-function ReadOnlyTranscript({
-  cardId,
-  fallbackMessages,
-}: {
-  cardId: string;
-  fallbackMessages: UIMessage[];
-}) {
-  const [messages, setMessages] = useState<UIMessage[]>(fallbackMessages);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const artifact = await api.getLatestArtifact(cardId, {
-          stepKey: "grill",
-          round: 0,
-          kind: "transcript",
-        });
-        const parsed = JSON.parse(artifact.content) as UIMessage[];
-        if (!cancelled && Array.isArray(parsed)) setMessages(parsed);
-      } catch {
-        // Keep socket fallback if the artifact isn't readable yet.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [cardId]);
-
-  return (
-    <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-4">
-      {messages.length === 0 ? (
-        <p className="text-muted-foreground">No transcript yet.</p>
-      ) : (
-        messages.map((message) => (
-          <ReadOnlyMessage key={message.id} message={message} />
-        ))
-      )}
-    </div>
-  );
-}
-
-function ReadOnlyMessage({ message }: { message: UIMessage }) {
-  const align = message.role === "user" ? "justify-end" : "justify-start";
-  return (
-    <div className={`flex ${align}`}>
-      <div className="max-w-[85%] space-y-2">
-        {message.parts.map((part, i) => {
-          if (part.type === "text") {
-            return (
-              <p key={i} className="whitespace-pre-wrap text-sm">
-                {part.text}
-              </p>
-            );
-          }
-          if (part.type === "data-permission") {
-            return (
-              <PermissionPartView
-                key={i}
-                data={(part as { data: PermissionRequestData }).data}
-              />
-            );
-          }
-          return null;
-        })}
-      </div>
     </div>
   );
 }
@@ -279,45 +197,5 @@ function AssistantMessage() {
         <MessagePrimitive.Parts />
       </div>
     </MessagePrimitive.Root>
-  );
-}
-
-function PermissionPartView({ data }: { data: PermissionRequestData }) {
-  const transport = useContext(TransportContext);
-  const pending = data.status === "pending" && !!transport;
-
-  const selectedLabel = useMemo(() => {
-    if (!data.selectedOptionId) return null;
-    return (
-      data.options.find((o) => o.optionId === data.selectedOptionId)?.name ??
-      data.selectedOptionId
-    );
-  }, [data.options, data.selectedOptionId]);
-
-  return (
-    <div className="space-y-2 rounded-md border p-3 text-sm">
-      <p className="font-medium">{data.title ?? "Permission required"}</p>
-      {data.status === "resolved" ? (
-        <p className="text-muted-foreground">
-          {selectedLabel ? `Selected: ${selectedLabel}` : "Resolved"}
-        </p>
-      ) : (
-        <div className="flex flex-wrap gap-2">
-          {data.options.map((option) => (
-            <Button
-              key={option.optionId}
-              size="sm"
-              variant={option.kind.startsWith("allow") ? "default" : "outline"}
-              disabled={!pending}
-              onClick={() =>
-                transport?.respondToPermission(data.requestId, option.optionId)
-              }
-            >
-              {option.name}
-            </Button>
-          ))}
-        </div>
-      )}
-    </div>
   );
 }

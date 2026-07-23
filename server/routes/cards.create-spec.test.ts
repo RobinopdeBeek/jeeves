@@ -48,7 +48,7 @@ describe("POST /:id/create-spec", () => {
   function featureInGrill(): string {
     const card = store.createCard(project.id);
     store.updateCard(card.id, { title: "Workout streaks" });
-    return store.decideKind(card.id, "feature").id;
+    return store.decideKind(card.id, "feature").card.id;
   }
 
   it("hands off grill→spec, closes ACP session, and emits card.updated", async () => {

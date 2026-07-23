@@ -1,11 +1,13 @@
-import type { UIMessage, UIMessageChunk } from "ai";
 import type { WSContext } from "hono/ws";
-import path from "node:path";
+import type {
+  WsClientMessage,
+  WsServerMessage,
+} from "../../shared/chat-ws.js";
 import type { ArtifactStore } from "../artifacts/store.js";
 import type { CardStore } from "../cards/store.js";
 import type { EventBus } from "../execution/events.js";
 import type { SpawnAcp } from "./chat.js";
-import { buildGrillOpeningPrompt } from "./grill-prompt.js";
+import { loadTranscript, openChat } from "./open-chat.js";
 import {
   ChatSessionRegistry,
   type ChunkSubscriber,
@@ -14,19 +16,7 @@ import {
 } from "./session-registry.js";
 
 export type { SessionKey };
-
-export type WsClientMessage =
-  | { type: "user-message"; text: string }
-  | { type: "permission-response"; requestId: string; optionId: string };
-
-export type WsServerMessage =
-  | { type: "ready"; messages: UIMessage[]; streaming?: boolean }
-  /** ACP handshake finished — client may send user turns. */
-  | { type: "session"; status: "open"; streaming?: boolean }
-  | { type: "chunk"; chunk: UIMessageChunk }
-  | { type: "status"; status: "ai-working" | "needs-user" }
-  | { type: "displaced"; reason: string }
-  | { type: "error"; error: string };
+export type { WsClientMessage, WsServerMessage };
 
 export interface ChatWsDeps {
   store: CardStore;
@@ -34,14 +24,12 @@ export interface ChatWsDeps {
   events: EventBus;
   spawn: SpawnAcp;
   promptsRoot: string;
-  /** Shared across sockets — last connection wins per session key; owns warm bridges. */
   sessions: ChatSessionRegistry;
 }
 
 /**
- * WebSocket subscriber for a warm ACP session.
- * Outbound payloads are AI SDK types only (ADR 0008). Detach on close does not
- * kill the bridge — the registry owns lifetime (issue #24).
+ * Thin WebSocket adapter over openChat / warm registry.
+ * Outbound payloads are AI SDK types only (ADR 0008).
  */
 export class ChatConnection {
   private handle: WarmSessionHandle | null = null;
@@ -59,65 +47,30 @@ export class ChatConnection {
   ) {}
 
   async start(): Promise<void> {
-    // Claim before ACP cold-start so a racing second tab displaces us cleanly.
     this.deps.sessions.claim(this.key, this);
 
-    const card = this.deps.store.getCard(this.key.cardId);
-    if (!card) {
+    if (!this.deps.store.getCard(this.key.cardId)) {
       this.send({ type: "error", error: "card not found" });
       this.ws.close();
       return;
     }
 
-    const history = loadTranscript(this.deps.artifacts, this.key);
-    const cwd = this.deps.store.getRepoPath(this.key.cardId);
-    const openingPrompt = buildGrillOpeningPrompt(
-      {
-        title: card.title,
-        description: card.description,
-        contextPath: path.join(cwd, "CONTEXT.md"),
-      },
-      this.deps.promptsRoot,
-    );
-
-    // Transcript first so the client can paint history while `agent acp`
-    // cold-starts (or while we reattach to a warm session).
     this.send({
       type: "ready",
-      messages: history,
+      messages: loadTranscript(this.deps.artifacts, this.key),
       streaming: this.deps.sessions.isAiWorking(this.key),
     });
     if (this.closed) return;
 
     try {
-      this.handle = await this.deps.sessions.acquire(this.key, {
-        spawn: this.deps.spawn,
-        cwd,
-        openingPrompt,
-        history,
-        onStatus: (status) => {
-          const updated = this.deps.store.setStepStatus(
-            this.key.cardId,
-            this.key.stepKey,
-            status,
-          );
-          this.deps.events.emit({ type: "card.updated", card: updated });
-          this.send({ type: "status", status });
-        },
-        onTranscript: (messages) => {
-          this.deps.artifacts.upsertTranscript(
-            this.key.cardId,
-            this.key.stepKey,
-            this.key.round,
-            messages,
-          );
+      const opened = await openChat(this.key, this.deps, {
+        onStatusNotify: (status) => {
+          if (!this.closed) this.send({ type: "status", status });
         },
       });
-      if (this.closed) {
-        // Detached while acquiring — leave the warm session in the registry.
-        return;
-      }
+      if (this.closed) return;
 
+      this.handle = opened.handle;
       this.handle.attach(this.subscriber);
       this.send({
         type: "session",
@@ -179,10 +132,6 @@ export class ChatConnection {
     }
   }
 
-  /**
-   * Last-connection-wins: notify the client and close the socket. Detaches the
-   * subscriber but keeps the warm bridge for the new claimer (issue #24).
-   */
   displace(reason: string): void {
     if (this.closed || this.displaced) return;
     this.displaced = true;
@@ -216,20 +165,5 @@ export class ChatConnection {
     } catch {
       // Client gone.
     }
-  }
-}
-
-function loadTranscript(artifacts: ArtifactStore, key: SessionKey): UIMessage[] {
-  const row = artifacts.latest(key.cardId, {
-    stepKey: key.stepKey,
-    round: key.round,
-    kind: "transcript",
-  });
-  if (!row) return [];
-  try {
-    const parsed = JSON.parse(artifacts.readContent(row)) as UIMessage[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
   }
 }

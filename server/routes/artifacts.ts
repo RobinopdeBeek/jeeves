@@ -17,7 +17,13 @@ export function artifactRoutes(artifacts: ArtifactStore) {
     const kind = c.req.query("kind");
     const round = Number(c.req.query("round") ?? "0");
 
-    if (!isStepKey(stepKey) || !isArtifactKind(kind) || Number.isNaN(round)) {
+    if (
+      typeof cardId !== "string" ||
+      !cardId ||
+      !isStepKey(stepKey) ||
+      !isArtifactKind(kind) ||
+      Number.isNaN(round)
+    ) {
       return c.json({ error: "stepKey, kind, and round are required" }, 400);
     }
 

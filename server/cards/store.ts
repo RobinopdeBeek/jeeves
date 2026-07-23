@@ -9,10 +9,13 @@ import {
   type Project,
 } from "../db/schema.js";
 import {
+  advance,
   backlogEnrichedSteps,
-  grillToSpecTransition,
-  kindDecisionTransition,
+  canCreateSpec,
   orderEnrichedSteps,
+  type AdvancePlan,
+  type AdvanceSideEffect,
+  type AdvanceTrigger,
   type EnrichedStep,
   type KindPath,
   type StepKey,
@@ -20,6 +23,7 @@ import {
 } from "../pipelines.js";
 
 export { type EnrichedStep, type KindPath };
+export type { AdvanceSideEffect, AdvanceTrigger };
 
 export class CardStoreError extends Error {
   constructor(
@@ -31,7 +35,11 @@ export class CardStoreError extends Error {
   }
 }
 
-export type CardWithSteps = Card & { steps: EnrichedStep[] };
+export type CardWithSteps = Card & {
+  steps: EnrichedStep[];
+  /** Same predicate as grill→spec hand-off (board Create Spec). */
+  canCreateSpec: boolean;
+};
 
 /**
  * CardStore — the slice-1 seam over SQLite. Hides the unified card model and
@@ -112,40 +120,24 @@ export class CardStore {
 
   /**
    * Irreversible kind decision: feature → Define, standalone task → Implement.
-   * Delegates step/column transitions to PipelineEngine.
+   * Persists PipelineEngine.advance patches; caller dispatches side-effects.
    */
-  decideKind(cardId: string, path: KindPath): CardWithSteps {
+  decideKind(cardId: string, path: KindPath): {
+    card: CardWithSteps;
+    sideEffects: AdvanceSideEffect[];
+  } {
     const card = this.db.select().from(cards).where(eq(cards.id, cardId)).get();
     if (!card) throw new CardStoreError(404, "card not found");
     if (!card.title.trim()) {
       throw new CardStoreError(400, "title is required");
     }
-    if (card.kind !== null) {
-      throw new CardStoreError(409, "kind already set");
-    }
 
-    const transition = kindDecisionTransition(path);
-    this.db
-      .update(cards)
-      .set({ kind: transition.kind, column: transition.column })
-      .where(eq(cards.id, cardId))
-      .run();
-
-    for (const step of transition.steps) {
-      if (step.key === "info") {
-        this.db
-          .update(cardSteps)
-          .set({ status: step.status })
-          .where(
-            and(eq(cardSteps.cardId, cardId), eq(cardSteps.stepKey, "info")),
-          )
-          .run();
-      } else {
-        this.insertStep(cardId, step.key, step.status);
-      }
-    }
-
-    return this.getCard(cardId)!;
+    const plan = this.requireAdvance(
+      { kind: card.kind, steps: this.stepStatuses(cardId) },
+      { type: "kind-decision", path },
+    );
+    this.applyAdvancePlan(cardId, plan);
+    return { card: this.getCard(cardId)!, sideEffects: plan.sideEffects };
   }
 
   /**
@@ -170,36 +162,107 @@ export class CardStore {
     return card;
   }
 
+  /** Transcript upserts are forbidden once the step is done (frozen). */
+  assertTranscriptMutable(cardId: string, stepKey: StepKey): void {
+    const card = this.getCard(cardId);
+    if (!card) throw new CardStoreError(404, "card not found");
+    const step = card.steps.find((s) => s.key === stepKey);
+    if (!step) throw new CardStoreError(404, `unknown step: ${stepKey}`);
+    if (step.status === "done") {
+      throw new CardStoreError(409, "transcript is frozen");
+    }
+  }
+
+  /**
+   * Validate grill→spec without mutating — routes close ACP before apply.
+   */
+  assertGrillToSpecHandOff(cardId: string): AdvancePlan & { ok: true } {
+    const card = this.getCard(cardId);
+    if (!card) throw new CardStoreError(404, "card not found");
+    return this.requireAdvance(card, { type: "grill-to-spec" });
+  }
+
   /**
    * Grill → Spec hand-off: freeze grill as done and open Spec for the user.
    * Transition rules live in PipelineEngine; this applies them.
    */
-  handOffGrillToSpec(cardId: string): CardWithSteps {
-    const transition = this.requireGrillToSpecHandOff(cardId);
-    for (const { key, status } of transition.patches) {
-      this.setStepStatus(cardId, key, status);
-    }
-    return this.getCard(cardId)!;
+  handOffGrillToSpec(cardId: string): {
+    card: CardWithSteps;
+    sideEffects: AdvanceSideEffect[];
+  } {
+    const plan = this.assertGrillToSpecHandOff(cardId);
+    this.applyAdvancePlan(cardId, plan);
+    return { card: this.getCard(cardId)!, sideEffects: plan.sideEffects };
   }
 
   /**
-   * Validate hand-off without mutating — routes use this before closing ACP.
+   * Apply a step-finished advance (ExecutionEngine after a run settles).
    */
-  assertGrillToSpecHandOff(cardId: string): void {
-    this.requireGrillToSpecHandOff(cardId);
-  }
-
-  private requireGrillToSpecHandOff(cardId: string): {
-    patches: Array<{ key: StepKey; status: StepStatus }>;
-  } {
+  applyStepFinished(
+    cardId: string,
+    stepKey: StepKey,
+    outcome: "succeeded" | "failed",
+  ): { card: CardWithSteps; sideEffects: AdvanceSideEffect[] } {
     const card = this.getCard(cardId);
     if (!card) throw new CardStoreError(404, "card not found");
+    const plan = this.requireAdvance(card, {
+      type: "step-finished",
+      stepKey,
+      outcome,
+    });
+    this.applyAdvancePlan(cardId, plan);
+    return { card: this.getCard(cardId)!, sideEffects: plan.sideEffects };
+  }
 
-    const transition = grillToSpecTransition(card.steps);
-    if (!transition.ok) {
-      throw new CardStoreError(409, transition.reason);
+  private requireAdvance(
+    card: {
+      kind: Card["kind"];
+      steps: Array<{ key: StepKey; status: StepStatus }>;
+    },
+    trigger: AdvanceTrigger,
+  ): AdvancePlan & { ok: true } {
+    const plan = advance(card, trigger);
+    if (!plan.ok) {
+      throw new CardStoreError(409, plan.reason);
     }
-    return transition;
+    return plan;
+  }
+
+  private applyAdvancePlan(cardId: string, plan: AdvancePlan & { ok: true }): void {
+    if (plan.cardPatch) {
+      this.db
+        .update(cards)
+        .set({ kind: plan.cardPatch.kind, column: plan.cardPatch.column })
+        .where(eq(cards.id, cardId))
+        .run();
+    }
+    if (plan.ensureSteps) {
+      for (const step of plan.ensureSteps) {
+        if (step.key === "info") {
+          this.db
+            .update(cardSteps)
+            .set({ status: step.status })
+            .where(
+              and(eq(cardSteps.cardId, cardId), eq(cardSteps.stepKey, "info")),
+            )
+            .run();
+        } else {
+          this.insertStep(cardId, step.key, step.status);
+        }
+      }
+    }
+    for (const { key, status } of plan.stepPatches) {
+      this.setStepStatus(cardId, key, status);
+    }
+  }
+
+  private stepStatuses(
+    cardId: string,
+  ): Array<{ key: StepKey; status: StepStatus }> {
+    return this.loadStepRows(cardId).map((r) => ({
+      key: r.stepKey as StepKey,
+      status: r.status as StepStatus,
+    }));
   }
 
   /** Steps waiting for the ExecutionEngine, oldest card first (boot scan). */
@@ -279,6 +342,12 @@ export class CardStore {
             stepRows,
           );
 
-    return { ...card, steps };
+    return {
+      ...card,
+      steps,
+      canCreateSpec: canCreateSpec(
+        steps.map((s) => ({ key: s.key, status: s.status })),
+      ),
+    };
   }
 }

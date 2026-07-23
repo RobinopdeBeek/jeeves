@@ -28,6 +28,8 @@ export interface Card {
   position: number;
   createdAt: string;
   steps: CardStep[];
+  /** Server-derived: grill→spec hand-off is allowed (Create Spec). */
+  canCreateSpec: boolean;
 }
 
 export interface Project {

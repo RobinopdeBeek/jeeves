@@ -18,11 +18,11 @@ modules, not modules of their own.
 
 | Module | Interface (the seam) | What it hides |
 |---|---|---|
-| `PipelineEngine` | pipeline lookup by `(kind, hasParent)`; `advance(card)` | all column/step transition rules, auto-advance, "workflow is code" |
-| `CardStore` | CRUD, kind decision, fan-out, blocker edges, derived queries ("X of Y", queue candidates, Round N history) | SQLite/Drizzle, the unified draft/active/merged model, every derivation rule |
-| `ArtifactStore` | `save`, `harvest(worktree, declarations)`, `list(card)`, serve-path resolution | atomic/versioned files, metadata, containment, manifest regeneration, lineage, rounds, supersession |
-| `ExecutionEngine` | `enqueue(card, step)` + run events; `startPreview(card, gitSha)` / `stopPreview()` | `AgentRunner` (today: `@cursor/sdk` local), `WorktreeManager`, per-run worktrees/finalization, branch strategy, sequential queue, host-process preview lifecycle, blocker checks, restart recovery, eval-skill sequencing |
-| `AcpBridge` | `openSession(skillPrompt)` → `UIMessage` stream; session registry acquire/reattach | spawning `agent acp`, ACP→`UIMessage` projection, permission responses, JSON-RPC piping, warm session registry (cap + eviction), disconnect/hand-off close |
+| `PipelineEngine` | pipeline lookup by `(kind, hasParent)`; real `advance(card, trigger)` → patches + side-effects | all column/step transition rules, auto-advance, board predicates (`canCreateSpec`), "workflow is code" |
+| `CardStore` | CRUD, kind decision, fan-out, blocker edges, derived queries ("X of Y", queue candidates, Round N history); persists `advance` patches | SQLite/Drizzle, the unified draft/active/merged model, every derivation rule |
+| `ArtifactStore` | `save`, `harvest(worktree, declarations)`, `list(card)`, serve-path resolution; transcript upsert is file/index only | atomic/versioned files, metadata, containment, manifest regeneration, lineage, rounds, supersession |
+| `ExecutionEngine` | `enqueue(card, step)` + run events; `startPreview(card, gitSha)` / `stopPreview()`; dispatches `advance` side-effects on finish | `AgentRunner` (today: `@cursor/sdk` local), `WorktreeManager`, per-run worktrees/finalization, branch strategy, sequential queue, host-process preview lifecycle, blocker checks, restart recovery, eval-skill sequencing |
+| `AcpBridge` | push-only session (`attach`/`onChunk`); warm registry acquire/reattach; `openChat` for WS adapters | spawning `agent acp`, ACP→`UIMessage` projection, permission responses, JSON-RPC piping, warm registry (cap + eviction, inside module), seed-once history, disconnect/hand-off close |
 
 ### The slice sequence
 

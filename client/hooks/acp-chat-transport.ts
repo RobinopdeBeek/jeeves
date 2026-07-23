@@ -1,28 +1,7 @@
 import type { ChatTransport, UIMessage, UIMessageChunk } from "ai";
+import type { WsClientMessage, WsServerMessage } from "@shared/chat-ws";
 
-export type PermissionOptionPart = {
-  optionId: string;
-  name: string;
-  kind: string;
-};
-
-/** Matches AcpBridge `data-permission` payload (ADR 0008 — no ACP types). */
-export type PermissionRequestData = {
-  requestId: string;
-  toolCallId?: string;
-  title?: string;
-  options: PermissionOptionPart[];
-  status: "pending" | "resolved";
-  selectedOptionId?: string;
-};
-
-type WsServerMessage =
-  | { type: "ready"; messages: UIMessage[]; streaming?: boolean }
-  | { type: "session"; status: "open"; streaming?: boolean }
-  | { type: "chunk"; chunk: UIMessageChunk }
-  | { type: "status"; status: "ai-working" | "needs-user" }
-  | { type: "displaced"; reason: string }
-  | { type: "error"; error: string };
+export type { PermissionOptionPart, PermissionRequestData } from "@shared/chat-ws";
 
 export interface AcpChatTransportOptions {
   cardId: string;
@@ -34,6 +13,9 @@ export interface AcpChatTransportOptions {
 /**
  * WebSocket ChatTransport for Grill (and future ai-chat steps).
  * Speaks AI SDK UIMessageChunk only — never ACP types (ADR 0008).
+ *
+ * One inbound consumer: chunks buffer until a ReadableStream attaches
+ * (reconnectToStream for the opening/warm turn, sendMessages for replies).
  */
 export class AcpChatTransport {
   private socket: WebSocket | null = null;
@@ -47,15 +29,13 @@ export class AcpChatTransport {
   private sessionOpen = false;
   private displaced = false;
 
-  /** Chunks for the eager opening turn, buffered until reconnectToStream reads them. */
-  private openingBuffer: UIMessageChunk[] = [];
-  private openingDone = false;
-  private openingController: ReadableStreamDefaultController<UIMessageChunk> | null =
+  /** Chunks for the current turn until a stream consumer attaches. */
+  private chunkBuffer: UIMessageChunk[] = [];
+  private streamController: ReadableStreamDefaultController<UIMessageChunk> | null =
     null;
-  private openingConsumed = false;
-
-  private replyController: ReadableStreamDefaultController<UIMessageChunk> | null =
-    null;
+  private turnDone = false;
+  /** Opening / warm catch-up stream is consumed at most once via reconnectToStream. */
+  private resumeConsumed = false;
 
   constructor(private readonly options: AcpChatTransportOptions) {}
 
@@ -112,15 +92,11 @@ export class AcpChatTransport {
     };
     socket.onclose = () => {
       if (this.displaced) {
-        this.markOpeningDone();
-        this.replyController?.close();
-        this.replyController = null;
+        this.closeActiveStream();
         return;
       }
       this.failConnect(new Error("WebSocket closed before grill session was ready"));
-      this.markOpeningDone();
-      this.replyController?.close();
-      this.replyController = null;
+      this.markTurnDone();
     };
 
     return this.ready;
@@ -148,50 +124,27 @@ export class AcpChatTransport {
       return new ReadableStream({ start: (c) => c.close() });
     }
 
-    const stream = new ReadableStream<UIMessageChunk>({
-      start: (controller) => {
-        this.replyController = controller;
-        abortSignal?.addEventListener("abort", () => {
-          controller.close();
-          this.replyController = null;
-        });
-      },
-    });
-
-    this.socket?.send(JSON.stringify({ type: "user-message", text }));
+    this.beginTurn();
+    const stream = this.openChunkStream(abortSignal);
+    this.sendClient({ type: "user-message", text });
     return stream;
   }
 
   /** Approve/deny an inline `data-permission` part via the WebSocket. */
   respondToPermission(requestId: string, optionId: string): void {
     if (!this.socket || this.displaced) return;
-    this.socket.send(
-      JSON.stringify({ type: "permission-response", requestId, optionId }),
-    );
+    this.sendClient({ type: "permission-response", requestId, optionId });
   }
 
   /**
-   * Delivers the buffered (or still-streaming) opening turn when useChat mounts
-   * with `resume: true`.
+   * Delivers the buffered (or still-streaming) opening/warm turn when useChat
+   * mounts with `resume: true`.
    */
   async reconnectToStream(): Promise<ReadableStream<UIMessageChunk> | null> {
     await this.connect();
-    if (this.openingConsumed) return null;
-    this.openingConsumed = true;
-
-    return new ReadableStream<UIMessageChunk>({
-      start: (controller) => {
-        for (const chunk of this.openingBuffer) {
-          controller.enqueue(chunk);
-        }
-        this.openingBuffer = [];
-        if (this.openingDone) {
-          controller.close();
-        } else {
-          this.openingController = controller;
-        }
-      },
-    });
+    if (this.resumeConsumed) return null;
+    this.resumeConsumed = true;
+    return this.openChunkStream();
   }
 
   close(): void {
@@ -220,6 +173,69 @@ export class AcpChatTransport {
     }
   }
 
+  private sendClient(msg: WsClientMessage): void {
+    this.socket?.send(JSON.stringify(msg));
+  }
+
+  private beginTurn(): void {
+    this.closeActiveStream();
+    this.chunkBuffer = [];
+    this.turnDone = false;
+  }
+
+  private openChunkStream(
+    abortSignal?: AbortSignal,
+  ): ReadableStream<UIMessageChunk> {
+    return new ReadableStream<UIMessageChunk>({
+      start: (controller) => {
+        for (const chunk of this.chunkBuffer) {
+          controller.enqueue(chunk);
+        }
+        this.chunkBuffer = [];
+        if (this.turnDone) {
+          controller.close();
+          return;
+        }
+        this.streamController = controller;
+        abortSignal?.addEventListener("abort", () => {
+          if (this.streamController === controller) {
+            controller.close();
+            this.streamController = null;
+          }
+        });
+      },
+    });
+  }
+
+  private pushChunk(chunk: UIMessageChunk): void {
+    if (this.streamController) {
+      this.streamController.enqueue(chunk);
+      if (chunk.type === "finish" || chunk.type === "error") {
+        this.markTurnDone();
+      }
+      return;
+    }
+    this.chunkBuffer.push(chunk);
+    if (chunk.type === "finish" || chunk.type === "error") {
+      this.markTurnDone();
+    }
+  }
+
+  private markTurnDone(): void {
+    if (this.turnDone) return;
+    this.turnDone = true;
+    this.closeActiveStream();
+  }
+
+  private closeActiveStream(): void {
+    try {
+      this.streamController?.close();
+    } catch {
+      // already closed
+    }
+    this.streamController = null;
+  }
+
   private failConnect(err: Error): void {
     this.rejectReady?.(err);
     this.rejectSession?.(err);
@@ -227,10 +243,12 @@ export class AcpChatTransport {
     this.rejectReady = null;
     this.resolveSession = null;
     this.rejectSession = null;
-    this.openingController?.error(err);
-    this.replyController?.error(err);
-    this.openingController = null;
-    this.replyController = null;
+    try {
+      this.streamController?.error(err);
+    } catch {
+      // already closed
+    }
+    this.streamController = null;
   }
 
   private handleServerMessage(raw: string): void {
@@ -249,7 +267,7 @@ export class AcpChatTransport {
         // Empty history ⇒ server will stream an opening turn.
         // Non-empty history ⇒ opening is done unless warm reattach is mid-stream.
         if (msg.messages.length > 0 && !msg.streaming) {
-          this.markOpeningDone();
+          this.markTurnDone();
         }
         break;
       case "session":
@@ -260,36 +278,18 @@ export class AcpChatTransport {
           this.rejectSession = null;
           // Authoritative: turn may have finished between ready and attach.
           if (!msg.streaming) {
-            this.markOpeningDone();
+            this.markTurnDone();
           }
         }
         break;
       case "chunk":
-        if (this.replyController) {
-          this.replyController.enqueue(msg.chunk);
-          if (msg.chunk.type === "finish" || msg.chunk.type === "error") {
-            this.replyController.close();
-            this.replyController = null;
-          }
-        } else if (this.openingController) {
-          this.openingController.enqueue(msg.chunk);
-          if (msg.chunk.type === "finish" || msg.chunk.type === "error") {
-            this.markOpeningDone();
-          }
-        } else {
-          this.openingBuffer.push(msg.chunk);
-          if (msg.chunk.type === "finish" || msg.chunk.type === "error") {
-            this.markOpeningDone();
-          }
-        }
+        this.pushChunk(msg.chunk);
         break;
       case "displaced":
         this.displaced = true;
         this.sessionOpen = false;
         this.options.onDisplaced?.(msg.reason);
-        this.markOpeningDone();
-        this.replyController?.close();
-        this.replyController = null;
+        this.markTurnDone();
         // Drop reject handlers so the ensuing socket close is not an error.
         this.resolveReady = null;
         this.rejectReady = null;
@@ -298,21 +298,10 @@ export class AcpChatTransport {
         break;
       case "error":
         this.failConnect(new Error(msg.error));
-        this.markOpeningDone();
+        this.markTurnDone();
         break;
       case "status":
         break;
     }
-  }
-
-  private markOpeningDone(): void {
-    if (this.openingDone) return;
-    this.openingDone = true;
-    try {
-      this.openingController?.close();
-    } catch {
-      // already closed
-    }
-    this.openingController = null;
   }
 }

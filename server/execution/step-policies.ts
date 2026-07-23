@@ -19,11 +19,36 @@ export interface StepExecutionPolicy {
   ) => boolean;
 }
 
+/** Plan exchange files need prose beyond headings and empty bullets. */
+export function assertPlanHasUsefulContent(raw: string): void {
+  const body = stripFrontmatter(raw)
+    .replace(/^#+\s+.*$/gm, "")
+    .replace(/^[-*]\s*$/gm, "")
+    .trim();
+  if (body.length === 0) {
+    throw new Error("exchange file has no useful content");
+  }
+}
+
+function stripFrontmatter(raw: string): string {
+  if (!raw.startsWith("---\n")) return raw;
+  const end = raw.indexOf("\n---\n", 4);
+  if (end === -1) return raw;
+  return raw.slice(end + 5);
+}
+
 export const STEP_POLICIES: Partial<Record<StepKey, StepExecutionPolicy>> = {
   plan: {
     skill: "slice-3-tracer",
     promptFile: path.join("prompts", "execution", "slice-3-tracer.md"),
-    harvest: [{ exchangePath: ".jeeves/plan.md", kind: "plan", stepKey: "plan" }],
+    harvest: [
+      {
+        exchangePath: ".jeeves/plan.md",
+        kind: "plan",
+        stepKey: "plan",
+        validate: assertPlanHasUsefulContent,
+      },
+    ],
     assertWorkspace: assertPlanWorkspaceClean,
     postcondition: (artifacts, cardId, round) =>
       artifacts.latest(cardId, { stepKey: "plan", round, kind: "plan" }) !== undefined,

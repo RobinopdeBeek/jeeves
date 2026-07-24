@@ -2,7 +2,7 @@
 
 > Future feature — still refining.
 
-Read-only file explorer on mobile. Laptop has Cursor; on phone, still want to browse files (GitHub-like). A deep link into the GitHub app is fine too.
+Read-only file explorer on mobile. Laptop has Cursor; on phone, still want to browse files (GitHub-like). A deep link into the GitHub app might be fine too.
 
 ## Ideas
 

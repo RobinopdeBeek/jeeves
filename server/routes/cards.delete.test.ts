@@ -30,6 +30,10 @@ describe("DELETE /:id", () => {
       events: new EventBus(),
       artifacts,
       sessions: new ChatSessionRegistry(),
+      extractGrillSession: async () => {
+        throw new Error("unused");
+      },
+      promptsRoot: path.resolve(import.meta.dirname, "../../prompts"),
     };
   });
 

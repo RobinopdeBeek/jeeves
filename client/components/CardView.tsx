@@ -28,6 +28,7 @@ export function CardView() {
   const [tabOverride, setTabOverride] = useState<string | null>(null);
   const [deciding, setDeciding] = useState(false);
   const [creatingSpec, setCreatingSpec] = useState(false);
+  const [createSpecError, setCreateSpecError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -73,12 +74,13 @@ export function CardView() {
   async function createSpec() {
     if (!card) return;
     setCreatingSpec(true);
+    setCreateSpecError(null);
     try {
       const updated = await api.createSpec(card.id);
       setCard(updated);
       setTabOverride(null); // activeTabKey prefers Spec once needs-user
     } catch (err) {
-      console.error(err);
+      setCreateSpecError(err instanceof Error ? err.message : String(err));
     } finally {
       setCreatingSpec(false);
     }
@@ -181,9 +183,15 @@ export function CardView() {
 
         {showCreateSpec && (
           <>
-            <div className="flex-1" />
+            <div className="flex min-w-0 flex-1 flex-col items-end gap-1">
+              {createSpecError ? (
+                <p className="max-w-md text-right text-sm text-destructive" role="alert">
+                  {createSpecError}
+                </p>
+              ) : null}
+            </div>
             <Button disabled={createSpecDisabled} onClick={createSpec}>
-              Create Spec →
+              {creatingSpec ? "Creating Spec…" : "Create Spec →"}
             </Button>
           </>
         )}

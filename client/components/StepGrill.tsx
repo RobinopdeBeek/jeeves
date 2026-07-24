@@ -2,6 +2,7 @@ import type { UIMessage } from "ai";
 import { Thread, ThreadShell } from "@/components/assistant-ui/thread";
 import { AcpChatProvider, useAcpChat } from "@/hooks/useAcpChat";
 import { PermissionDataUI } from "@/components/grill/PermissionPartView";
+import { GrillSessionView } from "@/components/grill/GrillSessionView";
 import { ReadOnlyTranscript } from "@/components/grill/ReadOnlyTranscript";
 import { GrillTransportContext } from "@/components/grill/transport-context";
 import type { StepPanelProps } from "./step-panel-types";
@@ -53,13 +54,13 @@ function LiveGrill({ cardId }: { cardId: string }) {
 }
 
 /**
- * Completed grill (handed off to Spec): frozen transcript replay, no composer,
- * no live ACP session.
+ * Completed grill (handed off to Spec): Grill session Q&A markdown, no composer,
+ * no live ACP session. Raw transcript stays in storage for resume/debug only.
  */
 function CompletedGrill({ cardId }: { cardId: string }) {
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      <ReadOnlyTranscript cardId={cardId} fallbackMessages={[]} />
+      <GrillSessionView cardId={cardId} />
     </div>
   );
 }

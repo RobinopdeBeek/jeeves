@@ -71,23 +71,8 @@ blocker relationship can be built in parallel or reordered.
    Hand-off / step completion closes the registry entry. No warm process pool (defer until
    cold start is still annoying). Applies to Grill now and future ACP chat steps later.
 
-   **Grill → Spec hand-off extract prompt (`grill-session`):**
-```
-Extract this grilling transcript into a Grill session markdown document.
-Do not summarize, paraphrase, or shorten settled substance.
-
-Include:
-- Resolved Q&A pairs (near-verbatim). Collapse clarification/discussion into the settled pair.
-- Still-open questions (omit the section if none).
-- A short "Docs updated" list of glossary/ADR paths or terms touched (omit if none; do not
-  inline full ADR/glossary bodies).
-
-Expand bare multiple-choice answers (A/B/…) to the chosen option text; do not dump full
-option lists. Strip process/tool/permission narration.
-
-This is the Spec input and the done Grill tab document. A failed or empty extract must not
-hand off.
-```
+   **Grill → Spec hand-off extract** uses [`prompts/chat/grill-session.md`](../../prompts/chat/grill-session.md)
+   (host `Agent.prompt`; failed/empty extract must not hand off).
 6. **Spec step.** MDXEditor + AI side-chat reusing the chat stack from slice 5; spec artifact
    with the acceptance-criteria checklist; Spec consumes the Grill session (not the
    transcript). *Demo: author a spec collaboratively from the tablet.* (Blocked by 5.)

@@ -2,11 +2,16 @@ import { Hono } from "hono";
 import { CardStoreError, type KindPath } from "../cards/store.js";
 import type { CardStore } from "../cards/store.js";
 import type { Project } from "../db/schema.js";
+import {
+  GrillSessionExtractError,
+  type ExtractGrillSession,
+} from "../chat/grill-session-extract.js";
 import { dispatchAdvanceEffects } from "../execution/dispatch-effects.js";
 import type { ExecutionEngine } from "../execution/engine.js";
 import type { EventBus } from "../execution/events.js";
 import type { RunStore } from "../execution/run-store.js";
 import type { ArtifactStore } from "../artifacts/store.js";
+import { loadTranscript } from "../ws/open-chat.js";
 import type { ChatSessionRegistry } from "../ws/session-registry.js";
 import { artifactRoutes } from "./artifacts.js";
 
@@ -20,6 +25,8 @@ export interface CardRouteDeps {
   events: EventBus;
   artifacts: ArtifactStore;
   sessions: ChatSessionRegistry;
+  extractGrillSession: ExtractGrillSession;
+  promptsRoot: string;
 }
 
 /** Thin HTTP adapter over the CardStore seam. */
@@ -71,11 +78,47 @@ export function cardRoutes(
     }
   });
 
-  app.post("/:id/create-spec", (c) => {
+  app.post("/:id/create-spec", async (c) => {
     const cardId = c.req.param("id");
     try {
-      // Validate before tearing down ACP so a 409 leaves the session intact.
+      // Validate before extract / ACP teardown so a 409 leaves the session intact.
       const plan = store.assertGrillToSpecHandOff(cardId);
+
+      const transcript = loadTranscript(deps.artifacts, {
+        cardId,
+        stepKey: "grill",
+        round: 0,
+      });
+      if (transcript.length === 0) {
+        return c.json({ error: "grill transcript is empty" }, 422);
+      }
+
+      let body: string;
+      try {
+        body = await deps.extractGrillSession({
+          transcript,
+          repoPath: project.repoPath,
+          promptsRoot: deps.promptsRoot,
+        });
+      } catch (e) {
+        const message =
+          e instanceof GrillSessionExtractError
+            ? e.message
+            : e instanceof Error
+              ? e.message
+              : "grill-session extract failed";
+        return c.json({ error: message }, 502);
+      }
+
+      deps.artifacts.save({
+        cardId,
+        stepKey: "grill",
+        round: 0,
+        kind: "grill",
+        content: body,
+        sourceSkill: "grill-session",
+      });
+
       dispatchAdvanceEffects(cardId, plan.sideEffects, {
         enqueue: (id, step) => deps.engine.enqueue(id, step),
         sessions: deps.sessions,

@@ -77,7 +77,16 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json" },
     ...init,
   });
-  if (!res.ok) throw new Error(`${init?.method ?? "GET"} ${url} → ${res.status}`);
+  if (!res.ok) {
+    let detail = `${init?.method ?? "GET"} ${url} → ${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body.error) detail = body.error;
+    } catch {
+      // keep status-based message
+    }
+    throw new Error(detail);
+  }
   return res.json() as Promise<T>;
 }
 

@@ -70,6 +70,12 @@ export class AcpBridge {
   private messages: UIMessage[] = [];
   private currentTextId: string | null = null;
   private currentAssistant: UIMessage | null = null;
+  /**
+   * Set when a non-text session update (tool_call, thought, …) arrives mid-turn
+   * so the next agent_message_chunk becomes a new text part instead of being
+   * concatenated onto the previous sentence.
+   */
+  private textInterrupted = false;
   /** False until opening turn finishes or resume history is seeded into a prompt. */
   private contextSeeded = false;
 
@@ -205,12 +211,32 @@ export class AcpBridge {
   private beginTurn(): void {
     this.activity = "ai-working";
     this.awaitingDetachedPermission = false;
+    this.textInterrupted = false;
     this.turnStartedAt = Date.now();
     this.turnChunks = [];
     this.turnDone = new Promise((resolve) => {
       this.resolveTurnDone = resolve;
     });
     this.live.onStatus("ai-working");
+  }
+
+  /** Close the open text part and open a fresh one on the current assistant. */
+  private rotateTextPart(): void {
+    if (!this.currentTextId || !this.currentAssistant) return;
+    this.pushChunk({ type: "text-end", id: this.currentTextId });
+    const textId = nanoid(10);
+    this.currentTextId = textId;
+    this.currentAssistant.parts.push({ type: "text", text: "" });
+    this.pushChunk({ type: "text-start", id: textId });
+  }
+
+  private lastTextPart(): { type: "text"; text: string } | undefined {
+    if (!this.currentAssistant) return undefined;
+    for (let i = this.currentAssistant.parts.length - 1; i >= 0; i--) {
+      const part = this.currentAssistant.parts[i];
+      if (part?.type === "text") return part;
+    }
+    return undefined;
   }
 
   private endTurn(): void {
@@ -265,7 +291,9 @@ export class AcpBridge {
         sessionId: this.sessionId,
         prompt: [{ type: "text", text: promptText }],
       });
-      this.pushChunk({ type: "text-end", id: textId });
+      if (this.currentTextId) {
+        this.pushChunk({ type: "text-end", id: this.currentTextId });
+      }
       this.pushChunk({ type: "finish", finishReason: "stop" });
       if (this.currentAssistant) {
         this.messages.push(this.currentAssistant);
@@ -353,23 +381,33 @@ export class AcpBridge {
         typeof update.content.text === "string" &&
         this.currentTextId
       ) {
-        const delta = update.content.text;
-        if (this.currentAssistant) {
-          const part = this.currentAssistant.parts[0];
-          if (part && part.type === "text") {
-            part.text += delta;
-          }
+        if (this.textInterrupted) {
+          this.textInterrupted = false;
+          this.rotateTextPart();
         }
+        const delta = update.content.text;
+        const part = this.lastTextPart();
+        if (part) part.text += delta;
         this.pushChunk({
           type: "text-delta",
           id: this.currentTextId,
           delta,
         });
+      } else if (
+        this.currentTextId &&
+        (update?.sessionUpdate === "tool_call" ||
+          update?.sessionUpdate === "agent_thought_chunk" ||
+          update?.sessionUpdate === "agent_thought")
+      ) {
+        // Substantive gap — next message chunk is a new segment.
+        // Ignore tool_call_update status noise so mid-sentence text stays one part.
+        this.textInterrupted = true;
       }
       return;
     }
 
     if (msg.method === "session/request_permission" && msg.id != null) {
+      if (this.currentTextId) this.textInterrupted = true;
       this.projectPermissionRequest(msg.id, msg.params);
     }
   }

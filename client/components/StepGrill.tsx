@@ -1,20 +1,12 @@
-import {
-  AuiIf,
-  ComposerPrimitive,
-  MessagePrimitive,
-  ThreadPrimitive,
-} from "@assistant-ui/react";
-import { IconLoader2, IconPaperclip, IconSend } from "@tabler/icons-react";
 import type { UIMessage } from "ai";
-import { MarkdownText } from "@/components/assistant-ui/markdown-text";
-import { Button } from "@/components/ui/button";
+import { Thread, ThreadShell } from "@/components/assistant-ui/thread";
 import { AcpChatProvider, useAcpChat } from "@/hooks/useAcpChat";
 import { PermissionDataUI } from "@/components/grill/PermissionPartView";
 import { ReadOnlyTranscript } from "@/components/grill/ReadOnlyTranscript";
 import { GrillTransportContext } from "@/components/grill/transport-context";
 import type { StepPanelProps } from "./step-panel-types";
 
-/** Grill tab — assistant-ui thread + composer over AcpBridge WebSocket. */
+/** Grill tab — reusable assistant-ui Thread over AcpBridge WebSocket. */
 export function StepGrill({ card }: StepPanelProps) {
   const grill = card.steps.find((s) => s.key === "grill");
   if (grill?.status === "done") {
@@ -37,7 +29,7 @@ function LiveGrill({ cardId }: { cardId: string }) {
   }
 
   if (chat.status === "connecting") {
-    return <GrillThreadShell />;
+    return <ThreadShell />;
   }
 
   if (chat.status === "displaced") {
@@ -54,7 +46,7 @@ function LiveGrill({ cardId }: { cardId: string }) {
     <AcpChatProvider transport={chat.transport} messages={chat.messages}>
       <GrillTransportContext.Provider value={chat.transport}>
         <PermissionDataUI />
-        <GrillThread sessionOpen={chat.sessionOpen} />
+        <Thread sessionOpen={chat.sessionOpen} />
       </GrillTransportContext.Provider>
     </AcpChatProvider>
   );
@@ -68,33 +60,6 @@ function CompletedGrill({ cardId }: { cardId: string }) {
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <ReadOnlyTranscript cardId={cardId} fallbackMessages={[]} />
-    </div>
-  );
-}
-
-/** Thread chrome while waiting for transcript `ready` (usually <100ms). */
-function GrillThreadShell() {
-  return (
-    <div className="flex flex-1 flex-col overflow-hidden">
-      <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-4">
-        <p className="text-muted-foreground">Loading conversation…</p>
-      </div>
-      <div className="flex items-end gap-2 border-t p-3">
-        <Button variant="ghost" size="icon-sm" disabled title="Attach files">
-          <IconPaperclip />
-        </Button>
-        <div className="flex flex-1 items-end gap-2">
-          <textarea
-            rows={1}
-            disabled
-            placeholder="Loading…"
-            className="min-h-9 flex-1 resize-none opacity-50"
-          />
-          <Button size="icon-sm" disabled title="Starting session…">
-            <IconLoader2 className="animate-spin" />
-          </Button>
-        </div>
-      </div>
     </div>
   );
 }
@@ -128,75 +93,5 @@ function DisplacedGrill({
       </div>
       <ReadOnlyTranscript cardId={cardId} fallbackMessages={fallbackMessages} />
     </div>
-  );
-}
-
-function GrillThread({ sessionOpen }: { sessionOpen: boolean }) {
-  return (
-    <ThreadPrimitive.Root className="flex flex-1 flex-col overflow-hidden">
-      <ThreadPrimitive.Viewport className="flex flex-1 flex-col gap-3 overflow-y-auto p-4">
-        <AuiIf condition={(s) => s.thread.isEmpty}>
-          <p className="text-muted-foreground">
-            {sessionOpen ? "Waiting for the agent…" : "Starting agent session…"}
-          </p>
-        </AuiIf>
-
-        <ThreadPrimitive.Messages>
-          {({ message }) =>
-            message.role === "user" ? <UserMessage /> : <AssistantMessage />
-          }
-        </ThreadPrimitive.Messages>
-      </ThreadPrimitive.Viewport>
-
-      <GrillComposer sessionOpen={sessionOpen} />
-    </ThreadPrimitive.Root>
-  );
-}
-
-function GrillComposer({ sessionOpen }: { sessionOpen: boolean }) {
-  return (
-    <div className="flex items-end gap-2 border-t p-3">
-      <Button variant="ghost" size="icon-sm" disabled title="Attach files">
-        <IconPaperclip />
-      </Button>
-      <ComposerPrimitive.Root className="flex flex-1 items-end gap-2">
-        <ComposerPrimitive.Input
-          rows={1}
-          placeholder={sessionOpen ? "Message…" : "Agent starting — you can type…"}
-          className="min-h-9 flex-1 resize-none"
-        />
-        {sessionOpen ? (
-          <ComposerPrimitive.Send asChild>
-            <Button size="icon-sm" title="Send">
-              <IconSend />
-            </Button>
-          </ComposerPrimitive.Send>
-        ) : (
-          <Button size="icon-sm" disabled title="Starting session…">
-            <IconLoader2 className="animate-spin" />
-          </Button>
-        )}
-      </ComposerPrimitive.Root>
-    </div>
-  );
-}
-
-function UserMessage() {
-  return (
-    <MessagePrimitive.Root className="flex justify-end">
-      <div className="max-w-[85%]">
-        <MessagePrimitive.Parts />
-      </div>
-    </MessagePrimitive.Root>
-  );
-}
-
-function AssistantMessage() {
-  return (
-    <MessagePrimitive.Root className="flex justify-start">
-      <div className="max-w-[85%] space-y-2">
-        <MessagePrimitive.Parts components={{ Text: MarkdownText }} />
-      </div>
-    </MessagePrimitive.Root>
   );
 }

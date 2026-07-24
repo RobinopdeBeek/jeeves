@@ -1,4 +1,5 @@
-import { useChatRuntime } from "@assistant-ui/react-ai-sdk";
+import { useChat } from "@ai-sdk/react";
+import { useAISDKRuntime } from "@assistant-ui/react-ai-sdk";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { useEffect, useState, type ReactNode } from "react";
 import type { ChatTransport, UIMessage } from "ai";
@@ -106,7 +107,14 @@ export function useAcpChat({
   return state;
 }
 
-/** Mount assistant-ui runtime once the WebSocket handshake has history. */
+/**
+ * Mount assistant-ui runtime once the WebSocket handshake has history.
+ *
+ * Uses useChat + useAISDKRuntime with a stable id (not useChatRuntime's
+ * RemoteThreadList). Thread-list id churn recreates Chat without re-firing
+ * resume, which dropped the opening grill turn until a tab remount loaded
+ * the finished transcript.
+ */
 export function AcpChatProvider({
   transport,
   messages,
@@ -116,12 +124,18 @@ export function AcpChatProvider({
   messages: UIMessage[];
   children: ReactNode;
 }) {
-  // Isolate assistant-ui's incomplete options typing (`resume` omitted upstream).
-  const runtime = useChatRuntime({
+  const chat = useChat({
+    // Stable for this provider mount. useChatRuntime's RemoteThreadList id
+    // churn recreates Chat without re-calling resumeStream.
+    id: "acp-chat",
     transport: transport as ChatTransport<UIMessage>,
     messages,
     resume: true,
-  } as Parameters<typeof useChatRuntime>[0]);
+  });
+  // Nested @ai-sdk/react inside react-ai-sdk can disagree on UseChatHelpers.
+  const runtime = useAISDKRuntime(
+    chat as unknown as Parameters<typeof useAISDKRuntime>[0],
+  );
   return (
     <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>
   );

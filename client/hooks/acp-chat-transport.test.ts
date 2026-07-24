@@ -192,4 +192,88 @@ describe("AcpChatTransport", () => {
     const chunks = await readP;
     expect(chunks.map((c) => c.type)).toEqual(["start", "finish"]);
   });
+
+  it("re-attaches opening chunks after the first resume stream is cancelled mid-turn", async () => {
+    // useChat recreates its Chat when the assistant-ui thread id changes and
+    // cancels the in-flight resume stream without calling resume again. The
+    // transport must allow a second reconnectToStream while the turn is live.
+    const transport = new AcpChatTransport({
+      cardId: "c1",
+      stepKey: "grill",
+    });
+
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({ type: "ready", messages: [], streaming: true });
+    await connectP;
+    ws.deliver({ type: "session", status: "open", streaming: true });
+
+    const first = await transport.reconnectToStream();
+    expect(first).not.toBeNull();
+    await first!.getReader().cancel();
+
+    const second = await transport.reconnectToStream();
+    expect(second).not.toBeNull();
+    const readP = readAll(second!);
+
+    ws.deliver({
+      type: "chunk",
+      chunk: { type: "start", messageId: "a1" },
+    });
+    ws.deliver({
+      type: "chunk",
+      chunk: { type: "text-delta", id: "t1", delta: "First question?" },
+    });
+    ws.deliver({
+      type: "chunk",
+      chunk: { type: "finish", finishReason: "stop" },
+    });
+
+    const chunks = await readP;
+    expect(chunks.map((c) => c.type)).toEqual([
+      "start",
+      "text-delta",
+      "finish",
+    ]);
+  });
+
+  it("keeps the opening stream open when session reports idle before chunks arrive", async () => {
+    // ready is sent before openChat; session can briefly report streaming:false
+    // while the opening turn is still starting. That must not close an empty
+    // resume stream and drop the first question.
+    const transport = new AcpChatTransport({
+      cardId: "c1",
+      stepKey: "grill",
+    });
+
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({ type: "ready", messages: [], streaming: false });
+    await connectP;
+
+    const resume = await transport.reconnectToStream();
+    expect(resume).not.toBeNull();
+    const readP = readAll(resume!);
+
+    ws.deliver({ type: "session", status: "open", streaming: false });
+    ws.deliver({
+      type: "chunk",
+      chunk: { type: "start", messageId: "a1" },
+    });
+    ws.deliver({
+      type: "chunk",
+      chunk: { type: "text-delta", id: "t1", delta: "What problem?" },
+    });
+    ws.deliver({
+      type: "chunk",
+      chunk: { type: "finish", finishReason: "stop" },
+    });
+
+    const chunks = await readP;
+    expect(chunks.map((c) => c.type)).toEqual([
+      "start",
+      "text-delta",
+      "finish",
+    ]);
+  });
 });

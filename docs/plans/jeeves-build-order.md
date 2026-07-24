@@ -56,9 +56,11 @@ blocker relationship can be built in parallel or reordered.
 5. **Grill end-to-end.** Establish the chat stack: `useChat` + assistant-ui over a custom
    WebSocket `ChatTransport`; `AcpBridge` projects ACP JSON-RPC into AI SDK `UIMessage` parts
    server-side (including permission-request custom parts). `StepGrill` renders streaming
-   chat; conversation summary saved as a `UIMessage[]` artifact on hand-off. *Demo: a
-   `/grill-with-docs` session from the phone.* (Blocked by 1 only — independent of 3–4, can
-   run in parallel.)
+   chat; the live log persists as a `UIMessage[]` **transcript** artifact. On Grill → Spec,
+   a host extract produces the **Grill session** Q&A markdown (`kind: grill`); the done Grill
+   tab shows that document, not the raw transcript
+   ([ADR 0012](../adr/0012-grill-session-qa-handoff.md)). *Demo: a `/grill-with-docs` session
+   from the phone.* (Blocked by 1 only — independent of 3–4, can run in parallel.)
 
    **5E — Warm ACP session registry** (after 5C/5D): detach ACP lifetime from the WebSocket.
    A server-side registry keyed by `(cardId, stepKey, round)` keeps up to **5** live bridges.
@@ -69,16 +71,26 @@ blocker relationship can be built in parallel or reordered.
    Hand-off / step completion closes the registry entry. No warm process pool (defer until
    cold start is still annoying). Applies to Grill now and future ACP chat steps later.
 
-   **Grill → Spec hand-off summary prompt:**
+   **Grill → Spec hand-off extract prompt (`grill-session`):**
 ```
-Summarise this entire conversation as a structured markdown document.
-Include: the problem statement as clarified, key assumptions surfaced,
-constraints identified, open questions remaining, and a readiness assessment.
-This will be used as input to /to-spec.
+Extract this grilling transcript into a Grill session markdown document.
+Do not summarize, paraphrase, or shorten settled substance.
+
+Include:
+- Resolved Q&A pairs (near-verbatim). Collapse clarification/discussion into the settled pair.
+- Still-open questions (omit the section if none).
+- A short "Docs updated" list of glossary/ADR paths or terms touched (omit if none; do not
+  inline full ADR/glossary bodies).
+
+Expand bare multiple-choice answers (A/B/…) to the chosen option text; do not dump full
+option lists. Strip process/tool/permission narration.
+
+This is the Spec input and the done Grill tab document. A failed or empty extract must not
+hand off.
 ```
 6. **Spec step.** MDXEditor + AI side-chat reusing the chat stack from slice 5; spec artifact
-   with the acceptance-criteria checklist. *Demo: author a spec collaboratively from the
-   tablet.* (Blocked by 5.)
+   with the acceptance-criteria checklist; Spec consumes the Grill session (not the
+   transcript). *Demo: author a spec collaboratively from the tablet.* (Blocked by 5.)
 7. **Fan-out.** `/to-tasks` writes a structured JSON exchange file in the worktree (vertical
    slices + blocked-by); the runner harvests it and validates with a Zod schema before creating
    draft cards (retry loop on parse failure). Draft cards (real `cards` rows, `status =

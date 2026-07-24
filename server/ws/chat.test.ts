@@ -26,6 +26,88 @@ function promptText(process: MockAcpProcess, index = 0): string {
 }
 
 describe("AcpBridge", () => {
+  it("starts a new text part after a tool_call gap so segments are not glued together", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-gap");
+
+    const bridge = new AcpBridge({
+      spawn: () => process,
+      onTranscript: () => {},
+    });
+    const sub = collectingSubscriber();
+    bridge.attach(sub);
+
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: "Grill this",
+      history: [],
+    });
+    await viWaitFor(() => process.prompts().length === 1);
+    const promptReq = process.promptRequest();
+
+    process.emit({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "sess-gap",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: {
+            type: "text",
+            text: "I'll read the project context first.",
+          },
+        },
+      },
+    });
+    process.emit({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "sess-gap",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "call_1",
+          title: "Read CONTEXT.md",
+          status: "pending",
+        },
+      },
+    });
+    process.emit({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "sess-gap",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: {
+            type: "text",
+            text: "Test 2 has no description.",
+          },
+        },
+      },
+    });
+    process.emit({
+      jsonrpc: "2.0",
+      id: promptReq.id,
+      result: { stopReason: "end_turn" },
+    });
+
+    await viWaitFor(() => sub.chunks.some((c) => c.type === "finish"));
+
+    const textStarts = sub.chunks.filter((c) => c.type === "text-start");
+    expect(textStarts.length).toBe(2);
+    expect(textDeltas(sub.chunks)).toBe(
+      "I'll read the project context first.Test 2 has no description.",
+    );
+
+    const assistant = bridge.getMessages()[0]!;
+    const textParts = assistant.parts.filter((p) => p.type === "text");
+    expect(textParts).toEqual([
+      { type: "text", text: "I'll read the project context first." },
+      { type: "text", text: "Test 2 has no description." },
+    ]);
+  });
+
   it("opens a session on empty history and projects agent_message_chunk into UIMessage parts", async () => {
     const process = new MockAcpProcess();
     process.autoHandshake("sess-1");

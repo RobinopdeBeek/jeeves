@@ -12,14 +12,14 @@ Two transport modes:
 
 | Mode | Steps | Backend | Persistence |
 |---|---|---|---|
-| **AI Chat** | Grill, Spec side-chat, Tasks side-chat | `AcpBridge` → `agent acp` | `UIMessage[]` transcript + optional host-written summary |
+| **AI Chat** | Grill, Spec side-chat, Tasks side-chat | `AcpBridge` → `agent acp` | `UIMessage[]` transcript + host-written Grill session on hand-off |
 | **AI Execution** | Plan, Implement, AI Review, Tasks, Finalize | `ExecutionEngine` → `@cursor/sdk` local | Harvested artifacts + `runs` row per invocation |
 
 **Structured outputs** (tasks breakdown, notifications) write JSON to a known **exchange file**
 under `<worktree>/.jeeves/` during a run. The runner harvests into `<repo>/.jeeves/data/`,
 Zod-validates on the host, and retries with parse-error feedback — never `generateObject`. **Prose
 outputs** write to exchange files (`.jeeves/plan.md`, eval fragment files) or are finalized by
-the host (grill summary, spec).
+the host (Grill session, spec).
 
 Every skill prompt should state: what step it belongs to, what inputs the runner injects, what
 it must produce, step **postconditions** (commits allowed? source changes forbidden?), and
@@ -46,7 +46,7 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
 | Skill | Step | Mode | Source | Priority |
 |---|---|---|---|---|
 | [`grill-with-docs`](#grill-with-docs) | Grill | AI Chat | Adapted from Matt Pocock | P1 |
-| [`grill-summary`](#grill-summary) | Grill → Spec hand-off | Host prompt | From scratch | P1 |
+| [`grill-session`](#grill-session) | Grill → Spec hand-off | Host prompt | From scratch | P1 |
 | [`spec-assist`](#spec-assist) | Spec side-chat | AI Chat | From scratch | P2 |
 | [`to-tasks`](#to-tasks) | Tasks | AI Execution | Adapted from `/to-tickets` | P1 |
 | [`to-tasks-revise`](#to-tasks-revise) | Tasks side-chat | AI Chat | Adapted from `/to-tickets` | P2 |
@@ -103,29 +103,40 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
 
 - **Step:** Define Feature → Grill (`ai-chat`)
 - **Inputs (injected):** card title + description; `CONTEXT.md` path; project `repo_path`
-- **Outputs:** `UIMessage[]` chat transcript (artifact, kind `grill`); on hand-off, host runs
-  [`grill-summary`](#grill-summary) to produce a markdown grill artifact
+- **Outputs:** `UIMessage[]` chat transcript (artifact, kind `transcript`); on hand-off, host
+  runs [`grill-session`](#grill-session) to produce the markdown Grill session artifact
+  (`kind: grill`)
 - **Behavior:** relentless one-question-at-a-time interview with codebase lookup; invoke
   `/grilling` and `/domain-modeling` inline as decisions crystallise (ADR/glossary updates stay
   in the *target* repo when grilling features for that project). Do not write a spec or task
   breakdown — surface constraints and edge cases only.
-- **Workflow awareness:** precedes Spec; summary is the sole input to spec authoring. Re-grill
-  invalidates downstream spec/tasks (staleness via `artifact_lineage`).
+- **Workflow awareness:** precedes Spec; the Grill session is the sole grill hand-off into
+  spec authoring (the transcript is for resume/debug only). Re-grill invalidates downstream
+  spec/tasks (staleness via `artifact_lineage`). See
+  [ADR 0012](../adr/0012-grill-session-qa-handoff.md).
 
-#### `grill-summary`
+#### `grill-session`
 
 - **Step:** Grill → Spec transition (host-controlled, not a `runs` row)
 - **Inputs:** full Grill `UIMessage[]` transcript
-- **Outputs:** markdown artifact (kind `grill`) with YAML frontmatter — problem statement,
-  assumptions, constraints, open questions, readiness assessment
-- **Behavior:** synthesise the conversation; no new questions. Fixed hand-off prompt (see
-  [slice 5](./jeeves-build-order.md#the-slice-sequence)).
-- **Workflow awareness:** explicit input to Spec and, indirectly, `/to-tasks`.
+- **Outputs:** markdown artifact (kind `grill`) with host YAML frontmatter and body:
+  resolved Q&A pairs, optional still-open questions, optional short list of glossary/ADR
+  docs updated during the interview. Omit empty optional sections. No problem-statement /
+  assumptions / readiness synthesis.
+- **Behavior:** **extract only** — never summarize, paraphrase, or shorten settled substance.
+  Collapse clarification/discussion threads into the settled Q&A pair. Expand bare
+  multiple-choice answers (`A`/`B`) to the chosen option text; do not dump full option lists.
+  No new questions. Fixed hand-off prompt (see
+  [slice 5](./jeeves-build-order.md#the-slice-sequence)). Failed or empty extract **blocks**
+  the Grill → Spec advance; transcript remains for retry. Artifact is read-only after harvest;
+  the done Grill tab renders this document (not the raw transcript).
+- **Workflow awareness:** explicit input to Spec and, indirectly, `/to-tasks`. Lineage:
+  Grill session derived from transcript.
 
 #### `spec-assist`
 
 - **Step:** Define Feature → Spec side-chat (`ai-chat`)
-- **Inputs:** grill summary artifact; current spec draft from the editor; card metadata
+- **Inputs:** Grill session artifact; current spec draft from the editor; card metadata
 - **Outputs:** chat transcript; human saves spec markdown (host-written artifact, kind `spec`)
 - **Behavior:** collaborative drafting of acceptance criteria — no autonomous publish. The
   acceptance-criteria checklist authored here is the exact list that reappears in the
@@ -136,7 +147,7 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
 #### `to-tasks`
 
 - **Step:** Define Feature → Tasks (`ai-execution`, first pass)
-- **Inputs (injected):** spec artifact; grill summary; `CONTEXT.md`; module map / ADRs;
+- **Inputs (injected):** spec artifact; Grill session; `CONTEXT.md`; module map / ADRs;
   existing merged child tasks of this feature (if any)
 - **Outputs:** `.jeeves/to-tasks.json` exchange file → harvested → `cards` rows (`status = 'draft'`)
   + `card_blockers` edges + `tasks-breakdown` artifact metadata. **No source commits.**
@@ -377,7 +388,7 @@ Prioritise prompt quality in this order (P0 = hardest / highest leverage):
 |---|---|---|
 | **P0** | `eval-diff-narrative` | Hardest to get right; highest value for review speed |
 | **P0** | `eval-qa-plan` | Must be specific and actionable, not generic |
-| P1 | `grill-with-docs` + `grill-summary` | Sets the quality ceiling for the whole feature |
+| P1 | `grill-with-docs` + `grill-session` | Sets the quality ceiling for the whole feature |
 | P1 | `to-tasks` | Determines whether child cards are truly independent slices |
 | P1 | `plan-implementation` | Bad plans waste entire Implement runs |
 | P1 | `implement-task` | Core autonomous builder |

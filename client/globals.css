@@ -85,7 +85,30 @@
   * {
     @apply border-border outline-ring/50;
   }
+
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Match shadcn ScrollArea thumb look on assistant-ui's live viewport.
+   Radix ScrollArea can't wrap ThreadPrimitive.Viewport (asChild conflict). */
+.aui-thread-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.aui-thread-viewport::-webkit-scrollbar {
+  width: 10px;
+}
+
+.aui-thread-viewport::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border-radius: 9999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+.aui-thread-viewport::-webkit-scrollbar-track {
+  background: transparent;
 }

@@ -36,6 +36,12 @@ export class AcpChatTransport {
   private turnDone = false;
   /** Opening / warm catch-up stream is consumed at most once via reconnectToStream. */
   private resumeConsumed = false;
+  /**
+   * True when ready had empty history or an in-flight turn — session may
+   * briefly report streaming:false before opening chunks arrive; do not treat
+   * that as end-of-turn.
+   */
+  private expectOpeningStream = false;
 
   constructor(private readonly options: AcpChatTransportOptions) {}
 
@@ -204,12 +210,16 @@ export class AcpChatTransport {
           this.releaseStreamController(controller, { close: true });
         });
       },
-      // AI SDK / assistant-ui may cancel the resume stream on send or
-      // teardown without our abortSignal — drop the stale controller so
-      // later WS chunks buffer instead of enqueue-into-closed.
+      // AI SDK / assistant-ui may cancel the resume stream on send,
+      // Chat recreation (thread id change), or teardown — drop the stale
+      // controller so later WS chunks buffer, and allow a later
+      // reconnectToStream while the turn is still live.
       cancel: () => {
         if (attached && this.streamController === attached) {
           this.streamController = null;
+        }
+        if (!this.turnDone) {
+          this.resumeConsumed = false;
         }
       },
     });
@@ -299,7 +309,10 @@ export class AcpChatTransport {
         this.resolveReady?.(msg.messages);
         this.resolveReady = null;
         this.rejectReady = null;
-        // Empty history ⇒ server will stream an opening turn.
+        // Empty history or mid-stream warm reattach ⇒ expect chunks (or a
+        // second resume after Chat recreation cancels the first stream).
+        this.expectOpeningStream =
+          msg.messages.length === 0 || Boolean(msg.streaming);
         // Non-empty history ⇒ opening is done unless warm reattach is mid-stream.
         if (msg.messages.length > 0 && !msg.streaming) {
           this.markTurnDone();
@@ -311,8 +324,10 @@ export class AcpChatTransport {
           this.resolveSession?.();
           this.resolveSession = null;
           this.rejectSession = null;
-          // Authoritative: turn may have finished between ready and attach.
-          if (!msg.streaming) {
+          // Authoritative only when we are not waiting on an opening/warm turn.
+          // ready is sent before openChat; session can report idle while the
+          // opening prompt is still starting.
+          if (!msg.streaming && !this.expectOpeningStream) {
             this.markTurnDone();
           }
         }

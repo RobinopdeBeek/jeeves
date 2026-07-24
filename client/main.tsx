@@ -4,6 +4,7 @@ import { BrowserRouter, Outlet, Route, Routes } from "react-router-dom";
 import { Board } from "./components/Board";
 import { CardView } from "./components/CardView";
 import { ServerConnectionBanner } from "./components/ServerConnectionBanner";
+import { TooltipProvider } from "./components/ui/tooltip";
 import { ServerConnectionProvider } from "./lib/server-connection";
 import "./globals.css";
 
@@ -18,13 +19,15 @@ function AppLayout() {
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <Routes>
-        <Route element={<AppLayout />}>
-          <Route path="/" element={<Board />} />
-          <Route path="/cards/:id" element={<CardView />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+    <TooltipProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route element={<AppLayout />}>
+            <Route path="/" element={<Board />} />
+            <Route path="/cards/:id" element={<CardView />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </TooltipProvider>
   </React.StrictMode>,
 );

@@ -16,8 +16,11 @@ feature and steps in only where judgment is needed.
 
 ## Overall architecture
 
-A single Node.js process orchestrates everything: five deep modules carry all behaviour,
-and the HTTP routes and React client are thin adapters over them. Workflow is code
+A single Node.js process orchestrates everything and owns the queue, chat sessions,
+worktrees, and preview slot as in-memory state
+([ADR 0013](./docs/adr/0013-one-long-lived-process-owns-orchestration-state.md)):
+five deep modules carry all behaviour, and the HTTP routes and React client are thin
+adapters over them. Workflow is code
 (pipelines are TypeScript constants), state is data (SQLite holds per-card state and
 round-scoped records), and file-shaped output lives in the project's artifact folder with
 SQLite as its index. Each target repository owns a gitignored **project store** at
@@ -79,7 +82,7 @@ command" — no code changes.
 
 | Concern | Choice | Why |
 |---|---|---|
-| Server | Hono + Node.js | Lightweight, WebSocket-native, runtime-agnostic |
+| Server | Hono + Node.js | Thin adapter over a long-lived orchestrator process ([ADR 0013](./docs/adr/0013-one-long-lived-process-owns-orchestration-state.md)) |
 | Database | SQLite via Drizzle (better-sqlite3) | Single-user, zero setup; one `jeeves.db` per project under `<repo>/.jeeves/` |
 | UI | React + Tailwind | Responsive web covers laptop, tablet, and phone |
 | Within-column reorder | `@dnd-kit` | Cards move between columns via pipeline logic, not drag — DnD is only for reordering inside a column (Backlog, draft tasks in Define, etc.) |

@@ -13,6 +13,7 @@
     "start": "tsx server/index.ts",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
+    "db:studio": "drizzle-kit studio",
     "spike:sdk": "tsx .scratch/spike-sdk-worktree.ts"
   },
   "keywords": [],

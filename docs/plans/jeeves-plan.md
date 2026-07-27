@@ -48,7 +48,7 @@ Later:  extract client to Cloudflare Pages if needed
 
 | Concern | Choice | Why |
 |---|---|---|
-| Server | Hono + Node.js | Lightweight, WebSocket native, runtime-agnostic |
+| Server | Hono + Node.js | Thin adapter over a long-lived orchestrator process ([ADR 0013](../adr/0013-one-long-lived-process-owns-orchestration-state.md)) |
 | Database | SQLite via Drizzle | Zero setup, single file, familiar ORM |
 | UI framework | React + Tailwind | Responsive, no overhead |
 | Within-column reorder | `@dnd-kit` | Cards move between columns via pipeline logic, not drag — DnD is only for reordering inside a column (Backlog, draft tasks in Define, etc.) |

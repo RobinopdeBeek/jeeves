@@ -14,9 +14,14 @@ import type { StepKey } from "../pipelines.js";
 export type { UIMessage };
 
 const TRANSCRIPT_FILE_ID = "transcript";
+const SPEC_FILE_ID = "spec";
 
 function transcriptArtifactId(cardId: string, stepKey: StepKey, round: number): string {
   return `${cardId}-${stepKey}-${round}-transcript`;
+}
+
+function specArtifactId(cardId: string, round: number): string {
+  return `${cardId}-spec-${round}-spec`;
 }
 
 export class ArtifactStoreError extends Error {
@@ -135,6 +140,57 @@ export class ArtifactStore {
       stepKey,
       round,
       kind: "transcript",
+      path: relativePath,
+      gitSha: null,
+      schemaVersion: 1,
+      createdAt,
+    };
+    try {
+      this.db.insert(artifacts).values(row).run();
+    } catch (error) {
+      fs.rmSync(absPath, { force: true });
+      throw error;
+    }
+    this.regenerateManifest(cardId);
+    return row;
+  }
+
+  /**
+   * Mutable Spec markdown — overwrites the same file and DB row while Spec is active.
+   * Caller must assert the step is still mutable (CardStore.assertSpecMutable).
+   */
+  upsertSpec(cardId: string, round: number, markdown: string): Artifact {
+    const existing = this.latest(cardId, { stepKey: "spec", round, kind: "spec" });
+    const createdAt = existing?.createdAt ?? new Date();
+    const body = withFrontmatter(markdown, {
+      cardId,
+      step: "spec",
+      round,
+      kind: "spec",
+      sourceSkill: "human",
+      schemaVersion: 1,
+      createdAt,
+    });
+
+    if (existing) {
+      const absPath = this.resolveServePath(cardId, existing.path);
+      this.writeAtomic(absPath, body);
+      this.regenerateManifest(cardId);
+      return existing;
+    }
+
+    const id = specArtifactId(cardId, round);
+    const relativePath = this.destinationPath(cardId, round, "spec", SPEC_FILE_ID);
+    const absPath = this.assertUnderRoot(relativePath);
+    fs.mkdirSync(path.dirname(absPath), { recursive: true });
+    this.writeAtomic(absPath, body);
+
+    const row: Artifact = {
+      id,
+      cardId,
+      stepKey: "spec",
+      round,
+      kind: "spec",
       path: relativePath,
       gitSha: null,
       schemaVersion: 1,

@@ -5,4 +5,6 @@ export type StepPanelProps = {
   /** Which step tab this panel is rendering (StepExecution serves several). */
   stepKey: string;
   onCardChange: (card: Card) => void;
+  /** Spec tab reports the live editor body for footer Create Tasks gates. */
+  onSpecBodyChange?: (markdown: string) => void;
 };

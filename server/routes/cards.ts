@@ -134,6 +134,63 @@ export function cardRoutes(
     }
   });
 
+  app.put("/:id/spec", async (c) => {
+    const cardId = c.req.param("id");
+    try {
+      const body = await c.req.json<{ content?: unknown }>();
+      if (typeof body.content !== "string") {
+        return c.json({ error: "content must be a string" }, 400);
+      }
+      store.assertSpecMutable(cardId);
+      const artifact = deps.artifacts.upsertSpec(cardId, 0, body.content);
+      return c.json({
+        id: artifact.id,
+        cardId: artifact.cardId,
+        stepKey: artifact.stepKey,
+        round: artifact.round,
+        kind: artifact.kind,
+        gitSha: artifact.gitSha,
+        createdAt: artifact.createdAt.toISOString(),
+        content: deps.artifacts.readBody(artifact),
+      });
+    } catch (e) {
+      if (e instanceof CardStoreError) {
+        return c.json({ error: e.message }, e.status as 400 | 404 | 409);
+      }
+      throw e;
+    }
+  });
+
+  app.post("/:id/create-tasks", async (c) => {
+    const cardId = c.req.param("id");
+    try {
+      const plan = store.assertSpecToTasksHandOff(cardId);
+
+      const latest = deps.artifacts.latest(cardId, {
+        stepKey: "spec",
+        round: 0,
+        kind: "spec",
+      });
+      const markdown = latest ? deps.artifacts.readBody(latest) : "";
+      if (!markdown.trim()) {
+        return c.json({ error: "spec body is empty" }, 422);
+      }
+
+      dispatchAdvanceEffects(cardId, plan.sideEffects, {
+        enqueue: (id, step) => deps.engine.enqueue(id, step),
+        sessions: deps.sessions,
+      });
+      const { card } = store.handOffSpecToTasks(cardId);
+      deps.events.emit({ type: "card.updated", card });
+      return c.json(card);
+    } catch (e) {
+      if (e instanceof CardStoreError) {
+        return c.json({ error: e.message }, e.status as 400 | 404 | 409);
+      }
+      throw e;
+    }
+  });
+
   app.get("/:id/runs", (c) => {
     const card = store.getCard(c.req.param("id"));
     if (!card) return c.json({ error: "not found" }, 404);

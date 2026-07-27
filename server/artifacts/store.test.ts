@@ -212,6 +212,63 @@ describe("ArtifactStore", () => {
     expect(() => store.assertTranscriptMutable(cardId, "grill")).toThrow(/frozen/i);
   });
 
+  function cardWithSpecStep(): void {
+    cardWithGrillStep();
+    store.handOffGrillToSpec(cardId);
+  }
+
+  it("creates a mutable spec artifact on first upsert and overwrites on subsequent writes", () => {
+    cardWithSpecStep();
+    const first = artifacts.upsertSpec(cardId, 0, "# Spec\n\nDo the thing.\n");
+    expect(first).toMatchObject({
+      cardId,
+      stepKey: "spec",
+      round: 0,
+      kind: "spec",
+    });
+    expect(first.path).toBe(`cards/${cardId}/0/spec/spec.md`);
+
+    const second = artifacts.upsertSpec(cardId, 0, "# Spec\n\nUpdated body.\n");
+    expect(second.id).toBe(first.id);
+    expect(second.path).toBe(first.path);
+    expect(artifacts.list(cardId)).toHaveLength(1);
+    expect(artifacts.readBody(second)).toBe("# Spec\n\nUpdated body.");
+  });
+
+  it("rejects spec writes when the caller asserts the step is frozen", () => {
+    cardWithSpecStep();
+    store.setStepStatus(cardId, "spec", "done");
+    expect(() => store.assertSpecMutable(cardId)).toThrow(/frozen/i);
+  });
+
+  it("harvests a project-store spec exchange file into an indexed durable artifact", () => {
+    cardWithSpecStep();
+    const storeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-ps-"));
+    const exchangeRel = `exchange/${cardId}/spec.md`;
+    const exchangeAbs = path.join(storeRoot, exchangeRel);
+    fs.mkdirSync(path.dirname(exchangeAbs), { recursive: true });
+    fs.writeFileSync(exchangeAbs, "# Spec\n\nFrom exchange.\n");
+
+    const harvested = artifacts.harvest(
+      storeRoot,
+      [{ exchangePath: exchangeRel, kind: "spec", stepKey: "spec" }],
+      { cardId, round: 0, sourceSkill: "spec-assist" },
+    );
+
+    expect(harvested).toHaveLength(1);
+    expect(harvested[0]).toMatchObject({
+      cardId,
+      stepKey: "spec",
+      round: 0,
+      kind: "spec",
+    });
+    expect(harvested[0].path).toMatch(new RegExp(`^cards/${cardId}/0/spec/.+\\.md$`));
+    expect(artifacts.readBody(harvested[0])).toContain("From exchange.");
+    expect(fs.existsSync(exchangeAbs)).toBe(false);
+
+    fs.rmSync(storeRoot, { recursive: true, force: true });
+  });
+
   it("throws when a plan exchange file has no useful content beyond headings", async () => {
     const { assertPlanHasUsefulContent } = await import("../execution/step-policies.js");
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-wt-"));

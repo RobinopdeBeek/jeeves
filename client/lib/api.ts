@@ -30,6 +30,8 @@ export interface Card {
   steps: CardStep[];
   /** Server-derived: grill→spec hand-off is allowed (Create Spec). */
   canCreateSpec: boolean;
+  /** Server-derived: spec→tasks hand-off is allowed (Create Tasks). */
+  canCreateTasks: boolean;
 }
 
 export interface Project {
@@ -107,6 +109,13 @@ export const api = {
     }),
   createSpec: (id: string) =>
     request<Card>(`/api/cards/${id}/create-spec`, { method: "POST" }),
+  createTasks: (id: string) =>
+    request<Card>(`/api/cards/${id}/create-tasks`, { method: "POST" }),
+  putSpec: (id: string, content: string) =>
+    request<ArtifactContent>(`/api/cards/${id}/spec`, {
+      method: "PUT",
+      body: JSON.stringify({ content }),
+    }),
   deleteCard: (id: string) =>
     request<{ ok: boolean }>(`/api/cards/${id}`, { method: "DELETE" }),
   listRuns: (cardId: string) => request<Run[]>(`/api/cards/${cardId}/runs`),

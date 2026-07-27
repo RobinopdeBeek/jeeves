@@ -26,6 +26,7 @@
     "@assistant-ui/react-markdown": "^0.14.6",
     "@cursor/sdk": "^1.0.18",
     "@hono/node-server": "^2.0.8",
+    "@mdxeditor/editor": "^4.1.0",
     "@tabler/icons-react": "^3.44.0",
     "ai": "^5.0.218",
     "better-sqlite3": "^12.11.1",

@@ -12,6 +12,7 @@ import {
   advance,
   backlogEnrichedSteps,
   canCreateSpec,
+  canCreateTasks,
   orderEnrichedSteps,
   type AdvancePlan,
   type AdvanceSideEffect,
@@ -39,6 +40,8 @@ export type CardWithSteps = Card & {
   steps: EnrichedStep[];
   /** Same predicate as grill→spec hand-off (board Create Spec). */
   canCreateSpec: boolean;
+  /** Same predicate as spec→tasks hand-off (board Create Tasks). */
+  canCreateTasks: boolean;
 };
 
 /**
@@ -173,6 +176,17 @@ export class CardStore {
     }
   }
 
+  /** Spec upserts are forbidden once the Spec step is done (frozen). */
+  assertSpecMutable(cardId: string): void {
+    const card = this.getCard(cardId);
+    if (!card) throw new CardStoreError(404, "card not found");
+    const step = card.steps.find((s) => s.key === "spec");
+    if (!step) throw new CardStoreError(404, "unknown step: spec");
+    if (step.status === "done") {
+      throw new CardStoreError(409, "spec is frozen");
+    }
+  }
+
   /**
    * Validate grill→spec without mutating — routes close ACP before apply.
    */
@@ -191,6 +205,27 @@ export class CardStore {
     sideEffects: AdvanceSideEffect[];
   } {
     const plan = this.assertGrillToSpecHandOff(cardId);
+    this.applyAdvancePlan(cardId, plan);
+    return { card: this.getCard(cardId)!, sideEffects: plan.sideEffects };
+  }
+
+  /**
+   * Validate spec→tasks without mutating — routes may close ACP before apply.
+   */
+  assertSpecToTasksHandOff(cardId: string): AdvancePlan & { ok: true } {
+    const card = this.getCard(cardId);
+    if (!card) throw new CardStoreError(404, "card not found");
+    return this.requireAdvance(card, { type: "spec-to-tasks" });
+  }
+
+  /**
+   * Spec → Tasks hand-off: freeze Spec as done and open Tasks for the user.
+   */
+  handOffSpecToTasks(cardId: string): {
+    card: CardWithSteps;
+    sideEffects: AdvanceSideEffect[];
+  } {
+    const plan = this.assertSpecToTasksHandOff(cardId);
     this.applyAdvancePlan(cardId, plan);
     return { card: this.getCard(cardId)!, sideEffects: plan.sideEffects };
   }
@@ -346,6 +381,9 @@ export class CardStore {
       ...card,
       steps,
       canCreateSpec: canCreateSpec(
+        steps.map((s) => ({ key: s.key, status: s.status })),
+      ),
+      canCreateTasks: canCreateTasks(
         steps.map((s) => ({ key: s.key, status: s.status })),
       ),
     };

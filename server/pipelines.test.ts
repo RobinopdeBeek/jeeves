@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   advance,
   canCreateSpec,
+  canCreateTasks,
   grillToSpecTransition,
+  specToTasksTransition,
 } from "./pipelines.js";
 
 describe("canCreateSpec", () => {
@@ -19,6 +21,23 @@ describe("canCreateSpec", () => {
       { key: "spec" as const, status: "pending" as const },
     ];
     expect(canCreateSpec(busy)).toBe(false);
+  });
+});
+
+describe("canCreateTasks", () => {
+  it("matches specToTasksTransition.ok", () => {
+    const ready = [
+      { key: "spec" as const, status: "needs-user" as const },
+      { key: "tasks" as const, status: "pending" as const },
+    ];
+    expect(canCreateTasks(ready)).toBe(true);
+    expect(specToTasksTransition(ready).ok).toBe(true);
+
+    const busy = [
+      { key: "spec" as const, status: "done" as const },
+      { key: "tasks" as const, status: "pending" as const },
+    ];
+    expect(canCreateTasks(busy)).toBe(false);
   });
 });
 
@@ -67,6 +86,34 @@ describe("advance", () => {
           stepKey: "grill",
           round: 0,
           reason: "grill handed off to spec",
+        },
+      ],
+    });
+  });
+
+  it("spec-to-tasks declares close-chat and status patches", () => {
+    const plan = advance(
+      {
+        kind: "feature",
+        steps: [
+          { key: "spec", status: "needs-user" },
+          { key: "tasks", status: "pending" },
+        ],
+      },
+      { type: "spec-to-tasks" },
+    );
+    expect(plan).toEqual({
+      ok: true,
+      stepPatches: [
+        { key: "spec", status: "done" },
+        { key: "tasks", status: "needs-user" },
+      ],
+      sideEffects: [
+        {
+          type: "close-chat",
+          stepKey: "spec",
+          round: 0,
+          reason: "spec handed off to tasks",
         },
       ],
     });

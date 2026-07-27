@@ -26,6 +26,9 @@ describe("resolveProjectStorePaths", () => {
     expect(paths.worktreeRoot).toBe(
       path.join(path.resolve(repoPath), ".jeeves", "worktrees"),
     );
+    expect(paths.exchangeRoot).toBe(
+      path.join(path.resolve(repoPath), ".jeeves", "exchange"),
+    );
   });
 
   it("honours JEEVES_DB_PATH override", () => {
@@ -114,6 +117,16 @@ describe("ensureProjectStore", () => {
     expect(fs.existsSync(paths.storeRoot)).toBe(true);
     expect(fs.existsSync(paths.artifactRoot)).toBe(true);
     expect(fs.existsSync(paths.worktreeRoot)).toBe(true);
+    expect(fs.existsSync(paths.exchangeRoot)).toBe(true);
     expect(fs.readFileSync(path.join(tempRepo, ".gitignore"), "utf8")).toContain(".jeeves/");
+  });
+});
+
+describe("projectStoreExchangePath", () => {
+  it("builds a posix-relative exchange path under storeRoot", async () => {
+    const { projectStoreExchangePath } = await import("./project-store.js");
+    expect(projectStoreExchangePath("card123", "spec.md")).toBe(
+      "exchange/card123/spec.md",
+    );
   });
 });

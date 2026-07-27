@@ -359,7 +359,8 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
 
 - **`to-spec`:** synthesise conversation into a spec with testing seams; publish to the human's
   issue tracker. Used to scope jeeves slices — **not** the feature Spec step (that is
-  human-authored markdown + `spec-assist`).
+  human-authored markdown + `spec-assist`). When a Grill session artifact exists for the work,
+  use it as the Q&A input — never re-derive from the raw transcript ([ADR 0012](../adr/0012-grill-session-qa-handoff.md)).
 - **`code-review`:** Standards + Spec parallel sub-agents against a fixed git point. Used when
   building jeeves; the board's automated path uses `thermo-nuclear-review` + human Review
   instead.

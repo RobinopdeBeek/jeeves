@@ -28,6 +28,7 @@ export interface ColdAcquireParams {
   history: UIMessage[];
   onStatus: AcpLiveCallbacks["onStatus"];
   onTranscript: AcpLiveCallbacks["onTranscript"];
+  onTurnComplete?: AcpLiveCallbacks["onTurnComplete"];
   /** Spec (and future) live chats: Cursor-like auto-approve. */
   interactivePermissionPolicy?: InteractivePermissionPolicy;
 }
@@ -107,6 +108,7 @@ export class ChatSessionRegistry {
       existing.setLiveCallbacks({
         onStatus: params.onStatus,
         onTranscript: params.onTranscript,
+        onTurnComplete: params.onTurnComplete,
       });
       return this.handleFor(existing, true);
     }
@@ -117,6 +119,7 @@ export class ChatSessionRegistry {
         again.setLiveCallbacks({
           onStatus: params.onStatus,
           onTranscript: params.onTranscript,
+          onTurnComplete: params.onTurnComplete,
         });
         return this.handleFor(again, true);
       }
@@ -125,6 +128,7 @@ export class ChatSessionRegistry {
         spawn: params.spawn,
         onStatus: params.onStatus,
         onTranscript: params.onTranscript,
+        onTurnComplete: params.onTurnComplete,
       });
       this.warm.set(id, bridge);
       await bridge.openSession({

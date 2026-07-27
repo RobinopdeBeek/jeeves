@@ -19,6 +19,8 @@ export type SpawnAcp = (cwd: string) => AcpProcess | Promise<AcpProcess>;
 export interface AcpLiveCallbacks {
   onStatus: (status: "ai-working" | "needs-user") => void;
   onTranscript: (messages: UIMessage[]) => void;
+  /** Fired when a prompt turn reaches idle (not mid-turn detached permission). */
+  onTurnComplete?: () => void;
 }
 
 export interface OpenSessionOptions {
@@ -210,6 +212,7 @@ export class AcpBridge {
     this.live = {
       onStatus: deps.onStatus ?? (() => {}),
       onTranscript: deps.onTranscript ?? (() => {}),
+      onTurnComplete: deps.onTurnComplete,
     };
   }
 
@@ -414,6 +417,9 @@ export class AcpBridge {
     this.inactiveSince = Date.now();
     this.resolveTurnDone?.();
     this.resolveTurnDone = null;
+    // Harvest Spec revisions before needs-user so the client can apply
+    // while still locked, then unlock on the status frame.
+    this.live.onTurnComplete?.();
     this.live.onStatus("needs-user");
   }
 

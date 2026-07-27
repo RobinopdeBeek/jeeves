@@ -69,10 +69,11 @@ export class ChatConnection {
         onStatusNotify: (status) => {
           if (this.closed) return;
           this.send({ type: "status", status });
-          if (status === "needs-user" && this.key.stepKey === "spec") {
-            this.harvestSpecRevisionIfPresent();
-          }
         },
+        onTurnComplete:
+          this.key.stepKey === "spec"
+            ? () => this.harvestSpecRevisionIfPresent()
+            : undefined,
       });
       if (this.closed) return;
 

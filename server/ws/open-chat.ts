@@ -26,6 +26,8 @@ export interface OpenChatDeps {
 export interface OpenChatOptions {
   /** Extra notify after CardStore write (e.g. WS status frame). */
   onStatusNotify?: (status: "ai-working" | "needs-user") => void;
+  /** Spec side-chat: after a completed turn, harvest exchange if present. */
+  onTurnComplete?: () => void;
 }
 
 export interface OpenChatResult {
@@ -155,6 +157,7 @@ export async function openChat(
       deps.store.assertTranscriptMutable(key.cardId, key.stepKey);
       deps.artifacts.upsertTranscript(key.cardId, key.stepKey, key.round, messages);
     },
+    onTurnComplete: options.onTurnComplete,
   });
 
   return { history, handle };

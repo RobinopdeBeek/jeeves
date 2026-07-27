@@ -205,7 +205,9 @@ function SpecAssistChat({
           sessionOpen={chat.sessionOpen && !composerLocked}
           welcomeTitle="Ask about the Spec or request a revision"
           placeholder="Ask or request a change…"
-          openingPlaceholder="Spec assist starting…"
+          openingPlaceholder={
+            composerLocked ? "Spec assist is working…" : "Spec assist starting…"
+          }
         />
       </GrillTransportContext.Provider>
     </AcpChatProvider>

@@ -17,13 +17,25 @@ import {
   Separator,
 } from "@mdxeditor/editor";
 import "@mdxeditor/editor/style.css";
-import { Component, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  Component,
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Textarea } from "@/components/ui/textarea";
 
 type SpecEditorProps = {
   markdown: string;
   readOnly: boolean;
   onChange: (markdown: string) => void;
+};
+
+export type SpecEditorHandle = {
+  setMarkdown: (markdown: string) => void;
 };
 
 function SourceFallback({
@@ -74,71 +86,84 @@ class EditorErrorBoundary extends Component<
  * MDXEditor wrapper. Falls back to a plain textarea (source mode) when
  * imperfect AI markdown blows up the rich editor.
  */
-export function SpecEditor({ markdown, readOnly, onChange }: SpecEditorProps) {
-  const ref = useRef<MDXEditorMethods>(null);
-  const [sourceFallback, setSourceFallback] = useState(false);
-  const seededRef = useRef(false);
+export const SpecEditor = forwardRef<SpecEditorHandle, SpecEditorProps>(
+  function SpecEditor({ markdown, readOnly, onChange }, ref) {
+    const editorRef = useRef<MDXEditorMethods>(null);
+    const [sourceFallback, setSourceFallback] = useState(false);
+    const seededRef = useRef(false);
 
-  useEffect(() => {
-    setSourceFallback(false);
-    seededRef.current = false;
-  }, [readOnly]);
+    useImperativeHandle(ref, () => ({
+      setMarkdown(next: string) {
+        if (sourceFallback) return;
+        try {
+          editorRef.current?.setMarkdown(next);
+        } catch {
+          setSourceFallback(true);
+        }
+      },
+    }));
 
-  useEffect(() => {
-    if (sourceFallback || seededRef.current) return;
-    try {
-      ref.current?.setMarkdown(markdown);
-      seededRef.current = true;
-    } catch {
-      setSourceFallback(true);
-    }
-  }, [markdown, sourceFallback]);
+    useEffect(() => {
+      setSourceFallback(false);
+      seededRef.current = false;
+    }, [readOnly]);
 
-  if (sourceFallback) {
-    return (
-      <SourceFallback
-        markdown={markdown}
-        readOnly={readOnly}
-        onChange={onChange}
-        notice="Rich editor could not load this markdown; editing in source mode."
-      />
-    );
-  }
+    useEffect(() => {
+      if (sourceFallback || seededRef.current) return;
+      try {
+        editorRef.current?.setMarkdown(markdown);
+        seededRef.current = true;
+      } catch {
+        setSourceFallback(true);
+      }
+    }, [markdown, sourceFallback]);
 
-  return (
-    <div className="min-h-0 flex-1 overflow-auto rounded-md border [&_.mdxeditor]:min-h-80">
-      <EditorErrorBoundary onError={() => setSourceFallback(true)}>
-        <MDXEditor
-          ref={ref}
+    if (sourceFallback) {
+      return (
+        <SourceFallback
           markdown={markdown}
           readOnly={readOnly}
           onChange={onChange}
-          onError={() => setSourceFallback(true)}
-          plugins={[
-            headingsPlugin(),
-            listsPlugin(),
-            quotePlugin(),
-            thematicBreakPlugin(),
-            markdownShortcutPlugin(),
-            linkPlugin(),
-            diffSourcePlugin({ viewMode: "rich-text" }),
-            toolbarPlugin({
-              toolbarContents: () =>
-                readOnly ? null : (
-                  <DiffSourceToggleWrapper>
-                    <UndoRedo />
-                    <Separator />
-                    <BoldItalicUnderlineToggles />
-                    <Separator />
-                    <ListsToggle />
-                    <Separator />
-                    <BlockTypeSelect />
-                  </DiffSourceToggleWrapper>
-                ),
-            }),
-          ]}
+          notice="Rich editor could not load this markdown; editing in source mode."
         />
-      </EditorErrorBoundary>
-    </div>
-  );
-}
+      );
+    }
+
+    return (
+      <div className="min-h-0 flex-1 overflow-auto rounded-md border [&_.mdxeditor]:min-h-80">
+        <EditorErrorBoundary onError={() => setSourceFallback(true)}>
+          <MDXEditor
+            ref={editorRef}
+            markdown={markdown}
+            readOnly={readOnly}
+            onChange={onChange}
+            onError={() => setSourceFallback(true)}
+            plugins={[
+              headingsPlugin(),
+              listsPlugin(),
+              quotePlugin(),
+              thematicBreakPlugin(),
+              markdownShortcutPlugin(),
+              linkPlugin(),
+              diffSourcePlugin({ viewMode: "rich-text" }),
+              toolbarPlugin({
+                toolbarContents: () =>
+                  readOnly ? null : (
+                    <DiffSourceToggleWrapper>
+                      <UndoRedo />
+                      <Separator />
+                      <BoldItalicUnderlineToggles />
+                      <Separator />
+                      <ListsToggle />
+                      <Separator />
+                      <BlockTypeSelect />
+                    </DiffSourceToggleWrapper>
+                  ),
+              }),
+            ]}
+          />
+        </EditorErrorBoundary>
+      </div>
+    );
+  },
+);

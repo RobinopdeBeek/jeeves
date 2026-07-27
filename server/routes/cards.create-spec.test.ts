@@ -5,6 +5,7 @@ import type { UIMessage } from "ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ArtifactStore } from "../artifacts/store.js";
 import { CardStore } from "../cards/store.js";
+import { createCreateSpec } from "../chat/create-spec.js";
 import {
   GrillSessionExtractError,
   type ExtractGrillSession,
@@ -96,19 +97,26 @@ describe("POST /:id/create-spec", () => {
         { cardId: input.cardId, round: 0, sourceSkill: "to-spec" },
       );
     });
+    const engine = {
+      enqueue() {},
+      retry() {
+        throw new Error("unused");
+      },
+    } as unknown as CardRouteDeps["engine"];
     deps = {
-      engine: {
-        enqueue() {},
-        retry() {
-          throw new Error("unused");
-        },
-      } as unknown as CardRouteDeps["engine"],
+      engine,
       runs: { listForCard: () => [] } as unknown as CardRouteDeps["runs"],
       events,
       artifacts,
       sessions,
-      extractGrillSession,
-      synthesizeSpec,
+      createSpec: createCreateSpec({
+        store,
+        artifacts,
+        sessions,
+        engine,
+        extractGrillSession,
+        synthesizeSpec,
+      }),
       promptsRoot: path.resolve(import.meta.dirname, "../../prompts"),
     };
   });

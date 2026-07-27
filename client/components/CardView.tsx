@@ -1,13 +1,9 @@
 import { IconArrowLeft, IconTrash } from "@tabler/icons-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, type Card, type KindPath } from "@/lib/api";
 import { activeTabKey, visibleSteps } from "@/lib/card-steps";
 import { useJeevesEvents } from "@/lib/events";
-import {
-  hasAcceptanceCriteriaCheckboxes,
-  isSpecBodyEmpty,
-} from "@/lib/spec-gates";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -35,17 +31,15 @@ export function CardView() {
   const [createSpecError, setCreateSpecError] = useState<string | null>(null);
   const [creatingTasks, setCreatingTasks] = useState(false);
   const [createTasksError, setCreateTasksError] = useState<string | null>(null);
-  const [specBody, setSpecBody] = useState("");
-  const [acWarningOpen, setAcWarningOpen] = useState(false);
+  const flushSpecRef = useRef<(() => Promise<void>) | null>(null);
 
-  const onSpecBodyChange = useCallback((markdown: string) => {
-    setSpecBody(markdown);
+  const registerSpecFlush = useCallback((flush: (() => Promise<void>) | null) => {
+    flushSpecRef.current = flush;
   }, []);
 
   useEffect(() => {
     if (!id) return;
     setTabOverride(null);
-    setSpecBody("");
     api
       .getCard(id)
       .then(setCard)
@@ -100,15 +94,12 @@ export function CardView() {
     }
   }
 
-  async function runCreateTasks() {
-    if (!card) return;
+  async function createTasks() {
+    if (!card || !card.canCreateTasks) return;
     setCreatingTasks(true);
     setCreateTasksError(null);
     try {
-      // Flush any pending debounce so the server sees the latest body.
-      if (!isSpecBodyEmpty(specBody)) {
-        await api.putSpec(card.id, specBody);
-      }
+      await flushSpecRef.current?.();
       const updated = await api.createTasks(card.id);
       setCard(updated);
       setTabOverride(null); // activeTabKey prefers Tasks once needs-user
@@ -116,17 +107,7 @@ export function CardView() {
       setCreateTasksError(err instanceof Error ? err.message : String(err));
     } finally {
       setCreatingTasks(false);
-      setAcWarningOpen(false);
     }
-  }
-
-  function requestCreateTasks() {
-    if (!card || isSpecBodyEmpty(specBody) || !card.canCreateTasks) return;
-    if (!hasAcceptanceCriteriaCheckboxes(specBody)) {
-      setAcWarningOpen(true);
-      return;
-    }
-    void runCreateTasks();
   }
 
   if (missing) {
@@ -157,8 +138,7 @@ export function CardView() {
   const createSpecDisabled = creatingSpec || !card.canCreateSpec;
   const showCreateTasks =
     activeKey === "spec" && specStep !== undefined && specStep.status !== "done";
-  const createTasksDisabled =
-    creatingTasks || !card.canCreateTasks || isSpecBodyEmpty(specBody);
+  const createTasksDisabled = creatingTasks || !card.canCreateTasks;
   const wideLayout = activeKey === "spec" || activeKey === "tasks";
 
   return (
@@ -199,7 +179,7 @@ export function CardView() {
             card={card}
             stepKey={activeKey}
             onCardChange={setCard}
-            onSpecBodyChange={onSpecBodyChange}
+            registerSpecFlush={registerSpecFlush}
             synthesizingSpec={creatingSpec}
           />
         ) : null}
@@ -271,31 +251,12 @@ export function CardView() {
                 </p>
               ) : null}
             </div>
-            <Button disabled={createTasksDisabled} onClick={requestCreateTasks}>
+            <Button disabled={createTasksDisabled} onClick={() => void createTasks()}>
               {creatingTasks ? "Creating Tasks…" : "Create Tasks →"}
             </Button>
           </>
         )}
       </footer>
-
-      <AlertDialog open={acWarningOpen} onOpenChange={setAcWarningOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>No acceptance-criteria checkboxes?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This Spec has no task-list checkboxes under an &quot;Acceptance criteria&quot;
-              heading. You can still continue — those checkboxes feed the feature QA gate
-              later.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void runCreateTasks()}>
-              Create Tasks anyway
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
 
       <p className="pointer-events-none fixed bottom-1 left-1/2 -translate-x-1/2 text-xs text-muted-foreground">
         {card.id}

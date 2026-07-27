@@ -1,13 +1,10 @@
 import type { UIMessage } from "ai";
-import path from "node:path";
 import type { ArtifactStore } from "../artifacts/store.js";
 import type { CardStore } from "../cards/store.js";
 import type { EventBus } from "../execution/events.js";
 import type { StepKey } from "../pipelines.js";
-import { projectStoreExchangePath } from "../project-store.js";
 import type { SpawnAcp } from "./chat.js";
-import { buildGrillOpeningPrompt } from "./grill-prompt.js";
-import { buildSpecAssistOpeningPrompt } from "./spec-assist-prompt.js";
+import { chatStepProfile } from "./chat-step-profile.js";
 import {
   ChatSessionRegistry,
   type SessionKey,
@@ -26,7 +23,7 @@ export interface OpenChatDeps {
 export interface OpenChatOptions {
   /** Extra notify after CardStore write (e.g. WS status frame). */
   onStatusNotify?: (status: "ai-working" | "needs-user") => void;
-  /** Spec side-chat: after a completed turn, harvest exchange if present. */
+  /** After a completed turn (step profile may supply its own via attach). */
   onTurnComplete?: () => void;
 }
 
@@ -35,46 +32,21 @@ export interface OpenChatResult {
   handle: WarmSessionHandle;
 }
 
-export interface OpeningPromptExtras {
-  /** Settled Grill session markdown for Spec side-chat (ADR 0012). */
-  grillSession?: string;
-  cardId?: string;
-}
-
 /** Step-keyed opening prompt for AI Chat steps. */
 export function resolveOpeningPrompt(
   stepKey: StepKey,
   card: { title: string; description: string },
   cwd: string,
   promptsRoot: string,
-  extras: OpeningPromptExtras = {},
+  extras: { cardId: string; grillSession?: string } = { cardId: "" },
 ): string {
-  if (stepKey === "grill") {
-    return buildGrillOpeningPrompt(
-      {
-        title: card.title,
-        description: card.description,
-        contextPath: path.join(cwd, "CONTEXT.md"),
-      },
-      promptsRoot,
-    );
-  }
-  if (stepKey === "spec") {
-    if (!extras.cardId) {
-      throw new Error("spec opening prompt requires cardId");
-    }
-    return buildSpecAssistOpeningPrompt(
-      {
-        title: card.title,
-        description: card.description,
-        contextPath: path.join(cwd, "CONTEXT.md"),
-        grillSession: extras.grillSession ?? "",
-        exchangePath: projectStoreExchangePath(extras.cardId, "spec.md"),
-      },
-      promptsRoot,
-    );
-  }
-  throw new Error(`no opening prompt for step: ${stepKey}`);
+  return chatStepProfile(stepKey).resolveOpeningPrompt({
+    card,
+    cwd,
+    promptsRoot,
+    cardId: extras.cardId,
+    grillSession: extras.grillSession,
+  });
 }
 
 export function loadTranscript(
@@ -127,27 +99,25 @@ export async function openChat(
 
   deps.store.assertTranscriptMutable(key.cardId, key.stepKey);
 
+  const profile = chatStepProfile(key.stepKey);
   const history = loadTranscript(deps.artifacts, key);
   const cwd = deps.store.getRepoPath(key.cardId);
-  const openingPrompt = resolveOpeningPrompt(
-    key.stepKey,
+  const openingPrompt = profile.resolveOpeningPrompt({
     card,
     cwd,
-    deps.promptsRoot,
-    {
-      cardId: key.cardId,
-      grillSession:
-        key.stepKey === "spec" ? loadGrillSession(deps.artifacts, key.cardId) : undefined,
-    },
-  );
+    promptsRoot: deps.promptsRoot,
+    cardId: key.cardId,
+    grillSession: profile.needsGrillSession
+      ? loadGrillSession(deps.artifacts, key.cardId)
+      : undefined,
+  });
 
   const handle = await deps.sessions.acquire(key, {
     spawn: deps.spawn,
     cwd,
     openingPrompt,
     history,
-    interactivePermissionPolicy:
-      key.stepKey === "spec" ? "cursor-like" : undefined,
+    interactivePermissionPolicy: profile.interactivePermissionPolicy,
     onStatus: (status) => {
       const updated = deps.store.setStepStatus(key.cardId, key.stepKey, status);
       deps.events.emit({ type: "card.updated", card: updated });

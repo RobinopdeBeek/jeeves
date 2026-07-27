@@ -7,7 +7,7 @@ import { ReadOnlyTranscript } from "@/components/grill/ReadOnlyTranscript";
 import { GrillTransportContext } from "@/components/grill/transport-context";
 import { api } from "@/lib/api";
 import type { StepPanelProps } from "./step-panel-types";
-import { SpecEditor } from "./spec/SpecEditor";
+import { SpecEditor, type SpecEditorHandle } from "./spec/SpecEditor";
 
 const SAVE_DEBOUNCE_MS = 500;
 
@@ -15,7 +15,7 @@ const SAVE_DEBOUNCE_MS = 500;
  * Spec authoring surface: MDXEditor + Spec assist side-chat (Grill chat stack).
  * Grill session is Spec's upstream input ([ADR 0012](../../docs/adr/0012-grill-session-qa-handoff.md)).
  */
-export function StepSpec({ card, onSpecBodyChange }: StepPanelProps) {
+export function StepSpec({ card, registerSpecFlush }: StepPanelProps) {
   const specStep = card.steps.find((s) => s.key === "spec");
   const stepDone = specStep?.status === "done";
   const [markdown, setMarkdown] = useState("");
@@ -23,10 +23,10 @@ export function StepSpec({ card, onSpecBodyChange }: StepPanelProps) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(false);
-  const [revisionEpoch, setRevisionEpoch] = useState(0);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedRef = useRef<string | null>(null);
   const markdownRef = useRef(markdown);
+  const editorRef = useRef<SpecEditorHandle>(null);
   markdownRef.current = markdown;
 
   useEffect(() => {
@@ -39,11 +39,14 @@ export function StepSpec({ card, onSpecBodyChange }: StepPanelProps) {
         const spec = await api
           .getLatestArtifact(card.id, { stepKey: "spec", round: 0, kind: "spec" })
           .then((a) => a.content)
-          .catch(() => "");
+          .catch((err: unknown) => {
+            // Missing Spec is empty editor; real failures surface as loadError.
+            if (err instanceof Error && err.message === "not found") return "";
+            throw err;
+          });
         if (cancelled) return;
         setMarkdown(spec);
         lastSavedRef.current = spec;
-        onSpecBodyChange?.(spec);
         setLoaded(true);
       } catch (err) {
         if (!cancelled) {
@@ -57,7 +60,22 @@ export function StepSpec({ card, onSpecBodyChange }: StepPanelProps) {
       cancelled = true;
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [card.id, onSpecBodyChange]);
+  }, [card.id]);
+
+  useEffect(() => {
+    if (!registerSpecFlush) return;
+    registerSpecFlush(async () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+        debounceRef.current = null;
+      }
+      const next = markdownRef.current;
+      if (stepDone || next === lastSavedRef.current) return;
+      await api.putSpec(card.id, next);
+      lastSavedRef.current = next;
+    });
+    return () => registerSpecFlush(null);
+  }, [card.id, registerSpecFlush, stepDone]);
 
   function cancelPendingSave() {
     if (debounceRef.current) {
@@ -68,7 +86,6 @@ export function StepSpec({ card, onSpecBodyChange }: StepPanelProps) {
 
   function handleChange(next: string) {
     setMarkdown(next);
-    onSpecBodyChange?.(next);
     if (stepDone || streaming) return;
     if (next === lastSavedRef.current) return;
     cancelPendingSave();
@@ -89,9 +106,8 @@ export function StepSpec({ card, onSpecBodyChange }: StepPanelProps) {
     cancelPendingSave();
     setMarkdown(next);
     lastSavedRef.current = next;
-    onSpecBodyChange?.(next);
     setSaveError(null);
-    setRevisionEpoch((n) => n + 1);
+    editorRef.current?.setMarkdown(next);
   }
 
   if (!loaded) {
@@ -124,7 +140,7 @@ export function StepSpec({ card, onSpecBodyChange }: StepPanelProps) {
       <div className="flex min-h-0 flex-1 flex-col gap-4 md:flex-row">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <SpecEditor
-            key={`${card.id}-${revisionEpoch}`}
+            ref={editorRef}
             markdown={markdown}
             readOnly={editorLocked}
             onChange={handleChange}

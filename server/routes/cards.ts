@@ -3,19 +3,14 @@ import { CardStoreError, type KindPath } from "../cards/store.js";
 import type { CardStore } from "../cards/store.js";
 import type { Project } from "../db/schema.js";
 import {
-  GrillSessionExtractError,
-  type ExtractGrillSession,
-} from "../chat/grill-session-extract.js";
-import {
-  SpecSynthesisError,
-  type SynthesizeSpec,
-} from "../chat/to-spec-synthesis.js";
+  CreateSpecError,
+  type CreateSpec,
+} from "../chat/create-spec.js";
 import { dispatchAdvanceEffects } from "../execution/dispatch-effects.js";
 import type { ExecutionEngine } from "../execution/engine.js";
 import type { EventBus } from "../execution/events.js";
 import type { RunStore } from "../execution/run-store.js";
 import type { ArtifactStore } from "../artifacts/store.js";
-import { loadTranscript } from "../ws/open-chat.js";
 import type { ChatSessionRegistry } from "../ws/session-registry.js";
 import { artifactRoutes } from "./artifacts.js";
 
@@ -29,8 +24,7 @@ export interface CardRouteDeps {
   events: EventBus;
   artifacts: ArtifactStore;
   sessions: ChatSessionRegistry;
-  extractGrillSession: ExtractGrillSession;
-  synthesizeSpec: SynthesizeSpec;
+  createSpec: CreateSpec;
   promptsRoot: string;
 }
 
@@ -86,85 +80,17 @@ export function cardRoutes(
   app.post("/:id/create-spec", async (c) => {
     const cardId = c.req.param("id");
     try {
-      // Validate before extract / ACP teardown so a 409 leaves the session intact.
-      store.assertGrillToSpecHandOff(cardId);
-      const cardBefore = store.getCard(cardId)!;
-
-      const transcript = loadTranscript(deps.artifacts, {
+      const card = await deps.createSpec({
         cardId,
-        stepKey: "grill",
-        round: 0,
+        repoPath: project.repoPath,
+        promptsRoot: deps.promptsRoot,
       });
-      if (transcript.length === 0) {
-        return c.json({ error: "grill transcript is empty" }, 422);
-      }
-
-      let grillBody: string;
-      try {
-        grillBody = await deps.extractGrillSession({
-          transcript,
-          repoPath: project.repoPath,
-          promptsRoot: deps.promptsRoot,
-        });
-      } catch (e) {
-        const message =
-          e instanceof GrillSessionExtractError
-            ? e.message
-            : e instanceof Error
-              ? e.message
-              : "grill-session extract failed";
-        return c.json({ error: message }, 502);
-      }
-
-      deps.artifacts.save({
-        cardId,
-        stepKey: "grill",
-        round: 0,
-        kind: "grill",
-        content: grillBody,
-        sourceSkill: "grill-session",
-      });
-
-      // Freeze Grill chat before headless /to-spec (closes warm ACP).
-      dispatchAdvanceEffects(
-        cardId,
-        [
-          {
-            type: "close-chat",
-            stepKey: "grill",
-            round: 0,
-            reason: "closing grill for spec synthesis",
-          },
-        ],
-        {
-          enqueue: (id, step) => deps.engine.enqueue(id, step),
-          sessions: deps.sessions,
-        },
-      );
-
-      try {
-        await deps.synthesizeSpec({
-          cardId,
-          repoPath: project.repoPath,
-          grillSession: grillBody,
-          cardTitle: cardBefore.title,
-          cardDescription: cardBefore.description,
-          promptsRoot: deps.promptsRoot,
-        });
-      } catch (e) {
-        const message =
-          e instanceof SpecSynthesisError
-            ? e.message
-            : e instanceof Error
-              ? e.message
-              : "spec synthesis failed";
-        return c.json({ error: message }, 502);
-      }
-
-      const { card } = store.handOffGrillToSpec(cardId);
       deps.events.emit({ type: "card.updated", card });
       return c.json(card);
     } catch (e) {
+      if (e instanceof CreateSpecError) {
+        return c.json({ error: e.message }, e.status as 422 | 502);
+      }
       if (e instanceof CardStoreError) {
         return c.json({ error: e.message }, e.status as 400 | 404 | 409);
       }

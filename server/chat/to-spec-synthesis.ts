@@ -1,8 +1,8 @@
 import {
-  AcpBridge,
   AcpHeadlessError,
   type SpawnAcp,
 } from "../ws/chat.js";
+import { runHeadlessAcp } from "../ws/run-headless-acp.js";
 import { buildToSpecPrompt } from "../ws/to-spec.js";
 import {
   projectStoreExchangePath,
@@ -54,9 +54,9 @@ export function createSynthesizeSpec(deps: {
       input.promptsRoot,
     );
 
-    const bridge = new AcpBridge({ spawn: deps.spawn });
     try {
-      await bridge.runToCompletion({
+      await runHeadlessAcp({
+        spawn: deps.spawn,
         cwd: input.repoPath,
         prompt,
         permissionPolicy: "cursor-like",

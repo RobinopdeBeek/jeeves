@@ -15,6 +15,7 @@ import { RunStore } from "./execution/run-store.js";
 import { WorktreeManager } from "./execution/worktree-manager.js";
 import { isStepKey } from "./pipelines.js";
 import { extractGrillSession } from "./chat/grill-session-extract.js";
+import { createCreateSpec } from "./chat/create-spec.js";
 import { createSynthesizeSpec } from "./chat/to-spec-synthesis.js";
 import { cardRoutes } from "./routes/cards.js";
 import { eventRoutes } from "./routes/events.js";
@@ -76,8 +77,14 @@ app.route(
     events,
     artifacts,
     sessions: chatSessions,
-    extractGrillSession,
-    synthesizeSpec: createSynthesizeSpec({ spawn: spawnAcp, artifacts }),
+    createSpec: createCreateSpec({
+      store,
+      artifacts,
+      sessions: chatSessions,
+      engine,
+      extractGrillSession,
+      synthesizeSpec: createSynthesizeSpec({ spawn: spawnAcp, artifacts }),
+    }),
     promptsRoot: path.join(rootDir, "prompts"),
   }),
 );

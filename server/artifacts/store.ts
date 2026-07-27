@@ -158,8 +158,14 @@ export class ArtifactStore {
   /**
    * Mutable Spec markdown — overwrites the same file and DB row while Spec is active.
    * Caller must assert the step is still mutable (CardStore.assertSpecMutable).
+   * Human PUT, /to-spec harvest, and spec-assist harvest all use this path.
    */
-  upsertSpec(cardId: string, round: number, markdown: string): Artifact {
+  upsertSpec(
+    cardId: string,
+    round: number,
+    markdown: string,
+    sourceSkill = "human",
+  ): Artifact {
     const existing = this.latest(cardId, { stepKey: "spec", round, kind: "spec" });
     const createdAt = existing?.createdAt ?? new Date();
     const body = withFrontmatter(markdown, {
@@ -167,7 +173,7 @@ export class ArtifactStore {
       step: "spec",
       round,
       kind: "spec",
-      sourceSkill: "human",
+      sourceSkill,
       schemaVersion: 1,
       createdAt,
     });
@@ -230,17 +236,25 @@ export class ArtifactStore {
           );
         }
       }
-      harvested.push(
-        this.save({
-          cardId: ctx.cardId,
-          stepKey: decl.stepKey,
-          round: ctx.round,
-          kind: decl.kind,
-          content: stripFrontmatter(raw),
-          sourceSkill: ctx.sourceSkill,
-          gitSha: ctx.gitSha,
-        }),
-      );
+      const content = stripFrontmatter(raw);
+      if (decl.kind === "spec") {
+        // Spec is mutable within the round (like transcripts) — upsert, don't append.
+        harvested.push(
+          this.upsertSpec(ctx.cardId, ctx.round, content, ctx.sourceSkill),
+        );
+      } else {
+        harvested.push(
+          this.save({
+            cardId: ctx.cardId,
+            stepKey: decl.stepKey,
+            round: ctx.round,
+            kind: decl.kind,
+            content,
+            sourceSkill: ctx.sourceSkill,
+            gitSha: ctx.gitSha,
+          }),
+        );
+      }
       fs.rmSync(exchangeAbs, { force: true });
     }
     return harvested;

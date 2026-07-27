@@ -262,9 +262,22 @@ describe("ArtifactStore", () => {
       round: 0,
       kind: "spec",
     });
-    expect(harvested[0].path).toMatch(new RegExp(`^cards/${cardId}/0/spec/.+\\.md$`));
+    expect(harvested[0].path).toBe(`cards/${cardId}/0/spec/spec.md`);
     expect(artifacts.readBody(harvested[0])).toContain("From exchange.");
     expect(fs.existsSync(exchangeAbs)).toBe(false);
+
+    // Second harvest upserts the same canonical Spec path (no nanoid sprawl).
+    fs.mkdirSync(path.dirname(exchangeAbs), { recursive: true });
+    fs.writeFileSync(exchangeAbs, "# Spec\n\nRevised.\n");
+    const second = artifacts.harvest(
+      storeRoot,
+      [{ exchangePath: exchangeRel, kind: "spec", stepKey: "spec" }],
+      { cardId, round: 0, sourceSkill: "to-spec" },
+    );
+    expect(second[0]!.id).toBe(harvested[0].id);
+    expect(second[0]!.path).toBe(harvested[0].path);
+    expect(artifacts.list(cardId).filter((a) => a.kind === "spec")).toHaveLength(1);
+    expect(artifacts.readBody(second[0]!)).toContain("Revised.");
 
     fs.rmSync(storeRoot, { recursive: true, force: true });
   });

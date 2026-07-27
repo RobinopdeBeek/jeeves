@@ -4,8 +4,10 @@ import type {
   WsServerMessage,
 } from "../../shared/chat-ws.js";
 import type { ArtifactStore } from "../artifacts/store.js";
+import { finalizeSpecAssistTurn } from "../chat/finalize-spec-assist.js";
 import type { CardStore } from "../cards/store.js";
 import type { EventBus } from "../execution/events.js";
+import { resolveProjectStorePaths } from "../project-store.js";
 import type { SpawnAcp } from "./chat.js";
 import { loadTranscript, openChat } from "./open-chat.js";
 import {
@@ -65,7 +67,11 @@ export class ChatConnection {
     try {
       const opened = await openChat(this.key, this.deps, {
         onStatusNotify: (status) => {
-          if (!this.closed) this.send({ type: "status", status });
+          if (this.closed) return;
+          this.send({ type: "status", status });
+          if (status === "needs-user" && this.key.stepKey === "spec") {
+            this.harvestSpecRevisionIfPresent();
+          }
         },
       });
       if (this.closed) return;
@@ -155,6 +161,27 @@ export class ChatConnection {
     this.handle = null;
     if (opts.releaseSlot) {
       this.deps.sessions.release(this.key, this);
+    }
+  }
+
+  private harvestSpecRevisionIfPresent(): void {
+    try {
+      const repoPath = this.deps.store.getRepoPath(this.key.cardId);
+      const storeRoot = resolveProjectStorePaths(repoPath).storeRoot;
+      const result = finalizeSpecAssistTurn({
+        artifacts: this.deps.artifacts,
+        storeRoot,
+        cardId: this.key.cardId,
+      });
+      if (result.kind === "revision" && !this.closed) {
+        this.send({ type: "spec-revised", markdown: result.markdown });
+      }
+    } catch (err) {
+      if (this.closed) return;
+      this.send({
+        type: "error",
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 

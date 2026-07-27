@@ -1,7 +1,7 @@
 import { useChat } from "@ai-sdk/react";
 import { useAISDKRuntime } from "@assistant-ui/react-ai-sdk";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ChatTransport, UIMessage } from "ai";
 import { AcpChatTransport } from "./acp-chat-transport";
 
@@ -9,6 +9,9 @@ export interface UseAcpChatOptions {
   cardId: string;
   stepKey: string;
   round?: number;
+  getCurrentSpecMarkdown?: () => string;
+  onSpecRevised?: (markdown: string) => void;
+  onStreamingChange?: (streaming: boolean) => void;
 }
 
 export type AcpChatState =
@@ -29,14 +32,24 @@ export type AcpChatState =
   | { status: "error"; error: string };
 
 /**
- * Custom ChatTransport hook: connects Grill (and future ai-chat steps) to AcpBridge.
+ * Custom ChatTransport hook: connects Grill / Spec ai-chat steps to AcpBridge.
  */
 export function useAcpChat({
   cardId,
   stepKey,
   round = 0,
+  getCurrentSpecMarkdown,
+  onSpecRevised,
+  onStreamingChange,
 }: UseAcpChatOptions): AcpChatState {
   const [state, setState] = useState<AcpChatState>({ status: "connecting" });
+  const getSpecRef = useRef(getCurrentSpecMarkdown);
+  getSpecRef.current = getCurrentSpecMarkdown;
+  const onRevisedRef = useRef(onSpecRevised);
+  onRevisedRef.current = onSpecRevised;
+  const onStreamingRef = useRef(onStreamingChange);
+  onStreamingRef.current = onStreamingChange;
+  const injectSpec = getCurrentSpecMarkdown != null;
 
   useEffect(() => {
     let cancelled = false;
@@ -46,6 +59,11 @@ export function useAcpChat({
       cardId,
       stepKey,
       round,
+      getCurrentSpecMarkdown: injectSpec
+        ? () => getSpecRef.current?.() ?? ""
+        : undefined,
+      onSpecRevised: (markdown) => onRevisedRef.current?.(markdown),
+      onStreamingChange: (streaming) => onStreamingRef.current?.(streaming),
       onDisplaced: (reason) => {
         if (cancelled) return;
         setState((prev) => ({
@@ -102,7 +120,7 @@ export function useAcpChat({
       // CONNECTING-safe close waits for open before closing (no setTimeout defer).
       transport.close();
     };
-  }, [cardId, stepKey, round]);
+  }, [cardId, stepKey, round, injectSpec]);
 
   return state;
 }

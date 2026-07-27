@@ -26,6 +26,11 @@ export interface OpenSessionOptions {
   /** Injected when history is empty — drives the agent's opening question. */
   openingPrompt: string;
   history?: UIMessage[];
+  /**
+   * Live chat: auto-approve reads/routine + exchange writes; prompt only for
+   * crucial actions (shell / non-exchange writes).
+   */
+  interactivePermissionPolicy?: InteractivePermissionPolicy;
 }
 
 /**
@@ -34,6 +39,9 @@ export interface OpenSessionOptions {
  * rejects other writes and fails the run — never stalls on a permission UI.
  */
 export type HeadlessPermissionPolicy = "cursor-like";
+
+/** Live chat Cursor-like defaults — auto-approve routine; prompt for crucial. */
+export type InteractivePermissionPolicy = "cursor-like";
 
 export interface RunToCompletionOptions {
   cwd: string;
@@ -60,18 +68,42 @@ type HeadlessPermissionDecision =
   | { action: "allow"; optionId: string }
   | { action: "deny"; optionId: string | null; reason: string };
 
+export type InteractivePermissionDecision =
+  | { action: "allow"; optionId: string }
+  | { action: "prompt" };
+
+function permissionAllowOption(
+  options: PermissionRequestData["options"],
+): PermissionOptionPart | undefined {
+  return options.find((o) => o.kind.startsWith("allow"));
+}
+
+function permissionRejectOption(
+  options: PermissionRequestData["options"],
+): PermissionOptionPart | undefined {
+  return options.find((o) => o.kind.startsWith("reject"));
+}
+
+/** Classify a tool title for Cursor-like allow vs crucial-prompt. */
+function isRoutineOrExchangeAllow(title: string): boolean {
+  const isExchangeWrite = EXCHANGE_WRITE_RE.test(title) && WRITE_TOOL_RE.test(title);
+  const isRead = READ_TOOL_RE.test(title) && !WRITE_TOOL_RE.test(title);
+  const isDisallowedWrite = WRITE_TOOL_RE.test(title) && !isExchangeWrite;
+  if (isExchangeWrite || isRead) return true;
+  if (isDisallowedWrite) return false;
+  // Unknown non-write tools — treat as routine.
+  return !WRITE_TOOL_RE.test(title);
+}
+
 /** Pick allow/deny for headless ACP without a permission UI. Exported for unit tests. */
 export function decideHeadlessPermission(
   data: Pick<PermissionRequestData, "title" | "options">,
 ): HeadlessPermissionDecision {
-  const allow = data.options.find((o) => o.kind.startsWith("allow"));
-  const reject = data.options.find((o) => o.kind.startsWith("reject"));
+  const allow = permissionAllowOption(data.options);
+  const reject = permissionRejectOption(data.options);
   const title = data.title ?? "";
-  const isExchangeWrite = EXCHANGE_WRITE_RE.test(title) && WRITE_TOOL_RE.test(title);
-  const isRead = READ_TOOL_RE.test(title) && !WRITE_TOOL_RE.test(title);
-  const isDisallowedWrite = WRITE_TOOL_RE.test(title) && !isExchangeWrite;
 
-  if (isExchangeWrite || isRead) {
+  if (isRoutineOrExchangeAllow(title)) {
     if (allow) return { action: "allow", optionId: allow.optionId };
     return {
       action: "deny",
@@ -80,16 +112,26 @@ export function decideHeadlessPermission(
     };
   }
 
-  if (isDisallowedWrite || !allow) {
-    return {
-      action: "deny",
-      optionId: reject?.optionId ?? null,
-      reason: `headless ACP: disallowed write "${title || "tool"}"`,
-    };
-  }
+  return {
+    action: "deny",
+    optionId: reject?.optionId ?? null,
+    reason: `headless ACP: disallowed write "${title || "tool"}"`,
+  };
+}
 
-  // Unknown non-write tools with an allow option — treat as routine.
-  return { action: "allow", optionId: allow.optionId };
+/**
+ * Live Cursor-like defaults: auto-approve reads/routine/exchange; prompt for crucial.
+ * Exported for unit tests.
+ */
+export function decideInteractivePermission(
+  data: Pick<PermissionRequestData, "title" | "options">,
+): InteractivePermissionDecision {
+  const allow = permissionAllowOption(data.options);
+  const title = data.title ?? "";
+  if (isRoutineOrExchangeAllow(title) && allow) {
+    return { action: "allow", optionId: allow.optionId };
+  }
+  return { action: "prompt" };
 }
 
 /** Receives projected UIMessage chunks while attached to a warm session. */
@@ -159,6 +201,8 @@ export class AcpBridge {
   /** When set, permission requests are resolved without a subscriber. */
   private headlessPolicy: HeadlessPermissionPolicy | null = null;
   private headlessFail: ((err: Error) => void) | null = null;
+  /** Live Cursor-like auto-approve for routine tools; prompt for crucial. */
+  private interactivePolicy: InteractivePermissionPolicy | null = null;
 
   constructor(
     private readonly deps: { spawn: SpawnAcp } & Partial<AcpLiveCallbacks>,
@@ -236,6 +280,7 @@ export class AcpBridge {
   async openSession(options: OpenSessionOptions): Promise<void> {
     this.messages = options.history ? [...options.history] : [];
     this.contextSeeded = this.messages.length === 0;
+    this.interactivePolicy = options.interactivePermissionPolicy ?? null;
     this.process = await this.deps.spawn(options.cwd);
     this.process.onLine((line) => this.handleLine(line));
 
@@ -560,6 +605,37 @@ export class AcpBridge {
       status: "pending",
     };
 
+    this.pendingPermissions.set(requestId, rpcId);
+
+    if (this.headlessPolicy != null) {
+      const part: PermissionPart = {
+        type: "data-permission",
+        id: requestId,
+        data,
+      };
+      if (this.currentAssistant) {
+        this.currentAssistant.parts.push(part as UIMessage["parts"][number]);
+      } else {
+        this.currentAssistant = {
+          id: nanoid(10),
+          role: "assistant",
+          parts: [part as UIMessage["parts"][number]],
+        };
+        this.pushChunk({ type: "start", messageId: this.currentAssistant.id });
+      }
+      this.pushChunk(permissionChunk(requestId, data));
+      this.resolveHeadlessPermission(requestId, data);
+      return;
+    }
+
+    if (this.interactivePolicy != null) {
+      const decision = decideInteractivePermission(data);
+      if (decision.action === "allow") {
+        this.respondToPermission(requestId, decision.optionId);
+        return;
+      }
+    }
+
     const part: PermissionPart = {
       type: "data-permission",
       id: requestId,
@@ -577,12 +653,7 @@ export class AcpBridge {
       this.pushChunk({ type: "start", messageId: this.currentAssistant.id });
     }
 
-    this.pendingPermissions.set(requestId, rpcId);
     this.pushChunk(permissionChunk(requestId, data));
-
-    if (this.headlessPolicy != null) {
-      this.resolveHeadlessPermission(requestId, data);
-    }
   }
 
   private resolveHeadlessPermission(

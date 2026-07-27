@@ -1,5 +1,6 @@
 import type { ChatTransport, UIMessage, UIMessageChunk } from "ai";
 import type { WsClientMessage, WsServerMessage } from "@shared/chat-ws";
+import { frameSpecAssistUserMessage } from "../lib/spec-assist-frame";
 
 export type { PermissionOptionPart, PermissionRequestData } from "@shared/chat-ws";
 
@@ -8,6 +9,12 @@ export interface AcpChatTransportOptions {
   stepKey: string;
   round?: number;
   onDisplaced?: (reason: string) => void;
+  /** Spec side-chat: inject live editor draft into each user turn. */
+  getCurrentSpecMarkdown?: () => string;
+  /** Spec side-chat: host harvested a revision — replace editor content. */
+  onSpecRevised?: (markdown: string) => void;
+  /** Notify when a turn starts/ends streaming (editor/composer lock). */
+  onStreamingChange?: (streaming: boolean) => void;
 }
 
 /**
@@ -132,7 +139,11 @@ export class AcpChatTransport {
 
     this.beginTurn();
     const stream = this.openChunkStream(abortSignal);
-    this.sendClient({ type: "user-message", text });
+    const framed =
+      this.options.getCurrentSpecMarkdown != null
+        ? frameSpecAssistUserMessage(text, this.options.getCurrentSpecMarkdown())
+        : text;
+    this.sendClient({ type: "user-message", text: framed });
     return stream;
   }
 
@@ -187,6 +198,7 @@ export class AcpChatTransport {
     this.closeActiveStream();
     this.chunkBuffer = [];
     this.turnDone = false;
+    this.options.onStreamingChange?.(true);
   }
 
   private openChunkStream(
@@ -270,6 +282,7 @@ export class AcpChatTransport {
     if (this.turnDone) return;
     this.turnDone = true;
     this.closeActiveStream();
+    this.options.onStreamingChange?.(false);
   }
 
   private closeActiveStream(): void {
@@ -351,6 +364,10 @@ export class AcpChatTransport {
         this.markTurnDone();
         break;
       case "status":
+        this.options.onStreamingChange?.(msg.status === "ai-working");
+        break;
+      case "spec-revised":
+        this.options.onSpecRevised?.(msg.markdown);
         break;
     }
   }

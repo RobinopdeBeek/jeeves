@@ -276,4 +276,56 @@ describe("AcpChatTransport", () => {
       "finish",
     ]);
   });
+
+  it("frames Spec user turns with currentSpecMarkdown from the editor", async () => {
+    const transport = new AcpChatTransport({
+      cardId: "c1",
+      stepKey: "spec",
+      getCurrentSpecMarkdown: () => "# Spec\n\nDraft body\n",
+    });
+
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({
+      type: "ready",
+      messages: [{ id: "a0", role: "assistant", parts: [{ type: "text", text: "Ready" }] }],
+      streaming: false,
+    });
+    await connectP;
+    ws.deliver({ type: "session", status: "open", streaming: false });
+
+    const stream = await transport.sendMessages({
+      messages: [userMessage("Tighten acceptance criteria")],
+      abortSignal: undefined as unknown as AbortSignal,
+    } as Parameters<AcpChatTransport["sendMessages"]>[0]);
+    void readAll(stream);
+
+    const sent = ws.sent.map((s) => JSON.parse(s) as { type: string; text?: string });
+    const userMsg = sent.find((m) => m.type === "user-message");
+    expect(userMsg?.text).toContain("Tighten acceptance criteria");
+    expect(userMsg?.text).toContain("## Current Spec markdown (from editor)");
+    expect(userMsg?.text).toContain("Draft body");
+  });
+
+  it("notifies onSpecRevised when the server harvests a Spec revision", async () => {
+    const revisions: string[] = [];
+    const transport = new AcpChatTransport({
+      cardId: "c1",
+      stepKey: "spec",
+      onSpecRevised: (markdown) => revisions.push(markdown),
+    });
+
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({ type: "ready", messages: [], streaming: false });
+    await connectP;
+    ws.deliver({ type: "session", status: "open", streaming: false });
+
+    ws.deliver({
+      type: "spec-revised",
+      markdown: "# Spec\n\nRevised by assist\n",
+    });
+
+    expect(revisions).toEqual(["# Spec\n\nRevised by assist\n"]);
+  });
 });

@@ -4,6 +4,7 @@ import {
   AcpBridge,
   type AcpLiveCallbacks,
   type ChunkSubscriber,
+  type InteractivePermissionPolicy,
   type SpawnAcp,
 } from "./chat.js";
 
@@ -27,6 +28,8 @@ export interface ColdAcquireParams {
   history: UIMessage[];
   onStatus: AcpLiveCallbacks["onStatus"];
   onTranscript: AcpLiveCallbacks["onTranscript"];
+  /** Spec (and future) live chats: Cursor-like auto-approve. */
+  interactivePermissionPolicy?: InteractivePermissionPolicy;
 }
 
 /** Cap on live ACP bridges across all chat steps (issue #24). */
@@ -128,6 +131,7 @@ export class ChatSessionRegistry {
         cwd: params.cwd,
         openingPrompt: params.openingPrompt,
         history: params.history,
+        interactivePermissionPolicy: params.interactivePermissionPolicy,
       });
       return this.handleFor(bridge, false);
     });

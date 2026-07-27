@@ -27,5 +27,7 @@ export type WsServerMessage =
   | { type: "session"; status: "open"; streaming?: boolean }
   | { type: "chunk"; chunk: UIMessageChunk }
   | { type: "status"; status: "ai-working" | "needs-user" }
+  /** Spec side-chat harvested a revision — replace editor content. */
+  | { type: "spec-revised"; markdown: string }
   | { type: "displaced"; reason: string }
   | { type: "error"; error: string };

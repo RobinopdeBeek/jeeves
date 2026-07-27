@@ -4,8 +4,10 @@ import type { ArtifactStore } from "../artifacts/store.js";
 import type { CardStore } from "../cards/store.js";
 import type { EventBus } from "../execution/events.js";
 import type { StepKey } from "../pipelines.js";
+import { projectStoreExchangePath } from "../project-store.js";
 import type { SpawnAcp } from "./chat.js";
 import { buildGrillOpeningPrompt } from "./grill-prompt.js";
+import { buildSpecAssistOpeningPrompt } from "./spec-assist-prompt.js";
 import {
   ChatSessionRegistry,
   type SessionKey,
@@ -31,12 +33,19 @@ export interface OpenChatResult {
   handle: WarmSessionHandle;
 }
 
+export interface OpeningPromptExtras {
+  /** Settled Grill session markdown for Spec side-chat (ADR 0012). */
+  grillSession?: string;
+  cardId?: string;
+}
+
 /** Step-keyed opening prompt for AI Chat steps. */
 export function resolveOpeningPrompt(
   stepKey: StepKey,
   card: { title: string; description: string },
   cwd: string,
   promptsRoot: string,
+  extras: OpeningPromptExtras = {},
 ): string {
   if (stepKey === "grill") {
     return buildGrillOpeningPrompt(
@@ -44,6 +53,21 @@ export function resolveOpeningPrompt(
         title: card.title,
         description: card.description,
         contextPath: path.join(cwd, "CONTEXT.md"),
+      },
+      promptsRoot,
+    );
+  }
+  if (stepKey === "spec") {
+    if (!extras.cardId) {
+      throw new Error("spec opening prompt requires cardId");
+    }
+    return buildSpecAssistOpeningPrompt(
+      {
+        title: card.title,
+        description: card.description,
+        contextPath: path.join(cwd, "CONTEXT.md"),
+        grillSession: extras.grillSession ?? "",
+        exchangePath: projectStoreExchangePath(extras.cardId, "spec.md"),
       },
       promptsRoot,
     );
@@ -69,6 +93,24 @@ export function loadTranscript(
   }
 }
 
+/** Settled Grill session Q&A for Spec side-chat context (ADR 0012). */
+export function loadGrillSession(
+  artifacts: ArtifactStore,
+  cardId: string,
+): string {
+  const row = artifacts.latest(cardId, {
+    stepKey: "grill",
+    round: 0,
+    kind: "grill",
+  });
+  if (!row) return "";
+  try {
+    return artifacts.readContent(row);
+  } catch {
+    return "";
+  }
+}
+
 /**
  * Open or reattach a warm ACP chat for (card, step, round).
  * Owns prompt resolution, status writes, and transcript upsert — WS stays framing-only.
@@ -90,6 +132,11 @@ export async function openChat(
     card,
     cwd,
     deps.promptsRoot,
+    {
+      cardId: key.cardId,
+      grillSession:
+        key.stepKey === "spec" ? loadGrillSession(deps.artifacts, key.cardId) : undefined,
+    },
   );
 
   const handle = await deps.sessions.acquire(key, {
@@ -97,6 +144,8 @@ export async function openChat(
     cwd,
     openingPrompt,
     history,
+    interactivePermissionPolicy:
+      key.stepKey === "spec" ? "cursor-like" : undefined,
     onStatus: (status) => {
       const updated = deps.store.setStepStatus(key.cardId, key.stepKey, status);
       deps.events.emit({ type: "card.updated", card: updated });

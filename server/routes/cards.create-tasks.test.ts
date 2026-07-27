@@ -56,6 +56,7 @@ describe("POST /:id/create-tasks", () => {
       artifacts,
       sessions,
       extractGrillSession: vi.fn(async () => "## unused"),
+      synthesizeSpec: vi.fn(async () => {}),
       promptsRoot: path.resolve(import.meta.dirname, "../../prompts"),
     };
   });

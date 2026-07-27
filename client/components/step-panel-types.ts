@@ -7,4 +7,6 @@ export type StepPanelProps = {
   onCardChange: (card: Card) => void;
   /** Spec tab reports the live editor body for footer Create Tasks gates. */
   onSpecBodyChange?: (markdown: string) => void;
+  /** Grill tab: Create Spec → headless /to-spec is in flight. */
+  synthesizingSpec?: boolean;
 };

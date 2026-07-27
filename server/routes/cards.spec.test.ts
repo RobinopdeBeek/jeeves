@@ -36,6 +36,7 @@ describe("PUT /:id/spec", () => {
       artifacts,
       sessions: new ChatSessionRegistry(),
       extractGrillSession: vi.fn(async () => "## unused"),
+      synthesizeSpec: vi.fn(async () => {}),
       promptsRoot: path.resolve(import.meta.dirname, "../../prompts"),
     };
   });

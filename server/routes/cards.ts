@@ -6,6 +6,10 @@ import {
   GrillSessionExtractError,
   type ExtractGrillSession,
 } from "../chat/grill-session-extract.js";
+import {
+  SpecSynthesisError,
+  type SynthesizeSpec,
+} from "../chat/to-spec-synthesis.js";
 import { dispatchAdvanceEffects } from "../execution/dispatch-effects.js";
 import type { ExecutionEngine } from "../execution/engine.js";
 import type { EventBus } from "../execution/events.js";
@@ -26,6 +30,7 @@ export interface CardRouteDeps {
   artifacts: ArtifactStore;
   sessions: ChatSessionRegistry;
   extractGrillSession: ExtractGrillSession;
+  synthesizeSpec: SynthesizeSpec;
   promptsRoot: string;
 }
 
@@ -82,7 +87,8 @@ export function cardRoutes(
     const cardId = c.req.param("id");
     try {
       // Validate before extract / ACP teardown so a 409 leaves the session intact.
-      const plan = store.assertGrillToSpecHandOff(cardId);
+      store.assertGrillToSpecHandOff(cardId);
+      const cardBefore = store.getCard(cardId)!;
 
       const transcript = loadTranscript(deps.artifacts, {
         cardId,
@@ -93,9 +99,9 @@ export function cardRoutes(
         return c.json({ error: "grill transcript is empty" }, 422);
       }
 
-      let body: string;
+      let grillBody: string;
       try {
-        body = await deps.extractGrillSession({
+        grillBody = await deps.extractGrillSession({
           transcript,
           repoPath: project.repoPath,
           promptsRoot: deps.promptsRoot,
@@ -115,14 +121,46 @@ export function cardRoutes(
         stepKey: "grill",
         round: 0,
         kind: "grill",
-        content: body,
+        content: grillBody,
         sourceSkill: "grill-session",
       });
 
-      dispatchAdvanceEffects(cardId, plan.sideEffects, {
-        enqueue: (id, step) => deps.engine.enqueue(id, step),
-        sessions: deps.sessions,
-      });
+      // Freeze Grill chat before headless /to-spec (closes warm ACP).
+      dispatchAdvanceEffects(
+        cardId,
+        [
+          {
+            type: "close-chat",
+            stepKey: "grill",
+            round: 0,
+            reason: "closing grill for spec synthesis",
+          },
+        ],
+        {
+          enqueue: (id, step) => deps.engine.enqueue(id, step),
+          sessions: deps.sessions,
+        },
+      );
+
+      try {
+        await deps.synthesizeSpec({
+          cardId,
+          repoPath: project.repoPath,
+          grillSession: grillBody,
+          cardTitle: cardBefore.title,
+          cardDescription: cardBefore.description,
+          promptsRoot: deps.promptsRoot,
+        });
+      } catch (e) {
+        const message =
+          e instanceof SpecSynthesisError
+            ? e.message
+            : e instanceof Error
+              ? e.message
+              : "spec synthesis failed";
+        return c.json({ error: message }, 502);
+      }
+
       const { card } = store.handOffGrillToSpec(cardId);
       deps.events.emit({ type: "card.updated", card });
       return c.json(card);

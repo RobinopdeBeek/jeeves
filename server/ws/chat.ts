@@ -28,6 +28,70 @@ export interface OpenSessionOptions {
   history?: UIMessage[];
 }
 
+/**
+ * Headless permission policy for one-shot ACP runs (e.g. /to-spec).
+ * Auto-approves reads/routine tools and project-store exchange writes;
+ * rejects other writes and fails the run — never stalls on a permission UI.
+ */
+export type HeadlessPermissionPolicy = "cursor-like";
+
+export interface RunToCompletionOptions {
+  cwd: string;
+  prompt: string;
+  permissionPolicy: HeadlessPermissionPolicy;
+  /** Fail the run if the turn does not finish within this window. */
+  timeoutMs?: number;
+}
+
+export class AcpHeadlessError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AcpHeadlessError";
+  }
+}
+
+const READ_TOOL_RE =
+  /\b(read|list|ls|glob|grep|search|find|cat|fetch|web.?search|context7|mcp)\b/i;
+const WRITE_TOOL_RE =
+  /\b(write|edit|delete|create|overwrite|apply.?patch|strreplace|shell|bash|terminal|cmd|powershell)\b/i;
+const EXCHANGE_WRITE_RE = /\.jeeves[/\\]exchange\b/i;
+
+type HeadlessPermissionDecision =
+  | { action: "allow"; optionId: string }
+  | { action: "deny"; optionId: string | null; reason: string };
+
+/** Pick allow/deny for headless ACP without a permission UI. Exported for unit tests. */
+export function decideHeadlessPermission(
+  data: Pick<PermissionRequestData, "title" | "options">,
+): HeadlessPermissionDecision {
+  const allow = data.options.find((o) => o.kind.startsWith("allow"));
+  const reject = data.options.find((o) => o.kind.startsWith("reject"));
+  const title = data.title ?? "";
+  const isExchangeWrite = EXCHANGE_WRITE_RE.test(title) && WRITE_TOOL_RE.test(title);
+  const isRead = READ_TOOL_RE.test(title) && !WRITE_TOOL_RE.test(title);
+  const isDisallowedWrite = WRITE_TOOL_RE.test(title) && !isExchangeWrite;
+
+  if (isExchangeWrite || isRead) {
+    if (allow) return { action: "allow", optionId: allow.optionId };
+    return {
+      action: "deny",
+      optionId: reject?.optionId ?? null,
+      reason: `headless ACP: no allow option for "${title || "tool"}"`,
+    };
+  }
+
+  if (isDisallowedWrite || !allow) {
+    return {
+      action: "deny",
+      optionId: reject?.optionId ?? null,
+      reason: `headless ACP: disallowed write "${title || "tool"}"`,
+    };
+  }
+
+  // Unknown non-write tools with an allow option — treat as routine.
+  return { action: "allow", optionId: allow.optionId };
+}
+
 /** Receives projected UIMessage chunks while attached to a warm session. */
 export interface ChunkSubscriber {
   onChunk(chunk: UIMessageChunk): void;
@@ -92,6 +156,9 @@ export class AcpBridge {
   inactiveSince = Date.now();
 
   private live: AcpLiveCallbacks;
+  /** When set, permission requests are resolved without a subscriber. */
+  private headlessPolicy: HeadlessPermissionPolicy | null = null;
+  private headlessFail: ((err: Error) => void) | null = null;
 
   constructor(
     private readonly deps: { spawn: SpawnAcp } & Partial<AcpLiveCallbacks>,
@@ -200,9 +267,64 @@ export class AcpBridge {
     await this.runPromptTurn(text, { recordUser: true });
   }
 
+  /**
+   * One-shot headless ACP turn: spawn, prompt, wait for idle, then kill.
+   * Permissions follow `permissionPolicy` — never waits for a UI subscriber.
+   */
+  async runToCompletion(options: RunToCompletionOptions): Promise<void> {
+    this.headlessPolicy = options.permissionPolicy;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+
+    const failPromise = new Promise<never>((_, reject) => {
+      this.headlessFail = reject;
+    });
+
+    try {
+      const work = (async () => {
+        await this.openSession({
+          cwd: options.cwd,
+          openingPrompt: options.prompt,
+          history: [],
+        });
+        await this.whenIdle();
+      })();
+
+      const raced =
+        options.timeoutMs != null
+          ? Promise.race([
+              work,
+              failPromise,
+              new Promise<never>((_, reject) => {
+                timeoutId = setTimeout(() => {
+                  timedOut = true;
+                  reject(
+                    new AcpHeadlessError(
+                      `headless ACP run timed out after ${options.timeoutMs}ms`,
+                    ),
+                  );
+                }, options.timeoutMs);
+              }),
+            ])
+          : Promise.race([work, failPromise]);
+
+      await raced;
+    } finally {
+      if (timeoutId != null) clearTimeout(timeoutId);
+      this.headlessPolicy = null;
+      this.headlessFail = null;
+      this.close();
+      if (timedOut) {
+        // close() already ran; error already thrown from race
+      }
+    }
+  }
+
   close(): void {
     this.subscriber = null;
     this.pendingPermissions.clear();
+    this.headlessPolicy = null;
+    this.headlessFail = null;
     this.process?.kill();
     this.process = null;
     this.sessionId = null;
@@ -457,6 +579,34 @@ export class AcpBridge {
 
     this.pendingPermissions.set(requestId, rpcId);
     this.pushChunk(permissionChunk(requestId, data));
+
+    if (this.headlessPolicy != null) {
+      this.resolveHeadlessPermission(requestId, data);
+    }
+  }
+
+  private resolveHeadlessPermission(
+    requestId: string,
+    data: PermissionRequestData,
+  ): void {
+    const decision = decideHeadlessPermission(data);
+    if (decision.action === "allow") {
+      this.respondToPermission(requestId, decision.optionId);
+      return;
+    }
+
+    if (decision.optionId) {
+      try {
+        this.respondToPermission(requestId, decision.optionId);
+      } catch {
+        // Process may already be closing; still fail the run below.
+      }
+    } else {
+      this.pendingPermissions.delete(requestId);
+    }
+
+    const err = new AcpHeadlessError(decision.reason);
+    this.headlessFail?.(err);
   }
 
   private findPermissionPart(requestId: string): PermissionPart | undefined {

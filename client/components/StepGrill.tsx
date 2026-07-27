@@ -8,10 +8,25 @@ import { GrillTransportContext } from "@/components/grill/transport-context";
 import type { StepPanelProps } from "./step-panel-types";
 
 /** Grill tab — reusable assistant-ui Thread over AcpBridge WebSocket. */
-export function StepGrill({ card }: StepPanelProps) {
+export function StepGrill({ card, synthesizingSpec }: StepPanelProps) {
   const grill = card.steps.find((s) => s.key === "grill");
   if (grill?.status === "done") {
     return <CompletedGrill cardId={card.id} />;
+  }
+
+  if (synthesizingSpec) {
+    return (
+      <div
+        className="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center"
+        role="status"
+        aria-live="polite"
+      >
+        <p className="text-sm text-muted-foreground">Creating Spec…</p>
+        <p className="max-w-md text-sm text-muted-foreground">
+          Closing Grill and synthesizing from the Grill session.
+        </p>
+      </div>
+    );
   }
 
   return <LiveGrill cardId={card.id} />;

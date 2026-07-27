@@ -33,6 +33,9 @@ describe("DELETE /:id", () => {
       extractGrillSession: async () => {
         throw new Error("unused");
       },
+      synthesizeSpec: async () => {
+        throw new Error("unused");
+      },
       promptsRoot: path.resolve(import.meta.dirname, "../../prompts"),
     };
   });

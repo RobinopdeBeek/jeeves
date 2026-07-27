@@ -88,6 +88,7 @@ export function CardView() {
     if (!card) return;
     setCreatingSpec(true);
     setCreateSpecError(null);
+    setTabOverride("grill"); // stay on Grill while synthesis runs
     try {
       const updated = await api.createSpec(card.id);
       setCard(updated);
@@ -199,6 +200,7 @@ export function CardView() {
             stepKey={activeKey}
             onCardChange={setCard}
             onSpecBodyChange={onSpecBodyChange}
+            synthesizingSpec={creatingSpec}
           />
         ) : null}
       </main>
@@ -251,7 +253,11 @@ export function CardView() {
               ) : null}
             </div>
             <Button disabled={createSpecDisabled} onClick={createSpec}>
-              {creatingSpec ? "Creating Spec…" : "Create Spec →"}
+              {creatingSpec
+                ? "Creating Spec…"
+                : createSpecError
+                  ? "Retry"
+                  : "Create Spec →"}
             </Button>
           </>
         )}

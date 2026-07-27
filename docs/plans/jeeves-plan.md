@@ -114,6 +114,7 @@ Large sections live in separate files so this page stays scannable:
 | [jeeves-project-structure.md](./jeeves-project-structure.md) | Repo directory map |
 | [jeeves-build-order.md](./jeeves-build-order.md) | Module map, vertical slice sequence, meta-workflow |
 | [`jeeves-skills.md`](./jeeves-skills.md) | Skill catalog, specs, development priorities |
+| [`features/`](./features/) | Rough notes for future features still being refined (not committed pipeline work) |
 
 ---
 

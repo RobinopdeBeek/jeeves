@@ -13,8 +13,9 @@
     "isolatedModules": true,
     "types": ["node", "vite/client"],
     "paths": {
-      "@/*": ["./client/*"]
+      "@/*": ["./client/*"],
+      "@shared/*": ["./shared/*"]
     }
   },
-  "include": ["server", "client", "vite.config.ts", "drizzle.config.ts"]
+  "include": ["server", "client", "shared", "vite.config.ts", "drizzle.config.ts"]
 }

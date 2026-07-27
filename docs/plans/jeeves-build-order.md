@@ -18,11 +18,11 @@ modules, not modules of their own.
 
 | Module | Interface (the seam) | What it hides |
 |---|---|---|
-| `PipelineEngine` | pipeline lookup by `(kind, hasParent)`; `advance(card)` | all column/step transition rules, auto-advance, "workflow is code" |
-| `CardStore` | CRUD, kind decision, fan-out, blocker edges, derived queries ("X of Y", queue candidates, Round N history) | SQLite/Drizzle, the unified draft/active/merged model, every derivation rule |
-| `ArtifactStore` | `save`, `harvest(worktree, declarations)`, `list(card)`, serve-path resolution | atomic/versioned files, metadata, containment, manifest regeneration, lineage, rounds, supersession |
-| `ExecutionEngine` | `enqueue(card, step)` + run events; `startPreview(card, gitSha)` / `stopPreview()` | `AgentRunner` (today: `@cursor/sdk` local), `WorktreeManager`, per-run worktrees/finalization, branch strategy, sequential queue, host-process preview lifecycle, blocker checks, restart recovery, eval-skill sequencing |
-| `AcpBridge` | `openSession(skillPrompt)` → `UIMessage` stream | spawning `agent acp`, ACP→`UIMessage` projection, permission responses, JSON-RPC piping, disconnect/summary handling |
+| `PipelineEngine` | pipeline lookup by `(kind, hasParent)`; real `advance(card, trigger)` → patches + side-effects | all column/step transition rules, auto-advance, board predicates (`canCreateSpec`), "workflow is code" |
+| `CardStore` | CRUD, kind decision, fan-out, blocker edges, derived queries ("X of Y", queue candidates, Round N history); persists `advance` patches | SQLite/Drizzle, the unified draft/active/merged model, every derivation rule |
+| `ArtifactStore` | `save`, `harvest(worktree, declarations)`, `list(card)`, serve-path resolution; transcript upsert is file/index only | atomic/versioned files, metadata, containment, manifest regeneration, lineage, rounds, supersession |
+| `ExecutionEngine` | `enqueue(card, step)` + run events; `startPreview(card, gitSha)` / `stopPreview()`; dispatches `advance` side-effects on finish | `AgentRunner` (today: `@cursor/sdk` local), `WorktreeManager`, per-run worktrees/finalization, branch strategy, sequential queue, host-process preview lifecycle, blocker checks, restart recovery, eval-skill sequencing |
+| `AcpBridge` | push-only session (`attach`/`onChunk`); warm registry acquire/reattach; `openChat` for WS adapters | spawning `agent acp`, ACP→`UIMessage` projection, permission responses, JSON-RPC piping, warm registry (cap + eviction, inside module), seed-once history, disconnect/hand-off close |
 
 ### The slice sequence
 
@@ -56,20 +56,26 @@ blocker relationship can be built in parallel or reordered.
 5. **Grill end-to-end.** Establish the chat stack: `useChat` + assistant-ui over a custom
    WebSocket `ChatTransport`; `AcpBridge` projects ACP JSON-RPC into AI SDK `UIMessage` parts
    server-side (including permission-request custom parts). `StepGrill` renders streaming
-   chat; conversation summary saved as a `UIMessage[]` artifact on hand-off. *Demo: a
-   `/grill-with-docs` session from the phone.* (Blocked by 1 only — independent of 3–4, can
-   run in parallel.)
+   chat; the live log persists as a `UIMessage[]` **transcript** artifact. On Grill → Spec,
+   a host extract produces the **Grill session** Q&A markdown (`kind: grill`); the done Grill
+   tab shows that document, not the raw transcript
+   ([ADR 0012](../adr/0012-grill-session-qa-handoff.md)). *Demo: a `/grill-with-docs` session
+   from the phone.* (Blocked by 1 only — independent of 3–4, can run in parallel.)
 
-   **Grill → Spec hand-off summary prompt:**
-```
-Summarise this entire conversation as a structured markdown document.
-Include: the problem statement as clarified, key assumptions surfaced,
-constraints identified, open questions remaining, and a readiness assessment.
-This will be used as input to /to-spec.
-```
+   **5E — Warm ACP session registry** (after 5C/5D): detach ACP lifetime from the WebSocket.
+   A server-side registry keyed by `(cardId, stepKey, round)` keeps up to **5** live bridges.
+   Leaving Grill detaches the subscriber but does not kill an in-flight turn; reopening
+   reattaches and catches mid-stream chunks. Cap eviction: longest-inactive idle session
+   first; if all five are `ai-working`, wait until the longest-running turn finishes and its
+   transcript is persisted, then evict. Permission with no attached client → `needs-user`.
+   Hand-off / step completion closes the registry entry. No warm process pool (defer until
+   cold start is still annoying). Applies to Grill now and future ACP chat steps later.
+
+   **Grill → Spec hand-off extract** uses [`prompts/chat/grill-session.md`](../../prompts/chat/grill-session.md)
+   (host `Agent.prompt`; failed/empty extract must not hand off).
 6. **Spec step.** MDXEditor + AI side-chat reusing the chat stack from slice 5; spec artifact
-   with the acceptance-criteria checklist. *Demo: author a spec collaboratively from the
-   tablet.* (Blocked by 5.)
+   with the acceptance-criteria checklist; Spec consumes the Grill session (not the
+   transcript). *Demo: author a spec collaboratively from the tablet.* (Blocked by 5.)
 7. **Fan-out.** `/to-tasks` writes a structured JSON exchange file in the worktree (vertical
    slices + blocked-by); the runner harvests it and validates with a Zod schema before creating
    draft cards (retry loop on parse failure). Draft cards (real `cards` rows, `status =

@@ -114,12 +114,12 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
 
   useJeevesEvents(
     (event) => {
+      if (event.type !== "run.log" && event.type !== "run.finished") return;
       if (event.cardId !== card.id) return;
       if (event.type === "run.log") {
         if (!acceptsRunEvent(event.runId)) return;
         setLogText((prev) => appendLogLine(prev, event.line));
-      }
-      if (event.type === "run.finished") {
+      } else {
         if (!acceptsRunEvent(event.runId)) return;
         loadLatest().catch(console.error);
       }
@@ -198,11 +198,11 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
             )}
           </div>
 
-          {showPlan && (
+          {showPlan && planArtifact ? (
             <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border p-4 text-sm">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{planArtifact.content}</ReactMarkdown>
             </div>
-          )}
+          ) : null}
         </>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">

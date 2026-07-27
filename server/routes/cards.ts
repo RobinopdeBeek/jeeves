@@ -2,10 +2,17 @@ import { Hono } from "hono";
 import { CardStoreError, type KindPath } from "../cards/store.js";
 import type { CardStore } from "../cards/store.js";
 import type { Project } from "../db/schema.js";
+import {
+  GrillSessionExtractError,
+  type ExtractGrillSession,
+} from "../chat/grill-session-extract.js";
+import { dispatchAdvanceEffects } from "../execution/dispatch-effects.js";
 import type { ExecutionEngine } from "../execution/engine.js";
 import type { EventBus } from "../execution/events.js";
 import type { RunStore } from "../execution/run-store.js";
 import type { ArtifactStore } from "../artifacts/store.js";
+import { loadTranscript } from "../ws/open-chat.js";
+import type { ChatSessionRegistry } from "../ws/session-registry.js";
 import { artifactRoutes } from "./artifacts.js";
 
 function isKindPath(value: unknown): value is KindPath {
@@ -17,6 +24,9 @@ export interface CardRouteDeps {
   runs: RunStore;
   events: EventBus;
   artifacts: ArtifactStore;
+  sessions: ChatSessionRegistry;
+  extractGrillSession: ExtractGrillSession;
+  promptsRoot: string;
 }
 
 /** Thin HTTP adapter over the CardStore seam. */
@@ -48,14 +58,73 @@ export function cardRoutes(
       return c.json({ error: "path must be feature or standalone" }, 400);
     }
     try {
-      const card = store.decideKind(c.req.param("id"), body.path);
+      const { card, sideEffects } = store.decideKind(
+        c.req.param("id"),
+        body.path,
+      );
       // Board tabs open elsewhere only see decide via SSE — not the HTTP response.
       deps.events.emit({ type: "card.updated", card });
-      // Orchestration lives here, not in CardStore (ADR 0006): the
-      // standalone path leaves Plan queued — hand it to the engine.
-      if (card.steps.some((s) => s.key === "plan" && s.status === "queued")) {
-        deps.engine.enqueue(card.id, "plan");
+      // advance declares enqueue; route only dispatches (ADR 0006).
+      dispatchAdvanceEffects(card.id, sideEffects, {
+        enqueue: (id, step) => deps.engine.enqueue(id, step),
+        sessions: deps.sessions,
+      });
+      return c.json(card);
+    } catch (e) {
+      if (e instanceof CardStoreError) {
+        return c.json({ error: e.message }, e.status as 400 | 404 | 409);
       }
+      throw e;
+    }
+  });
+
+  app.post("/:id/create-spec", async (c) => {
+    const cardId = c.req.param("id");
+    try {
+      // Validate before extract / ACP teardown so a 409 leaves the session intact.
+      const plan = store.assertGrillToSpecHandOff(cardId);
+
+      const transcript = loadTranscript(deps.artifacts, {
+        cardId,
+        stepKey: "grill",
+        round: 0,
+      });
+      if (transcript.length === 0) {
+        return c.json({ error: "grill transcript is empty" }, 422);
+      }
+
+      let body: string;
+      try {
+        body = await deps.extractGrillSession({
+          transcript,
+          repoPath: project.repoPath,
+          promptsRoot: deps.promptsRoot,
+        });
+      } catch (e) {
+        const message =
+          e instanceof GrillSessionExtractError
+            ? e.message
+            : e instanceof Error
+              ? e.message
+              : "grill-session extract failed";
+        return c.json({ error: message }, 502);
+      }
+
+      deps.artifacts.save({
+        cardId,
+        stepKey: "grill",
+        round: 0,
+        kind: "grill",
+        content: body,
+        sourceSkill: "grill-session",
+      });
+
+      dispatchAdvanceEffects(cardId, plan.sideEffects, {
+        enqueue: (id, step) => deps.engine.enqueue(id, step),
+        sessions: deps.sessions,
+      });
+      const { card } = store.handOffGrillToSpec(cardId);
+      deps.events.emit({ type: "card.updated", card });
       return c.json(card);
     } catch (e) {
       if (e instanceof CardStoreError) {
@@ -89,10 +158,11 @@ export function cardRoutes(
   });
 
   app.delete("/:id", (c) => {
-    const deleted = store.deleteCard(c.req.param("id"));
-    return deleted
-      ? c.json({ ok: true })
-      : c.json({ error: "not found" }, 404);
+    const id = c.req.param("id");
+    const deleted = store.deleteCard(id);
+    if (!deleted) return c.json({ error: "not found" }, 404);
+    deps.artifacts.removeCardFolder(id);
+    return c.json({ ok: true });
   });
 
   return app;

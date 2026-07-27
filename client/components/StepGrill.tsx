@@ -1,28 +1,98 @@
-import { IconPaperclip } from "@tabler/icons-react";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import type { UIMessage } from "ai";
+import { Thread, ThreadShell } from "@/components/assistant-ui/thread";
+import { AcpChatProvider, useAcpChat } from "@/hooks/useAcpChat";
+import { PermissionDataUI } from "@/components/grill/PermissionPartView";
+import { GrillSessionView } from "@/components/grill/GrillSessionView";
+import { ReadOnlyTranscript } from "@/components/grill/ReadOnlyTranscript";
+import { GrillTransportContext } from "@/components/grill/transport-context";
 import type { StepPanelProps } from "./step-panel-types";
 
-/** Grill tab layout — message area + composer chrome; live AI arrives in slice 5. */
-export function StepGrill(_props: StepPanelProps) {
+/** Grill tab — reusable assistant-ui Thread over AcpBridge WebSocket. */
+export function StepGrill({ card }: StepPanelProps) {
+  const grill = card.steps.find((s) => s.key === "grill");
+  if (grill?.status === "done") {
+    return <CompletedGrill cardId={card.id} />;
+  }
+
+  return <LiveGrill cardId={card.id} />;
+}
+
+function LiveGrill({ cardId }: { cardId: string }) {
+  const chat = useAcpChat({ cardId, stepKey: "grill", round: 0 });
+
+  if (chat.status === "error") {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center">
+        <p className="text-destructive">Could not start grill session</p>
+        <p className="max-w-md text-sm text-muted-foreground">{chat.error}</p>
+      </div>
+    );
+  }
+
+  if (chat.status === "connecting") {
+    return <ThreadShell />;
+  }
+
+  if (chat.status === "displaced") {
+    return (
+      <DisplacedGrill
+        cardId={cardId}
+        reason={chat.reason}
+        fallbackMessages={chat.messages}
+      />
+    );
+  }
+
   return (
-    <div className="flex flex-1 flex-col overflow-hidden rounded-lg border">
-      <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-4">
-        <p className="text-sm text-muted-foreground">
-          Grill chat will appear here. Start a session in a later slice.
-        </p>
+    <AcpChatProvider transport={chat.transport} messages={chat.messages}>
+      <GrillTransportContext.Provider value={chat.transport}>
+        <PermissionDataUI />
+        <Thread sessionOpen={chat.sessionOpen} />
+      </GrillTransportContext.Provider>
+    </AcpChatProvider>
+  );
+}
+
+/**
+ * Completed grill (handed off to Spec): Grill session Q&A markdown, no composer,
+ * no live ACP session. Raw transcript stays in storage for resume/debug only.
+ */
+function CompletedGrill({ cardId }: { cardId: string }) {
+  return (
+    <div className="flex flex-1 flex-col overflow-hidden">
+      <GrillSessionView cardId={cardId} />
+    </div>
+  );
+}
+
+/**
+ * Displaced writer: banner + latest transcript from the artifact API.
+ * Composer is omitted (read-only). Message list is plain replay — no live
+ * assistant-ui runtime, matching the frozen/read-only Grill path.
+ */
+function DisplacedGrill({
+  cardId,
+  reason,
+  fallbackMessages,
+}: {
+  cardId: string;
+  reason: string;
+  fallbackMessages: UIMessage[];
+}) {
+  const banner =
+    reason === "session continued elsewhere"
+      ? "Session continued elsewhere"
+      : reason;
+
+  return (
+    <div className="flex flex-1 flex-col overflow-hidden">
+      <div
+        className="border-b bg-muted px-4 py-2 text-center text-sm text-muted-foreground"
+        role="status"
+      >
+        {banner}
       </div>
-      <div className="flex items-end gap-2 border-t p-3">
-        <Button variant="ghost" size="icon-sm" disabled title="Attach files">
-          <IconPaperclip />
-        </Button>
-        <Textarea
-          rows={1}
-          disabled
-          placeholder="Message…"
-          className="min-h-9 resize-none"
-        />
-      </div>
+      <ReadOnlyTranscript cardId={cardId} fallbackMessages={fallbackMessages} />
     </div>
   );
 }

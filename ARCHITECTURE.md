@@ -60,7 +60,7 @@ What crosses each boundary:
   browser-local QA state and synchronizes it through source-validated `postMessage`.
 - **Server ⇄ ACP agent:** the server spawns `agent acp` per chat session, pipes JSON-RPC, and
   projects events into AI SDK `UIMessage` parts inside `AcpBridge` (including permission
-  requests). Host-produced artifacts (grill summary, spec, chat transcripts) are written
+  requests). Host-produced artifacts (Grill session, spec, chat transcripts) are written
   by the server directly into the artifact folder.
 - **Server ⇄ agent worktree:** the agent runs in a self-managed git worktree via `@cursor/sdk` local. It has no database access — it reads the injected inputs and the per-card `manifest.json` from the project store. Worktree-produced artifacts (Plan, eval HTML, screenshots, structured outputs) are written to known **exchange files** under `<worktree>/.jeeves/` (e.g. `plan.md`). A generic finalization callback harvests them into `<repo>/.jeeves/data/` and removes exchange files before teardown; failure preserves diagnostics.
 - **Worktree ⇄ target repo:** each run gets a fresh worktree on one durable card branch. Features
@@ -124,7 +124,11 @@ Browser                          Server
                                                           └── @cursor/sdk local (composer-2.5)
 ```
 
-- **Chat:** `AcpBridge` owns the ACP→`UIMessage` projection. The client never sees ACP
+- **Chat:** `AcpBridge` is a long-lived push session: it owns ACP→`UIMessage` projection,
+  warm attach/catch-up buffering, and seed-once resume history. The warm registry
+  (`ChatSessionRegistry`: map + cap + writer slot) lives inside the AcpBridge module.
+  `openChat` loads transcript, resolves the step opener, and wires status/transcript
+  callbacks; the WebSocket `ChatConnection` is framing-only. The client never sees ACP
   types. Permission requests render as custom message parts; responses flow back through the
   transport. Transcripts serialize as `UIMessage[]` for artifact persistence and replay.
 - **Execution:** `AgentRunner` (`run(prompt, options): AsyncIterable<RunEvent>`) is the inner
@@ -147,11 +151,11 @@ them. Everything else (routes, React components) is a thin adapter.
 
 | Module | Lives in | Interface (the seam) | What it hides |
 |---|---|---|---|
-| `PipelineEngine` | `server/pipelines.ts` | pipeline lookup by `(kind, hasParent)`; `advance(card)` | all column/step transition rules, auto-advance, "workflow is code" |
-| `CardStore` | `server/db/` + card logic | CRUD, kind decision, fan-out, blocker edges, derived queries ("X of Y", queue candidates, Round N history) | SQLite/Drizzle, the unified draft/active/merged model, every derivation rule |
-| `ArtifactStore` | `server/routes/artifacts.ts` + storage logic | `save`, `harvest(worktree, declarations)`, `list(card)`, serve-path resolution | atomic/versioned files, metadata, root containment, manifest regeneration, lineage, rounds, supersession |
-| `ExecutionEngine` | `server/execution/` (`engine.ts`, `runner.ts`, `worktree-manager.ts`, `cursor-sdk-runner.ts`, `run-store.ts`, `events.ts`) | `enqueue(card, step)` + run events; `startPreview(card, gitSha)` / `stopPreview()` | `AgentRunner`, per-run worktrees/finalization, branch strategy, host-process preview lifecycle, sequential queue, blockers, restart recovery, eval sequencing |
-| `AcpBridge` | `server/ws/chat.ts` | `openSession(skillPrompt)` → `UIMessage` stream | spawning `agent acp`, ACP→`UIMessage` projection, permission responses, JSON-RPC piping, disconnect/summary handling |
+| `PipelineEngine` | `server/pipelines.ts` | pipeline lookup by `(kind, hasParent)`; real `advance(card, trigger)` → patches + side-effects (`enqueue`, `close-chat`) | all column/step transition rules, auto-advance, board predicates (`canCreateSpec`), "workflow is code" |
+| `CardStore` | `server/db/` + card logic | CRUD, kind decision, fan-out, blocker edges, derived queries ("X of Y", queue candidates, Round N history); persists `advance` patches | SQLite/Drizzle, the unified draft/active/merged model, every derivation rule |
+| `ArtifactStore` | `server/artifacts/store.ts` + routes | `save`, `harvest(worktree, declarations)`, `list(card)`, serve-path resolution; transcript upsert is file/index only | atomic/versioned files, metadata, root containment, manifest regeneration, lineage, rounds, supersession |
+| `ExecutionEngine` | `server/execution/` (`engine.ts`, `runner.ts`, `worktree-manager.ts`, `cursor-sdk-runner.ts`, `run-store.ts`, `events.ts`) | `enqueue(card, step)` + run events; `startPreview(card, gitSha)` / `stopPreview()`; dispatches `advance` side-effects on finish | `AgentRunner`, per-run worktrees/finalization, branch strategy, host-process preview lifecycle, sequential queue, blockers, restart recovery, eval sequencing |
+| `AcpBridge` | `server/ws/chat.ts` (+ `open-chat.ts`, `session-registry.ts`) | push-only `openSession` / `sendMessage` + `attach`/`onChunk`; warm registry acquire/reattach; `openChat` for adapters | spawning `agent acp`, ACP→`UIMessage` projection, permission responses, JSON-RPC piping, warm cap/eviction, seed-once history, disconnect/hand-off close |
 
 The AI-execution skill prompts live in `prompts/execution/` and are self-describing; the
 `ExecutionEngine` decides which skill runs when.
@@ -178,7 +182,8 @@ Entity definitions live in [`CONTEXT.md`](./CONTEXT.md); columns live in
   changes-requested decision at round N begets round N+1.
 - An **artifact** row is metadata plus a path — the file itself lives in the project store's
   artifact folder (`<repo>/.jeeves/data/cards/<cardId>/<round>/`). **Artifact lineage** links
-  each artifact to what it was derived from (grill → spec → tasks → plan → impl → eval).
+  each artifact to what it was derived from (transcript → grill → spec → tasks → plan →
+  impl → eval).
   Evaluations are not committed to git; `git_sha` on the artifact row remains the link to the
   reviewed diff ([ADR 0011](./docs/adr/0011-project-store-in-target-repo-gitignored.md)).
 
@@ -191,8 +196,9 @@ Column-level only; step mechanics live in `server/pipelines.ts` and the skill pr
 ### Feature (happy path)
 
 1. A card is captured in **Backlog**; the user picks **"Grill me →"**, making it a feature.
-2. **Define Feature**: a grill chat session, then collaborative spec authoring, then the
-   feature is broken into draft tasks with blocked-by edges.
+2. **Define Feature**: a grill chat session whose hand-off is a **Grill session** Q&A
+   artifact ([ADR 0012](./docs/adr/0012-grill-session-qa-handoff.md)), then collaborative
+   spec authoring, then the feature is broken into draft tasks with blocked-by edges.
 3. **Fan-out**: the drafts activate as child task cards on the board.
 4. Each child task runs **Implement Task** (Plan → Implement → AI Review) autonomously,
    then waits in **Human Review** with its Task Evaluation. Blocked tasks wait for blocker

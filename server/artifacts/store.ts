@@ -1,7 +1,8 @@
-import { and, desc, eq } from "drizzle-orm";
+import { nanoid } from "nanoid";
+import type { UIMessage } from "ai";
 import fs from "node:fs";
 import path from "node:path";
-import { nanoid } from "nanoid";
+import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import {
   artifacts,
@@ -9,6 +10,14 @@ import {
   type ArtifactKind,
 } from "../db/schema.js";
 import type { StepKey } from "../pipelines.js";
+
+export type { UIMessage };
+
+const TRANSCRIPT_FILE_ID = "transcript";
+
+function transcriptArtifactId(cardId: string, stepKey: StepKey, round: number): string {
+  return `${cardId}-${stepKey}-${round}-transcript`;
+}
 
 export class ArtifactStoreError extends Error {
   constructor(message: string) {
@@ -21,6 +30,8 @@ export interface HarvestDeclaration {
   exchangePath: string;
   kind: ArtifactKind;
   stepKey: StepKey;
+  /** Optional content gate — step policy, not ArtifactStore domain. */
+  validate?: (raw: string) => void;
 }
 
 export interface HarvestContext {
@@ -91,6 +102,54 @@ export class ArtifactStore {
     return row;
   }
 
+  /**
+   * Mutable transcript for ai-chat steps — overwrites the same file and DB row each turn.
+   * Caller must assert the step is still mutable (CardStore.assertTranscriptMutable).
+   */
+  upsertTranscript(
+    cardId: string,
+    stepKey: StepKey,
+    round: number,
+    messages: UIMessage[],
+  ): Artifact {
+    const content = `${JSON.stringify(messages, null, 2)}\n`;
+    const existing = this.latest(cardId, { stepKey, round, kind: "transcript" });
+
+    if (existing) {
+      const absPath = this.resolveServePath(cardId, existing.path);
+      this.writeAtomic(absPath, content);
+      this.regenerateManifest(cardId);
+      return existing;
+    }
+
+    const createdAt = new Date();
+    const id = transcriptArtifactId(cardId, stepKey, round);
+    const relativePath = this.destinationPath(cardId, round, "transcript", TRANSCRIPT_FILE_ID);
+    const absPath = this.assertUnderRoot(relativePath);
+    fs.mkdirSync(path.dirname(absPath), { recursive: true });
+    this.writeAtomic(absPath, content);
+
+    const row: Artifact = {
+      id,
+      cardId,
+      stepKey,
+      round,
+      kind: "transcript",
+      path: relativePath,
+      gitSha: null,
+      schemaVersion: 1,
+      createdAt,
+    };
+    try {
+      this.db.insert(artifacts).values(row).run();
+    } catch (error) {
+      fs.rmSync(absPath, { force: true });
+      throw error;
+    }
+    this.regenerateManifest(cardId);
+    return row;
+  }
+
   harvest(
     workspacePath: string,
     declarations: HarvestDeclaration[],
@@ -106,8 +165,14 @@ export class ArtifactStore {
       if (!raw.trim()) {
         throw new ArtifactStoreError(`exchange file is empty: ${decl.exchangePath}`);
       }
-      if (decl.kind === "plan" && !planHasUsefulContent(raw)) {
-        throw new ArtifactStoreError(`exchange file has no useful content: ${decl.exchangePath}`);
+      if (decl.validate) {
+        try {
+          decl.validate(raw);
+        } catch (err) {
+          throw new ArtifactStoreError(
+            err instanceof Error ? err.message : String(err),
+          );
+        }
       }
       harvested.push(
         this.save({
@@ -185,13 +250,29 @@ export class ArtifactStore {
     return this.assertUnderRoot(normalized);
   }
 
+  /** Remove `cards/<cardId>/` under the artifact root (idempotent). */
+  removeCardFolder(cardId: string): void {
+    if (!cardId || /[/\\]/.test(cardId) || cardId.includes("..")) {
+      throw new ArtifactStoreError("invalid card id");
+    }
+    const absPath = this.assertUnderRoot(path.posix.join("cards", cardId));
+    fs.rmSync(absPath, { recursive: true, force: true });
+  }
+
   private destinationPath(
     cardId: string,
     round: number,
     kind: ArtifactKind,
     id: string,
   ): string {
-    const ext = kind === "eval" ? "html" : kind === "runlog" ? "log" : "md";
+    const ext =
+      kind === "eval"
+        ? "html"
+        : kind === "runlog"
+          ? "log"
+          : kind === "transcript"
+            ? "json"
+            : "md";
     return path.posix.join("cards", cardId, String(round), kind, `${id}.${ext}`);
   }
 
@@ -267,13 +348,4 @@ function stripFrontmatter(raw: string): string {
   const end = raw.indexOf("\n---\n", 4);
   if (end === -1) return raw;
   return raw.slice(end + 5);
-}
-
-/** Plan exchange files need prose beyond headings and empty bullets. */
-function planHasUsefulContent(raw: string): boolean {
-  const body = stripFrontmatter(raw)
-    .replace(/^#+\s+.*$/gm, "")
-    .replace(/^[-*]\s*$/gm, "")
-    .trim();
-  return body.length > 0;
 }

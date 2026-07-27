@@ -28,6 +28,8 @@ export interface Card {
   position: number;
   createdAt: string;
   steps: CardStep[];
+  /** Server-derived: grill→spec hand-off is allowed (Create Spec). */
+  canCreateSpec: boolean;
 }
 
 export interface Project {
@@ -75,7 +77,16 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json" },
     ...init,
   });
-  if (!res.ok) throw new Error(`${init?.method ?? "GET"} ${url} → ${res.status}`);
+  if (!res.ok) {
+    let detail = `${init?.method ?? "GET"} ${url} → ${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body.error) detail = body.error;
+    } catch {
+      // keep status-based message
+    }
+    throw new Error(detail);
+  }
   return res.json() as Promise<T>;
 }
 
@@ -94,6 +105,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ path }),
     }),
+  createSpec: (id: string) =>
+    request<Card>(`/api/cards/${id}/create-spec`, { method: "POST" }),
   deleteCard: (id: string) =>
     request<{ ok: boolean }>(`/api/cards/${id}`, { method: "DELETE" }),
   listRuns: (cardId: string) => request<Run[]>(`/api/cards/${cardId}/runs`),

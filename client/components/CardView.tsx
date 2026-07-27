@@ -27,6 +27,8 @@ export function CardView() {
   const [missing, setMissing] = useState(false);
   const [tabOverride, setTabOverride] = useState<string | null>(null);
   const [deciding, setDeciding] = useState(false);
+  const [creatingSpec, setCreatingSpec] = useState(false);
+  const [createSpecError, setCreateSpecError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -69,6 +71,21 @@ export function CardView() {
     }
   }
 
+  async function createSpec() {
+    if (!card) return;
+    setCreatingSpec(true);
+    setCreateSpecError(null);
+    try {
+      const updated = await api.createSpec(card.id);
+      setCard(updated);
+      setTabOverride(null); // activeTabKey prefers Spec once needs-user
+    } catch (err) {
+      setCreateSpecError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCreatingSpec(false);
+    }
+  }
+
   if (missing) {
     return (
       <div className="flex h-dvh flex-col items-center justify-center gap-4">
@@ -90,6 +107,10 @@ export function CardView() {
   const Panel = STEP_PANELS[activeKey];
   const inBacklog = card.column === "backlog";
   const hasTitle = card.title.trim().length > 0;
+  const grillStep = card.steps.find((s) => s.key === "grill");
+  const showCreateSpec =
+    activeKey === "grill" && grillStep !== undefined && grillStep.status !== "done";
+  const createSpecDisabled = creatingSpec || !card.canCreateSpec;
 
   return (
     <div className="mx-auto flex h-dvh max-w-3xl flex-col">
@@ -156,6 +177,21 @@ export function CardView() {
             </Button>
             <Button disabled={!hasTitle || deciding} onClick={() => decide("feature")}>
               Grill me →
+            </Button>
+          </>
+        )}
+
+        {showCreateSpec && (
+          <>
+            <div className="flex min-w-0 flex-1 flex-col items-end gap-1">
+              {createSpecError ? (
+                <p className="max-w-md text-right text-sm text-destructive" role="alert">
+                  {createSpecError}
+                </p>
+              ) : null}
+            </div>
+            <Button disabled={createSpecDisabled} onClick={createSpec}>
+              {creatingSpec ? "Creating Spec…" : "Create Spec →"}
             </Button>
           </>
         )}

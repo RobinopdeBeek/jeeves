@@ -164,7 +164,7 @@ export function queuedCard(harness: EngineTestHarness, title = "Rest timer"): Ca
   const projectId = harness.store.ensureDefaultProject("jeeves", "C:/target-repo").id;
   const card = harness.store.createCard(projectId);
   harness.store.updateCard(card.id, { title });
-  return harness.store.decideKind(card.id, "standalone");
+  return harness.store.decideKind(card.id, "standalone").card;
 }
 
 export function stepStatus(harness: EngineTestHarness, cardId: string, stepKey: string) {

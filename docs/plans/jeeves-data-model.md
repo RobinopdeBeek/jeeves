@@ -108,14 +108,16 @@ artifacts                    -- metadata + pointer, never content
   card_id       fk → cards
   step_key      text
   round         int
-  kind          'grill' | 'spec' | 'tasks-breakdown' | 'plan' | 'eval'
+  kind          'transcript' | 'grill' | 'spec' | 'tasks-breakdown' | 'plan' | 'eval'
                 | 'screenshot' | 'runlog' | 'attachment'
+                -- transcript = mutable UIMessage[] chat log; grill = Grill session Q&A
+                -- (ADR 0012)
   path          text         -- root-relative; unique immutable destination per version
   git_sha       text, nullable  -- mandatory for evals: the only link to the reviewed diff
   schema_version int
   created_at
 
-artifact_lineage             -- provenance graph (grill → spec → tasks → plan → impl → eval)
+artifact_lineage             -- provenance graph (transcript → grill → spec → tasks → plan → impl → eval)
   artifact_id              fk → artifacts
   derived_from_artifact_id fk → artifacts
 

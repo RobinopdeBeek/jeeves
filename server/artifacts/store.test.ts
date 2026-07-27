@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { UIMessage } from "ai";
 import { CardStore } from "../cards/store.js";
 import { openDb, type Db } from "../db/index.js";
 import { ArtifactStore, ArtifactStoreError } from "./store.js";
@@ -94,6 +95,25 @@ describe("ArtifactStore", () => {
     expect(fs.existsSync(path.dirname(logPath))).toBe(true);
   });
 
+  it("removes the card artifact folder, including manifest and nested files", () => {
+    artifacts.save({
+      cardId,
+      stepKey: "plan",
+      round: 0,
+      kind: "plan",
+      content: "# Plan",
+      sourceSkill: "slice-3-tracer",
+    });
+    const cardDir = path.join(artifactRoot, "cards", cardId);
+    expect(fs.existsSync(path.join(cardDir, "manifest.json"))).toBe(true);
+
+    artifacts.removeCardFolder(cardId);
+
+    expect(fs.existsSync(cardDir)).toBe(false);
+    // Idempotent when the folder is already gone.
+    expect(() => artifacts.removeCardFolder(cardId)).not.toThrow();
+  });
+
   it("resolves serve paths only inside the card artifact folder", () => {
     const saved = artifacts.save({
       cardId,
@@ -139,7 +159,61 @@ describe("ArtifactStore", () => {
     fs.rmSync(workspace, { recursive: true, force: true });
   });
 
-  it("throws when a plan exchange file has no useful content beyond headings", () => {
+  const sampleTranscript: UIMessage[] = [
+    { id: "msg-1", role: "user", parts: [{ type: "text", text: "What should we build?" }] },
+    {
+      id: "msg-2",
+      role: "assistant",
+      parts: [{ type: "text", text: "Let's start with the domain model." }],
+    },
+  ];
+
+  function cardWithGrillStep(): void {
+    store.updateCard(cardId, { title: "Feature" });
+    store.decideKind(cardId, "feature");
+  }
+
+  it("creates a transcript artifact on first upsert and overwrites on subsequent writes", () => {
+    cardWithGrillStep();
+    const first = artifacts.upsertTranscript(cardId, "grill", 0, sampleTranscript);
+    expect(first).toMatchObject({
+      cardId,
+      stepKey: "grill",
+      round: 0,
+      kind: "transcript",
+    });
+    expect(first.path).toBe(`cards/${cardId}/0/transcript/transcript.json`);
+
+    const updatedTranscript: UIMessage[] = [
+      ...sampleTranscript,
+      { id: "msg-3", role: "user", parts: [{ type: "text", text: "Sounds good." }] },
+    ];
+    const second = artifacts.upsertTranscript(cardId, "grill", 0, updatedTranscript);
+
+    expect(second.id).toBe(first.id);
+    expect(second.path).toBe(first.path);
+    expect(artifacts.list(cardId)).toHaveLength(1);
+
+    const latest = artifacts.latest(cardId, { stepKey: "grill", round: 0, kind: "transcript" });
+    expect(latest?.id).toBe(first.id);
+    expect(JSON.parse(artifacts.readContent(latest!))).toEqual(updatedTranscript);
+  });
+
+  it("round-trips UIMessage[] transcript content", () => {
+    cardWithGrillStep();
+    artifacts.upsertTranscript(cardId, "grill", 0, sampleTranscript);
+    const latest = artifacts.latest(cardId, { stepKey: "grill", round: 0, kind: "transcript" });
+    expect(JSON.parse(artifacts.readContent(latest!))).toEqual(sampleTranscript);
+  });
+
+  it("rejects transcript writes when the caller asserts the step is frozen", () => {
+    cardWithGrillStep();
+    store.setStepStatus(cardId, "grill", "done");
+    expect(() => store.assertTranscriptMutable(cardId, "grill")).toThrow(/frozen/i);
+  });
+
+  it("throws when a plan exchange file has no useful content beyond headings", async () => {
+    const { assertPlanHasUsefulContent } = await import("../execution/step-policies.js");
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-wt-"));
     const exchangeDir = path.join(workspace, ".jeeves");
     fs.mkdirSync(exchangeDir, { recursive: true });
@@ -148,7 +222,14 @@ describe("ArtifactStore", () => {
     expect(() =>
       artifacts.harvest(
         workspace,
-        [{ exchangePath: ".jeeves/plan.md", kind: "plan", stepKey: "plan" }],
+        [
+          {
+            exchangePath: ".jeeves/plan.md",
+            kind: "plan",
+            stepKey: "plan",
+            validate: assertPlanHasUsefulContent,
+          },
+        ],
         { cardId, round: 0, sourceSkill: "slice-3-tracer" },
       ),
     ).toThrow(/useful content/);

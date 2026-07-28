@@ -109,6 +109,7 @@ export class ArtifactStore {
 
   /**
    * Mutable transcript for ai-chat steps — overwrites the same file and DB row each turn.
+   * Stored at `cards/<cardId>/<round>/<stepKey>/transcript.json` so steps do not collide.
    * Caller must assert the step is still mutable (CardStore.assertTranscriptMutable).
    */
   upsertTranscript(
@@ -129,7 +130,14 @@ export class ArtifactStore {
 
     const createdAt = new Date();
     const id = transcriptArtifactId(cardId, stepKey, round);
-    const relativePath = this.destinationPath(cardId, round, "transcript", TRANSCRIPT_FILE_ID);
+    // Step-scoped so grill/spec/… each keep their own file (not a shared transcript/ folder).
+    const relativePath = path.posix.join(
+      "cards",
+      cardId,
+      String(round),
+      stepKey,
+      `${TRANSCRIPT_FILE_ID}.json`,
+    );
     const absPath = this.assertUnderRoot(relativePath);
     fs.mkdirSync(path.dirname(absPath), { recursive: true });
     this.writeAtomic(absPath, content);

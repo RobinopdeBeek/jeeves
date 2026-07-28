@@ -182,7 +182,7 @@ describe("ArtifactStore", () => {
       round: 0,
       kind: "transcript",
     });
-    expect(first.path).toBe(`cards/${cardId}/0/transcript/transcript.json`);
+    expect(first.path).toBe(`cards/${cardId}/0/grill/transcript.json`);
 
     const updatedTranscript: UIMessage[] = [
       ...sampleTranscript,
@@ -197,6 +197,37 @@ describe("ArtifactStore", () => {
     const latest = artifacts.latest(cardId, { stepKey: "grill", round: 0, kind: "transcript" });
     expect(latest?.id).toBe(first.id);
     expect(JSON.parse(artifacts.readContent(latest!))).toEqual(updatedTranscript);
+  });
+
+  it("keeps grill and spec transcripts on separate step-scoped paths", () => {
+    cardWithGrillStep();
+    const grillMessages: UIMessage[] = [
+      { id: "g1", role: "user", parts: [{ type: "text", text: "Grill question" }] },
+    ];
+    const grill = artifacts.upsertTranscript(cardId, "grill", 0, grillMessages);
+
+    store.handOffGrillToSpec(cardId);
+    const specMessages: UIMessage[] = [
+      { id: "s1", role: "user", parts: [{ type: "text", text: "Spec assist" }] },
+    ];
+    const spec = artifacts.upsertTranscript(cardId, "spec", 0, specMessages);
+
+    expect(grill.path).toBe(`cards/${cardId}/0/grill/transcript.json`);
+    expect(spec.path).toBe(`cards/${cardId}/0/spec/transcript.json`);
+    expect(grill.path).not.toBe(spec.path);
+
+    const latestGrill = artifacts.latest(cardId, {
+      stepKey: "grill",
+      round: 0,
+      kind: "transcript",
+    });
+    const latestSpec = artifacts.latest(cardId, {
+      stepKey: "spec",
+      round: 0,
+      kind: "transcript",
+    });
+    expect(JSON.parse(artifacts.readContent(latestGrill!))).toEqual(grillMessages);
+    expect(JSON.parse(artifacts.readContent(latestSpec!))).toEqual(specMessages);
   });
 
   it("round-trips UIMessage[] transcript content", () => {

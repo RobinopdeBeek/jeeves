@@ -1,7 +1,7 @@
 import {
   IconLayoutSidebarRightCollapse,
-  IconLayoutSidebarRightExpand,
   IconLoader2,
+  IconX,
 } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
 import type { UIMessage } from "ai";
@@ -11,6 +11,7 @@ import { ReconnectingBanner } from "@/components/chat/ReconnectingBanner";
 import { PermissionDataUI } from "@/components/grill/PermissionPartView";
 import { ReadOnlyTranscript } from "@/components/grill/ReadOnlyTranscript";
 import { GrillTransportContext } from "@/components/grill/transport-context";
+import { Logo } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -204,7 +205,12 @@ export function StepSpec({ card, registerSpecFlush }: StepPanelProps) {
           {saveError}
         </p>
       ) : null}
-      <div className="flex min-h-0 flex-1 flex-col gap-4 md:flex-row">
+      <div
+        className={cn(
+          "relative flex min-h-0 flex-1 flex-col",
+          assistOpen && "md:flex-row md:gap-4",
+        )}
+      >
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <SpecEditor
             ref={editorRef}
@@ -216,56 +222,60 @@ export function StepSpec({ card, registerSpecFlush }: StepPanelProps) {
         </div>
         {!stepDone ? (
           <TooltipProvider>
+            {assistOpen ? (
+              <button
+                type="button"
+                className="absolute inset-0 z-40 bg-foreground/20 md:hidden"
+                aria-label="Hide Spec assist"
+                onClick={closeAssist}
+              />
+            ) : (
+              <AssistLauncherFab
+                streaming={streaming}
+                unread={assistUnread}
+                onExpand={openAssist}
+              />
+            )}
             <aside
               className={cn(
-                "flex shrink-0 flex-col overflow-hidden rounded-md border",
+                "flex flex-col overflow-hidden rounded-md border bg-background",
                 assistOpen
-                  ? "max-h-80 min-h-0 w-full md:max-h-none md:w-96"
-                  : "w-full md:w-10",
+                  ? "absolute inset-x-3 top-1/4 bottom-3 z-50 shadow-lg md:static md:inset-auto md:z-auto md:w-96 md:shrink-0 md:shadow-none"
+                  : "hidden",
               )}
             >
-              {assistOpen ? (
-                <div className="flex items-center gap-1 border-b px-2 py-1">
-                  <span className="min-w-0 flex-1 truncate px-1 text-sm font-medium">
-                    Spec assist
-                  </span>
-                  {streaming ? (
-                    <IconLoader2
-                      className="size-3.5 shrink-0 animate-spin text-pipeline-ai"
-                      aria-label="Spec assist is working"
-                    />
-                  ) : null}
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-expanded={true}
-                        aria-controls="spec-assist-panel"
-                        aria-label="Hide Spec assist"
-                        onClick={closeAssist}
-                      >
-                        <IconLayoutSidebarRightCollapse />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">Hide Spec assist</TooltipContent>
-                  </Tooltip>
-                </div>
-              ) : (
-                <CollapsedAssistRail
-                  streaming={streaming}
-                  unread={assistUnread}
-                  onExpand={openAssist}
-                />
-              )}
+              <div className="flex items-center gap-1 border-b px-2 py-1">
+                <span className="min-w-0 flex-1 truncate px-1 text-sm font-medium">
+                  Jeeves
+                </span>
+                {streaming ? (
+                  <IconLoader2
+                    className="size-3.5 shrink-0 animate-spin text-pipeline-ai"
+                    aria-label="Spec assist is working"
+                  />
+                ) : null}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-expanded={true}
+                      aria-controls="spec-assist-panel"
+                      aria-label="Hide Spec assist"
+                      onClick={closeAssist}
+                    >
+                      <IconX className="md:hidden" />
+                      <IconLayoutSidebarRightCollapse className="hidden md:block" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Hide Spec assist</TooltipContent>
+                </Tooltip>
+              </div>
               {/* Keep chat mounted while collapsed so the ACP session stays alive. */}
               <div
                 id="spec-assist-panel"
-                className={cn(
-                  "flex min-h-0 flex-1 flex-col overflow-hidden",
-                  !assistOpen && "hidden",
-                )}
+                className="flex min-h-0 flex-1 flex-col overflow-hidden"
               >
                 <SpecAssistChat
                   cardId={card.id}
@@ -283,7 +293,7 @@ export function StepSpec({ card, registerSpecFlush }: StepPanelProps) {
   );
 }
 
-function CollapsedAssistRail({
+function AssistLauncherFab({
   streaming,
   unread,
   onExpand,
@@ -301,33 +311,31 @@ function CollapsedAssistRail({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
+        <Button
           type="button"
+          variant="launcher"
+          size="icon-launcher"
           onClick={onExpand}
           aria-expanded={false}
           aria-controls="spec-assist-panel"
           aria-label={statusLabel}
-          className={cn(
-            "flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-accent",
-            "md:flex-col md:items-center md:gap-3 md:px-0 md:py-3",
-          )}
+          className="absolute right-3 bottom-3 z-30"
         >
-          <IconLayoutSidebarRightExpand className="size-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground md:hidden">
-            Spec assist
-          </span>
+          <Logo className="size-20" />
           {streaming ? (
-            <IconLoader2
-              className="size-3.5 shrink-0 animate-spin text-pipeline-ai"
-              aria-hidden
-            />
+            <span className="pointer-events-none absolute -top-0.5 -right-0.5 flex size-6 items-center justify-center rounded-full bg-background shadow-sm">
+              <IconLoader2
+                className="size-4 animate-spin text-pipeline-ai"
+                aria-hidden
+              />
+            </span>
           ) : unread ? (
             <span
-              className="size-2 shrink-0 rounded-full bg-pipeline-user"
+              className="pointer-events-none absolute top-1 right-1 size-3 rounded-full bg-pipeline-user ring-2 ring-white"
               aria-hidden
             />
           ) : null}
-        </button>
+        </Button>
       </TooltipTrigger>
       <TooltipContent side="left">{statusLabel}</TooltipContent>
     </Tooltip>

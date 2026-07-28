@@ -12,7 +12,7 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["server/**/*.test.ts", "client/**/*.test.ts"],
+    include: ["server/**/*.test.ts", "client/**/*.test.ts", "shared/**/*.test.ts"],
     environment: "node",
   },
 });

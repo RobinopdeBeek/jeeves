@@ -32,6 +32,8 @@ export interface Card {
   canCreateSpec: boolean;
   /** Server-derived: spec→tasks hand-off is allowed (Create Tasks). */
   canCreateTasks: boolean;
+  /** True while create-spec synthesis is in flight (survives remounts). */
+  creatingSpec: boolean;
 }
 
 export interface Project {

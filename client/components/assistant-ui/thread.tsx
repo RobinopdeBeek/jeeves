@@ -2,6 +2,8 @@
 
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import { ComposerTriggerPopover } from "@/components/assistant-ui/composer-trigger-popover";
+import { createDirectiveText } from "@/components/assistant-ui/directive-text";
+import { Badge } from "@/components/assistant-ui/badge";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -15,10 +17,15 @@ import {
   MessagePrimitive,
   ThreadPrimitive,
   type Unstable_SlashCommand,
+  unstable_defaultDirectiveFormatter,
   unstable_useMentionAdapter,
   unstable_useSlashCommandAdapter,
   useAuiState,
 } from "@assistant-ui/react";
+import {
+  LexicalComposerInput,
+  type DirectiveChipProps,
+} from "@assistant-ui/react-lexical";
 import {
   IconArrowDown,
   IconArrowUp,
@@ -91,6 +98,37 @@ const slashIconMap = {
   Globe: IconWorld,
   HelpCircle: IconHelp,
 };
+
+/** Shared chip look for composer (Lexical) and sent user messages. */
+const ComposerDirectiveChip: FC<DirectiveChipProps> = ({
+  directiveType,
+  directiveId,
+  label,
+}) => {
+  const Icon = directiveType === "command" ? IconSlash : IconTool;
+  return (
+    <Badge
+      variant="info"
+      size="sm"
+      data-slot="directive-text-chip"
+      data-directive-type={directiveType}
+      data-directive-id={directiveId}
+      aria-label={`${directiveType}: ${label}`}
+      className="aui-directive-chip mx-0.5 inline-flex translate-y-px items-baseline align-baseline text-[13px] leading-none [&_svg]:self-center"
+    >
+      <Icon />
+      {label}
+    </Badge>
+  );
+};
+
+const UserDirectiveText = createDirectiveText(unstable_defaultDirectiveFormatter, {
+  iconMap: {
+    command: IconSlash,
+    agent: IconTool,
+  },
+  fallbackIcon: IconTool,
+});
 
 /**
  * Reusable assistant-ui chat thread: composer always docked at the bottom,
@@ -280,6 +318,8 @@ const Composer: FC<{
     iconMap: { Tool: IconTool },
     fallbackIcon: IconTool,
   });
+  // Item list from the slash adapter; insert as directives (not Action) so
+  // Lexical can chip them. Execute stubs until real commands are wired.
   const slash = unstable_useSlashCommandAdapter({
     commands: SLASH_COMMANDS,
     iconMap: slashIconMap,
@@ -290,12 +330,11 @@ const Composer: FC<{
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
       <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
         <div data-slot="aui_composer-shell" className={COMPOSER_SHELL}>
-          <ComposerPrimitive.Input
+          <LexicalComposerInput
             placeholder={sessionOpen ? placeholder : openingPlaceholder}
-            className="aui-composer-input max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none caret-primary placeholder:text-muted-foreground/80"
-            rows={1}
             autoFocus
-            enterKeyHint="send"
+            directiveChip={ComposerDirectiveChip}
+            className="aui-composer-input relative max-h-32 min-h-10 w-full overflow-y-auto bg-transparent px-2.5 py-1 text-base caret-primary outline-none"
             aria-label="Message input"
           />
           <ComposerAction sessionOpen={sessionOpen} />
@@ -304,7 +343,10 @@ const Composer: FC<{
         <ComposerTriggerPopover char="@" {...mention} />
         <ComposerTriggerPopover
           char="/"
-          {...slash}
+          adapter={slash.adapter}
+          directive={{ formatter: unstable_defaultDirectiveFormatter }}
+          iconMap={slash.iconMap}
+          fallbackIcon={slash.fallbackIcon}
           emptyItemsLabel="No matching commands"
         />
       </ComposerPrimitive.Root>
@@ -493,7 +535,7 @@ const UserMessage: FC = () => {
     >
       <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
         <div className="aui-user-message-content peer rounded-xl bg-muted px-4 py-2 wrap-break-word text-foreground empty:hidden">
-          <MessagePrimitive.Parts />
+          <MessagePrimitive.Parts components={{ Text: UserDirectiveText }} />
         </div>
       </div>
     </MessagePrimitive.Root>

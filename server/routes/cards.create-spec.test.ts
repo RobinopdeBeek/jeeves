@@ -114,6 +114,7 @@ describe("POST /:id/create-spec", () => {
         artifacts,
         sessions,
         engine,
+        events,
         extractGrillSession,
         synthesizeSpec,
       }),
@@ -189,11 +190,20 @@ describe("POST /:id/create-spec", () => {
     expect(conn.displacedWith).toEqual(["closing grill for spec synthesis"]);
     expect(sessions.get({ cardId, stepKey: "grill", round: 0 })).toBeUndefined();
 
-    expect(emitted).toHaveLength(1);
+    // start (creatingSpec) + settle (hand-off complete)
+    expect(emitted).toHaveLength(2);
     expect(emitted[0]).toMatchObject({
       type: "card.updated",
-      card: { id: cardId },
+      card: { id: cardId, creatingSpec: true },
     });
+    expect(emitted[1]).toMatchObject({
+      type: "card.updated",
+      card: { id: cardId, creatingSpec: false },
+    });
+    expect(
+      (emitted[1] as { card: { steps: Array<{ key: string; status: string }> } })
+        .card.steps.find((s) => s.key === "grill")?.status,
+    ).toBe("done");
   });
 
   it("closes ACP before synthesis, and synthesizes before hand-off", async () => {
@@ -229,7 +239,15 @@ describe("POST /:id/create-spec", () => {
       method: "POST",
     });
     expect(res.status).toBe(200);
-    expect(emitted).toHaveLength(1);
+    expect(emitted).toHaveLength(2);
+    expect(emitted[0]).toMatchObject({
+      type: "card.updated",
+      card: { creatingSpec: true },
+    });
+    expect(emitted[1]).toMatchObject({
+      type: "card.updated",
+      card: { creatingSpec: false },
+    });
     expect(
       artifacts.latest(cardId, { stepKey: "spec", round: 0, kind: "spec" }),
     ).toBeTruthy();
@@ -253,6 +271,15 @@ describe("POST /:id/create-spec", () => {
     expect(store.getCard(cardId)?.steps.find((s) => s.key === "grill")?.status).toBe(
       "needs-user",
     );
+    expect(emitted).toHaveLength(2);
+    expect(emitted[0]).toMatchObject({
+      type: "card.updated",
+      card: { creatingSpec: true },
+    });
+    expect(emitted[1]).toMatchObject({
+      type: "card.updated",
+      card: { creatingSpec: false },
+    });
   });
 
   it("returns 502 when extract fails without synthesizing, handing off, or closing", async () => {
@@ -277,7 +304,8 @@ describe("POST /:id/create-spec", () => {
     expect(store.getCard(cardId)?.steps.find((s) => s.key === "grill")?.status).toBe(
       "needs-user",
     );
-    expect(emitted).toHaveLength(0);
+    expect(emitted).toHaveLength(2);
+    expect(store.getCard(cardId)?.creatingSpec).toBe(false);
   });
 
   it("returns 502 when synthesis/harvest fails: no hand-off, grill stays needs-user, ACP already closed", async () => {
@@ -306,7 +334,8 @@ describe("POST /:id/create-spec", () => {
     expect(
       artifacts.latest(cardId, { stepKey: "spec", round: 0, kind: "spec" }),
     ).toBeUndefined();
-    expect(emitted).toHaveLength(0);
+    expect(emitted).toHaveLength(2);
+    expect(store.getCard(cardId)?.creatingSpec).toBe(false);
   });
 
   it("returns 502 when synthesizeSpec reports missing exchange (no step advance)", async () => {
@@ -327,7 +356,8 @@ describe("POST /:id/create-spec", () => {
     expect(store.getCard(cardId)?.steps.find((s) => s.key === "grill")?.status).toBe(
       "needs-user",
     );
-    expect(emitted).toHaveLength(0);
+    expect(emitted).toHaveLength(2);
+    expect(store.getCard(cardId)?.creatingSpec).toBe(false);
   });
 
   it("returns 409 when grill is ai-working without closing the session", async () => {

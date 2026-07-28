@@ -42,6 +42,8 @@ describe("resolveOpeningPrompt", () => {
     expect(prompt).toContain("Settled: fridge only.");
     expect(prompt).toContain("exchange/card1/spec.md");
     expect(prompt).toContain(path.join("C:/repo", "CONTEXT.md"));
+    expect(prompt).toContain("Here for you if you need me.");
+    expect(prompt).toContain("Do **not** recap the Grill session");
   });
 
   it("rejects unknown step keys", () => {

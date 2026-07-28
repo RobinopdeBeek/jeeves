@@ -85,7 +85,7 @@ export function cardRoutes(
         repoPath: project.repoPath,
         promptsRoot: deps.promptsRoot,
       });
-      deps.events.emit({ type: "card.updated", card });
+      // createSpec emits card.updated when synthesis starts and when it settles.
       return c.json(card);
     } catch (e) {
       if (e instanceof CreateSpecError) {

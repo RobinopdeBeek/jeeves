@@ -1,6 +1,8 @@
+import { useEffect } from "react";
 import type { UIMessage } from "ai";
 import { Thread, ThreadShell } from "@/components/assistant-ui/thread";
 import { AcpChatProvider, useAcpChat } from "@/hooks/useAcpChat";
+import { ReconnectingBanner } from "@/components/chat/ReconnectingBanner";
 import { PermissionDataUI } from "@/components/grill/PermissionPartView";
 import { GrillSessionView } from "@/components/grill/GrillSessionView";
 import { ReadOnlyTranscript } from "@/components/grill/ReadOnlyTranscript";
@@ -8,7 +10,11 @@ import { GrillTransportContext } from "@/components/grill/transport-context";
 import type { StepPanelProps } from "./step-panel-types";
 
 /** Grill tab — reusable assistant-ui Thread over AcpBridge WebSocket. */
-export function StepGrill({ card, synthesizingSpec }: StepPanelProps) {
+export function StepGrill({
+  card,
+  synthesizingSpec,
+  onGrillStartingChange,
+}: StepPanelProps) {
   const grill = card.steps.find((s) => s.key === "grill");
   if (grill?.status === "done") {
     return <CompletedGrill cardId={card.id} />;
@@ -21,19 +27,35 @@ export function StepGrill({ card, synthesizingSpec }: StepPanelProps) {
         role="status"
         aria-live="polite"
       >
-        <p className="text-sm text-muted-foreground">Creating Spec…</p>
-        <p className="max-w-md text-sm text-muted-foreground">
-          Closing Grill and synthesizing from the Grill session.
+        <p className="text-sm text-muted-foreground">
+          Creating Spec from our Grill session…
         </p>
       </div>
     );
   }
 
-  return <LiveGrill cardId={card.id} />;
+  return (
+    <LiveGrill cardId={card.id} onGrillStartingChange={onGrillStartingChange} />
+  );
 }
 
-function LiveGrill({ cardId }: { cardId: string }) {
+function LiveGrill({
+  cardId,
+  onGrillStartingChange,
+}: {
+  cardId: string;
+  onGrillStartingChange?: (starting: boolean) => void;
+}) {
   const chat = useAcpChat({ cardId, stepKey: "grill", round: 0 });
+
+  const starting =
+    chat.status === "connecting" ||
+    (chat.status === "ready" && !chat.sessionOpen);
+
+  useEffect(() => {
+    onGrillStartingChange?.(starting);
+    return () => onGrillStartingChange?.(false);
+  }, [starting, onGrillStartingChange]);
 
   if (chat.status === "error") {
     return (
@@ -59,12 +81,20 @@ function LiveGrill({ cardId }: { cardId: string }) {
   }
 
   return (
-    <AcpChatProvider transport={chat.transport} messages={chat.messages}>
-      <GrillTransportContext.Provider value={chat.transport}>
-        <PermissionDataUI />
-        <Thread sessionOpen={chat.sessionOpen} />
-      </GrillTransportContext.Provider>
-    </AcpChatProvider>
+    <div className="flex min-h-0 flex-1 flex-col">
+      {chat.connection === "reconnecting" ? <ReconnectingBanner /> : null}
+      {/* epoch remounts the runtime after a reconnect so the server transcript wins. */}
+      <AcpChatProvider
+        key={chat.epoch}
+        transport={chat.transport}
+        messages={chat.messages}
+      >
+        <GrillTransportContext.Provider value={chat.transport}>
+          <PermissionDataUI />
+          <Thread sessionOpen={chat.sessionOpen} />
+        </GrillTransportContext.Provider>
+      </AcpChatProvider>
+    </div>
   );
 }
 

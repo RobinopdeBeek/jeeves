@@ -31,15 +31,22 @@ export function CardView() {
   const [createSpecError, setCreateSpecError] = useState<string | null>(null);
   const [creatingTasks, setCreatingTasks] = useState(false);
   const [createTasksError, setCreateTasksError] = useState<string | null>(null);
+  /** Pessimistic until LiveGrill reports ACP handshake finished. */
+  const [grillStarting, setGrillStarting] = useState(true);
   const flushSpecRef = useRef<(() => Promise<void>) | null>(null);
 
   const registerSpecFlush = useCallback((flush: (() => Promise<void>) | null) => {
     flushSpecRef.current = flush;
   }, []);
 
+  const onGrillStartingChange = useCallback((starting: boolean) => {
+    setGrillStarting(starting);
+  }, []);
+
   useEffect(() => {
     if (!id) return;
     setTabOverride(null);
+    setGrillStarting(true);
     api
       .getCard(id)
       .then(setCard)
@@ -133,9 +140,12 @@ export function CardView() {
   const hasTitle = card.title.trim().length > 0;
   const grillStep = card.steps.find((s) => s.key === "grill");
   const specStep = card.steps.find((s) => s.key === "spec");
+  // Local flag for instant UI; card.creatingSpec survives board remounts (SSE/GET).
+  const synthesizingSpec = creatingSpec || card.creatingSpec;
   const showCreateSpec =
     activeKey === "grill" && grillStep !== undefined && grillStep.status !== "done";
-  const createSpecDisabled = creatingSpec || !card.canCreateSpec;
+  const createSpecDisabled =
+    synthesizingSpec || !card.canCreateSpec || grillStarting;
   const showCreateTasks =
     activeKey === "spec" && specStep !== undefined && specStep.status !== "done";
   const createTasksDisabled = creatingTasks || !card.canCreateTasks;
@@ -180,7 +190,8 @@ export function CardView() {
             stepKey={activeKey}
             onCardChange={setCard}
             registerSpecFlush={registerSpecFlush}
-            synthesizingSpec={creatingSpec}
+            synthesizingSpec={synthesizingSpec}
+            onGrillStartingChange={onGrillStartingChange}
           />
         ) : null}
       </main>
@@ -233,7 +244,7 @@ export function CardView() {
               ) : null}
             </div>
             <Button disabled={createSpecDisabled} onClick={createSpec}>
-              {creatingSpec
+              {synthesizingSpec
                 ? "Creating Spec…"
                 : createSpecError
                   ? "Retry"

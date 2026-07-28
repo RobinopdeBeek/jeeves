@@ -1,4 +1,5 @@
 import type { UIMessage } from "ai";
+import { stripSpecAssistFrame } from "../../shared/spec-assist-frame.js";
 import type { ArtifactStore } from "../artifacts/store.js";
 import type { CardStore } from "../cards/store.js";
 import type { EventBus } from "../execution/events.js";
@@ -61,10 +62,25 @@ export function loadTranscript(
   if (!row) return [];
   try {
     const parsed = JSON.parse(artifacts.readContent(row)) as UIMessage[];
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    // Older Spec-assist turns stored the framed Spec body in user parts —
+    // strip for display so chat stays readable.
+    return parsed.map(stripFramedUserParts);
   } catch {
     return [];
   }
+}
+
+function stripFramedUserParts(message: UIMessage): UIMessage {
+  if (message.role !== "user") return message;
+  return {
+    ...message,
+    parts: message.parts.map((part) =>
+      part.type === "text"
+        ? { ...part, text: stripSpecAssistFrame(part.text) }
+        : part,
+    ),
+  };
 }
 
 /** Settled Grill session Q&A for Spec side-chat context (ADR 0012). */

@@ -4,6 +4,7 @@ import type {
   PermissionOptionPart,
   PermissionRequestData,
 } from "../../shared/chat-ws.js";
+import { frameSpecAssistUserMessage } from "../../shared/spec-assist-frame.js";
 import {
   decideHeadlessPermission,
   decideInteractivePermission,
@@ -242,9 +243,15 @@ export class AcpBridge {
   }
 
   /** Send a user message; chunks arrive via attach / onChunk buffering. */
-  async sendMessage(text: string): Promise<void> {
+  async sendMessage(
+    text: string,
+    opts?: { currentSpecMarkdown?: string },
+  ): Promise<void> {
     if (!this.sessionId) throw new Error("session not open");
-    await this.runPromptTurn(text, { recordUser: true });
+    await this.runPromptTurn(text, {
+      recordUser: true,
+      currentSpecMarkdown: opts?.currentSpecMarkdown,
+    });
   }
 
   /**
@@ -341,7 +348,7 @@ export class AcpBridge {
     return undefined;
   }
 
-  private endTurn(): void {
+  private endTurn(opts?: { turnCompleteAlreadyRun?: boolean }): void {
     this.activity = "idle";
     this.awaitingDetachedPermission = false;
     this.turnStartedAt = 0;
@@ -351,13 +358,15 @@ export class AcpBridge {
     this.resolveTurnDone = null;
     // Harvest Spec revisions before needs-user so the client can apply
     // while still locked, then unlock on the status frame.
-    this.live.onTurnComplete?.();
+    if (!opts?.turnCompleteAlreadyRun) {
+      this.live.onTurnComplete?.();
+    }
     this.live.onStatus("needs-user");
   }
 
   private async runPromptTurn(
     text: string,
-    opts: { recordUser: boolean },
+    opts: { recordUser: boolean; currentSpecMarkdown?: string },
   ): Promise<void> {
     if (!this.sessionId || !this.process) throw new Error("session not open");
 
@@ -383,10 +392,16 @@ export class AcpBridge {
     this.pushChunk({ type: "start", messageId });
     this.pushChunk({ type: "text-start", id: textId });
 
-    let promptText = text;
+    // Spec body (if any) is agent-prompt context only — never stored in transcript.
+    const agentText =
+      opts.currentSpecMarkdown != null
+        ? frameSpecAssistUserMessage(text, opts.currentSpecMarkdown)
+        : text;
+
+    let promptText = agentText;
     if (opts.recordUser) {
       if (!this.contextSeeded) {
-        promptText = this.formatPromptWithHistory(text);
+        promptText = this.formatPromptWithHistory(agentText);
         this.contextSeeded = true;
       }
     }
@@ -399,14 +414,17 @@ export class AcpBridge {
       if (this.currentTextId) {
         this.pushChunk({ type: "text-end", id: this.currentTextId });
       }
-      this.pushChunk({ type: "finish", finishReason: "stop" });
       if (this.currentAssistant) {
         this.messages.push(this.currentAssistant);
         this.currentAssistant = null;
       }
       this.currentTextId = null;
       this.live.onTranscript(this.messages);
-      this.endTurn();
+      // Harvest before `finish` so `spec-revised` arrives while the client still
+      // treats the turn as streaming (finish/markTurnDone unlocks the editor).
+      this.live.onTurnComplete?.();
+      this.pushChunk({ type: "finish", finishReason: "stop" });
+      this.endTurn({ turnCompleteAlreadyRun: true });
     } catch (err) {
       this.pushChunk({
         type: "error",

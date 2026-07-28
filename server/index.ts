@@ -82,6 +82,7 @@ app.route(
       artifacts,
       sessions: chatSessions,
       engine,
+      events,
       extractGrillSession,
       synthesizeSpec: createSynthesizeSpec({ spawn: spawnAcp, artifacts }),
     }),

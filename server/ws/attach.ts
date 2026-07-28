@@ -107,7 +107,7 @@ export class ChatConnection {
   }
 
   async onClientMessage(raw: string): Promise<void> {
-    if (!this.handle || this.closed) return;
+    if (this.closed) return;
 
     let msg: WsClientMessage;
     try {
@@ -116,6 +116,15 @@ export class ChatConnection {
       this.send({ type: "error", error: "invalid message" });
       return;
     }
+
+    // Answered before the ACP session exists — the client probes liveness
+    // while the agent is still starting up.
+    if (msg.type === "ping") {
+      this.send({ type: "pong", id: typeof msg.id === "string" ? msg.id : "" });
+      return;
+    }
+
+    if (!this.handle) return;
 
     if (msg.type === "permission-response") {
       if (typeof msg.requestId !== "string" || typeof msg.optionId !== "string") {
@@ -141,7 +150,11 @@ export class ChatConnection {
 
     this.sending = true;
     try {
-      await this.handle.sendMessage(msg.text.trim());
+      const currentSpecMarkdown =
+        typeof msg.currentSpecMarkdown === "string"
+          ? msg.currentSpecMarkdown
+          : undefined;
+      await this.handle.sendMessage(msg.text.trim(), { currentSpecMarkdown });
     } catch (err) {
       this.send({
         type: "error",

@@ -45,7 +45,11 @@ export interface WarmSessionHandle {
   bridge: AcpBridge;
   attach(subscriber: ChunkSubscriber): void;
   detach(subscriber: ChunkSubscriber): void;
-  sendMessage(text: string): Promise<void>;
+  /** Send a user message; chunks arrive via attach / onChunk buffering. */
+  sendMessage(
+    text: string,
+    opts?: { currentSpecMarkdown?: string },
+  ): Promise<void>;
   respondToPermission(requestId: string, optionId: string): void;
   getPendingPermissionIds(): string[];
 }
@@ -147,7 +151,7 @@ export class ChatSessionRegistry {
       bridge,
       attach: (sub) => bridge.attach(sub),
       detach: (sub) => bridge.detach(sub),
-      sendMessage: (text) => bridge.sendMessage(text),
+      sendMessage: (text, opts) => bridge.sendMessage(text, opts),
       respondToPermission: (requestId, optionId) =>
         bridge.respondToPermission(requestId, optionId),
       getPendingPermissionIds: () => bridge.getPendingPermissionIds(),

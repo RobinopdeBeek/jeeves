@@ -9,4 +9,9 @@ export type StepPanelProps = {
   registerSpecFlush?: (flush: (() => Promise<void>) | null) => void;
   /** Grill tab: Create Spec → headless /to-spec is in flight. */
   synthesizingSpec?: boolean;
+  /**
+   * Grill tab: true while ACP is connecting or the opening handshake has not
+   * finished (`sessionOpen` false). CardView disables Create Spec → then.
+   */
+  onGrillStartingChange?: (starting: boolean) => void;
 };

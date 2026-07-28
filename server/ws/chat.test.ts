@@ -280,6 +280,61 @@ describe("AcpBridge", () => {
     expect(promptText(process, 1)).not.toContain("Prior transcript");
   });
 
+  it("keeps Spec markdown out of the transcript while framing the agent prompt", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-spec");
+    const transcripts: UIMessage[][] = [];
+
+    const bridge = new AcpBridge({
+      spawn: () => process,
+      onTranscript: (messages) => transcripts.push(messages),
+    });
+    bridge.attach(collectingSubscriber());
+
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: "unused",
+      history: [
+        {
+          id: "a1",
+          role: "assistant",
+          parts: [{ type: "text", text: "How can I help with the Spec?" }],
+        },
+      ],
+    });
+
+    const replyPromise = bridge.sendMessage("Tighten acceptance criteria", {
+      currentSpecMarkdown: "# Spec\n\nDraft body\n",
+    });
+    await viWaitFor(() => process.prompts().length === 1);
+    const promptReq = process.promptRequest();
+    process.emit({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "sess-spec",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "Updated." },
+        },
+      },
+    });
+    process.emit({
+      jsonrpc: "2.0",
+      id: promptReq.id,
+      result: { stopReason: "end_turn" },
+    });
+    await replyPromise;
+
+    const userTurn = transcripts.at(-1)?.find((m) => m.role === "user");
+    expect(userTurn?.parts).toEqual([
+      { type: "text", text: "Tighten acceptance criteria" },
+    ]);
+    expect(promptText(process, 0)).toContain("Tighten acceptance criteria");
+    expect(promptText(process, 0)).toContain("## Current Spec markdown (from editor)");
+    expect(promptText(process, 0)).toContain("Draft body");
+  });
+
   it("projects session/request_permission into a data-permission part and round-trips approve/deny", async () => {
     const process = new MockAcpProcess();
     process.autoHandshake("sess-perm");

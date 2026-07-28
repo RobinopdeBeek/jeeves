@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UIMessage, UIMessageChunk } from "ai";
-import { AcpChatTransport } from "./acp-chat-transport";
+import {
+  AcpChatTransport,
+  type ChatConnectionState,
+} from "./acp-chat-transport";
 
 type MessageHandler = (event: { data: string }) => void;
 
@@ -78,6 +81,7 @@ describe("AcpChatTransport", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -277,7 +281,7 @@ describe("AcpChatTransport", () => {
     ]);
   });
 
-  it("frames Spec user turns with currentSpecMarkdown from the editor", async () => {
+  it("sends Spec markdown as background context, not in the visible user text", async () => {
     const transport = new AcpChatTransport({
       cardId: "c1",
       stepKey: "spec",
@@ -300,11 +304,135 @@ describe("AcpChatTransport", () => {
     } as Parameters<AcpChatTransport["sendMessages"]>[0]);
     void readAll(stream);
 
-    const sent = ws.sent.map((s) => JSON.parse(s) as { type: string; text?: string });
+    const sent = ws.sent.map(
+      (s) =>
+        JSON.parse(s) as {
+          type: string;
+          text?: string;
+          currentSpecMarkdown?: string;
+        },
+    );
     const userMsg = sent.find((m) => m.type === "user-message");
-    expect(userMsg?.text).toContain("Tighten acceptance criteria");
-    expect(userMsg?.text).toContain("## Current Spec markdown (from editor)");
-    expect(userMsg?.text).toContain("Draft body");
+    expect(userMsg?.text).toBe("Tighten acceptance criteria");
+    expect(userMsg?.currentSpecMarkdown).toContain("Draft body");
+    expect(userMsg?.text).not.toContain("Current Spec markdown");
+  });
+
+  it("recovers a silently dead socket on send instead of hanging", async () => {
+    // Dev-server restart / HMR can leave a CLOSED socket with no close event.
+    // The pre-send health check must reconnect and deliver on the new socket.
+    const transport = new AcpChatTransport({
+      cardId: "c1",
+      stepKey: "grill",
+    });
+    const history: UIMessage[] = [
+      { id: "a1", role: "assistant", parts: [{ type: "text", text: "Ready" }] },
+    ];
+
+    const connectP = transport.connect();
+    const dead = FakeWebSocket.instances[0]!;
+    dead.deliver({ type: "ready", messages: history, streaming: false });
+    await connectP;
+    dead.deliver({ type: "session", status: "open", streaming: false });
+
+    dead.readyState = FakeWebSocket.CLOSED;
+
+    const sendP = transport.sendMessages({
+      messages: [userMessage("hi")],
+      abortSignal: undefined as unknown as AbortSignal,
+    } as Parameters<AcpChatTransport["sendMessages"]>[0]);
+
+    // ensureLive opens a replacement socket before committing the turn.
+    const fresh = FakeWebSocket.instances[1]!;
+    expect(fresh).toBeDefined();
+    fresh.deliver({ type: "ready", messages: history, streaming: false });
+    fresh.deliver({ type: "session", status: "open", streaming: false });
+
+    const stream = await sendP;
+    const readP = readAll(stream);
+    fresh.deliver({ type: "chunk", chunk: { type: "start", messageId: "a2" } });
+    fresh.deliver({ type: "chunk", chunk: { type: "finish", finishReason: "stop" } });
+
+    expect((await readP).map((c) => c.type)).toEqual(["start", "finish"]);
+    const sent = fresh.sent.map((s) => JSON.parse(s) as { type: string; text?: string });
+    expect(sent).toContainEqual({ type: "user-message", text: "hi" });
+    // Nothing was lost into the dead socket.
+    expect(dead.sent).toEqual([]);
+  });
+
+  it("reconnects after an unexpected close and re-seeds the transcript", async () => {
+    vi.useFakeTimers();
+    const reconnected: UIMessage[][] = [];
+    const states: ChatConnectionState[] = [];
+    const transport = new AcpChatTransport({
+      cardId: "c1",
+      stepKey: "grill",
+      onConnectionChange: (state) => states.push(state),
+      onReconnected: (history) => reconnected.push(history),
+    });
+
+    const connectP = transport.connect();
+    const first = FakeWebSocket.instances[0]!;
+    first.deliver({ type: "ready", messages: [], streaming: false });
+    await connectP;
+    first.deliver({ type: "session", status: "open", streaming: false });
+    expect(transport.isSessionOpen()).toBe(true);
+
+    first.readyState = FakeWebSocket.CLOSED;
+    first.onclose?.();
+
+    // Composer must stop accepting sends the moment the socket is gone.
+    expect(transport.isSessionOpen()).toBe(false);
+    expect(states).toContain("reconnecting");
+
+    await vi.advanceTimersByTimeAsync(500);
+
+    const second = FakeWebSocket.instances[1]!;
+    expect(second).toBeDefined();
+    const history: UIMessage[] = [
+      { id: "a1", role: "assistant", parts: [{ type: "text", text: "Question?" }] },
+    ];
+    second.deliver({ type: "ready", messages: history, streaming: false });
+    second.deliver({ type: "session", status: "open", streaming: false });
+
+    expect(reconnected).toEqual([history]);
+    expect(transport.isSessionOpen()).toBe(true);
+    expect(states.at(-1)).toBe("open");
+  });
+
+  it("pings a quiet socket before sending and proceeds once the server pongs", async () => {
+    vi.useFakeTimers();
+    const transport = new AcpChatTransport({
+      cardId: "c1",
+      stepKey: "grill",
+    });
+    const history: UIMessage[] = [
+      { id: "a1", role: "assistant", parts: [{ type: "text", text: "Ready" }] },
+    ];
+
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({ type: "ready", messages: history, streaming: false });
+    await connectP;
+    ws.deliver({ type: "session", status: "open", streaming: false });
+
+    // Idle past the "provably fresh" window, so liveness needs a round trip.
+    await vi.advanceTimersByTimeAsync(4000);
+
+    const sendP = transport.sendMessages({
+      messages: [userMessage("still there?")],
+      abortSignal: undefined as unknown as AbortSignal,
+    } as Parameters<AcpChatTransport["sendMessages"]>[0]);
+
+    const ping = JSON.parse(ws.sent.at(-1)!) as { type: string; id: string };
+    expect(ping.type).toBe("ping");
+    ws.deliver({ type: "pong", id: ping.id });
+
+    await sendP;
+    const sent = ws.sent.map((s) => JSON.parse(s) as { type: string; text?: string });
+    expect(sent).toContainEqual({ type: "user-message", text: "still there?" });
+    // No reconnect was needed.
+    expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
   it("notifies onSpecRevised when the server harvests a Spec revision", async () => {

@@ -20,18 +20,23 @@ import "@mdxeditor/editor/style.css";
 import {
   Component,
   forwardRef,
-  useEffect,
   useImperativeHandle,
   useRef,
   useState,
   type ReactNode,
 } from "react";
+import { MARKDOWN_BODY_CLASS } from "@/components/MarkdownBody";
 import { Textarea } from "@/components/ui/textarea";
 
 type SpecEditorProps = {
   markdown: string;
   readOnly: boolean;
   onChange: (markdown: string) => void;
+  /**
+   * Bump when the Spec artifact is replaced externally (AI harvest / reload).
+   * Remounts MDXEditor with the current `markdown` prop in the same render.
+   */
+  contentKey?: number | string;
 };
 
 export type SpecEditorHandle = {
@@ -85,12 +90,14 @@ class EditorErrorBoundary extends Component<
 /**
  * MDXEditor wrapper. Falls back to a plain textarea (source mode) when
  * imperfect AI markdown blows up the rich editor.
+ *
+ * MDXEditor treats `markdown` as initial-only — pass a new `contentKey` whenever
+ * the Spec artifact is replaced so the editor remounts with that body.
  */
 export const SpecEditor = forwardRef<SpecEditorHandle, SpecEditorProps>(
-  function SpecEditor({ markdown, readOnly, onChange }, ref) {
+  function SpecEditor({ markdown, readOnly, onChange, contentKey = 0 }, ref) {
     const editorRef = useRef<MDXEditorMethods>(null);
     const [sourceFallback, setSourceFallback] = useState(false);
-    const seededRef = useRef(false);
 
     useImperativeHandle(ref, () => ({
       setMarkdown(next: string) {
@@ -102,21 +109,6 @@ export const SpecEditor = forwardRef<SpecEditorHandle, SpecEditorProps>(
         }
       },
     }));
-
-    useEffect(() => {
-      setSourceFallback(false);
-      seededRef.current = false;
-    }, [readOnly]);
-
-    useEffect(() => {
-      if (sourceFallback || seededRef.current) return;
-      try {
-        editorRef.current?.setMarkdown(markdown);
-        seededRef.current = true;
-      } catch {
-        setSourceFallback(true);
-      }
-    }, [markdown, sourceFallback]);
 
     if (sourceFallback) {
       return (
@@ -133,11 +125,13 @@ export const SpecEditor = forwardRef<SpecEditorHandle, SpecEditorProps>(
       <div className="min-h-0 flex-1 overflow-auto rounded-md border [&_.mdxeditor]:min-h-80">
         <EditorErrorBoundary onError={() => setSourceFallback(true)}>
           <MDXEditor
+            key={contentKey}
             ref={editorRef}
             markdown={markdown}
             readOnly={readOnly}
             onChange={onChange}
             onError={() => setSourceFallback(true)}
+            contentEditableClassName={MARKDOWN_BODY_CLASS}
             plugins={[
               headingsPlugin(),
               listsPlugin(),
@@ -149,7 +143,7 @@ export const SpecEditor = forwardRef<SpecEditorHandle, SpecEditorProps>(
               toolbarPlugin({
                 toolbarContents: () =>
                   readOnly ? null : (
-                    <DiffSourceToggleWrapper>
+                    <DiffSourceToggleWrapper options={["rich-text", "source"]}>
                       <UndoRedo />
                       <Separator />
                       <BoldItalicUnderlineToggles />

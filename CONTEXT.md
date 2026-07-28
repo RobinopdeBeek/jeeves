@@ -55,7 +55,7 @@ A proposed vertical slice in a feature's Tasks tip — an entry in the versioned
 _Avoid_: Draft card; `status = 'draft'` card rows
 
 **Step**:
-A typed unit of work inside a column — human, AI chat, or AI execution — with status pending / queued / ai-working / needs-user / done. The database stores current step state only; history lives in runs and artifacts.
+A typed unit of work inside a column — human, AI chat, or AI execution — with status pending / queued / ai-working / needs-user / awaiting / done. **awaiting** means the step is watching child work (e.g. feature Tasks after **Implement →**); it must not be auto-reset like orphaned `ai-working` on restart. The database stores current step state only; history lives in runs and artifacts.
 
 **Round**:
 One pass of a card's rework loop, counted from 0. A partition key on record tables (artifacts, runs, change requests, decisions, notifications), never an entity of its own. A changes-requested decision at round N begets round N+1.

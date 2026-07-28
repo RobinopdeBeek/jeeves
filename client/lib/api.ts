@@ -5,6 +5,7 @@ export type StepStatus =
   | "queued"
   | "ai-working"
   | "needs-user"
+  | "awaiting"
   | "done";
 
 export type StepKind = "human" | "ai-chat" | "ai-execution";
@@ -17,17 +18,38 @@ export interface CardStep {
   column: ColumnId;
 }
 
+export type BlockedByRef = { id: string; title: string };
+
+export type CardChildSummary = {
+  id: string;
+  title: string;
+  status: Card["status"];
+  column: ColumnId | null;
+  position: number;
+  blockedBy: BlockedByRef[];
+};
+
+export type ImplementProgress = {
+  current: number;
+  total: number;
+};
+
 export interface Card {
   id: string;
   projectId: string;
+  parentCardId: string | null;
   kind: "feature" | "task" | null;
-  status: "draft" | "active" | "merged" | "done";
+  status: "active" | "merged" | "done";
   column: ColumnId | null;
   title: string;
   description: string;
+  branch: string | null;
   position: number;
   createdAt: string;
   steps: CardStep[];
+  blockedBy: BlockedByRef[];
+  children: CardChildSummary[];
+  implementProgress: ImplementProgress | null;
   /** Server-derived: grill→spec hand-off is allowed (Create Spec). */
   canCreateSpec: boolean;
   /** Server-derived: spec→tasks hand-off is allowed (Create Tasks). */
@@ -128,6 +150,8 @@ export const api = {
     request<Card>(`/api/cards/${id}/create-spec`, { method: "POST" }),
   createTasks: (id: string) =>
     request<Card>(`/api/cards/${id}/create-tasks`, { method: "POST" }),
+  implement: (id: string) =>
+    request<Card>(`/api/cards/${id}/implement`, { method: "POST" }),
   putSpec: (id: string, content: string) =>
     request<ArtifactContent>(`/api/cards/${id}/spec`, {
       method: "PUT",

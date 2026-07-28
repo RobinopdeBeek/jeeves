@@ -311,6 +311,74 @@ export class ArtifactStore {
   }
 
   /**
+   * Fan-out: freeze the tip as `tasks-breakdown` and prune older `tasks-draft`
+   * versions for `(card, round)`, keeping the tip draft row/file.
+   */
+  freezeTasksBreakdown(cardId: string, round: number): Artifact {
+    const tip = this.latest(cardId, {
+      stepKey: "tasks",
+      round,
+      kind: "tasks-draft",
+    });
+    if (!tip) {
+      throw new ArtifactStoreError("no tasks-draft tip to freeze");
+    }
+    const draft = parseTasksDraft(JSON.parse(this.readContent(tip)));
+    const content = `${JSON.stringify(draft, null, 2)}\n`;
+    const id = nanoid(10);
+    const createdAt = new Date();
+    const relativePath = this.destinationPath(
+      cardId,
+      round,
+      "tasks-breakdown",
+      id,
+    );
+    const absPath = this.assertUnderRoot(relativePath);
+    fs.mkdirSync(path.dirname(absPath), { recursive: true });
+    this.writeAtomic(absPath, content);
+
+    const row: Artifact = {
+      id,
+      cardId,
+      stepKey: "tasks",
+      round,
+      kind: "tasks-breakdown",
+      path: relativePath,
+      gitSha: null,
+      schemaVersion: 1,
+      createdAt,
+    };
+    try {
+      this.db.insert(artifacts).values(row).run();
+    } catch (error) {
+      fs.rmSync(absPath, { force: true });
+      throw error;
+    }
+
+    const older = this.db
+      .select()
+      .from(artifacts)
+      .where(
+        and(
+          eq(artifacts.cardId, cardId),
+          eq(artifacts.stepKey, "tasks"),
+          eq(artifacts.round, round),
+          eq(artifacts.kind, "tasks-draft"),
+        ),
+      )
+      .all()
+      .filter((a) => a.id !== tip.id);
+
+    for (const old of older) {
+      this.db.delete(artifacts).where(eq(artifacts.id, old.id)).run();
+      fs.rmSync(this.assertUnderRoot(old.path), { force: true });
+    }
+
+    this.regenerateManifest(cardId);
+    return row;
+  }
+
+  /**
    * Mutable Spec markdown — overwrites the same file and DB row while Spec is active.
    * Caller must assert the step is still mutable (CardStore.assertSpecMutable).
    * Human PUT, /to-spec harvest, and spec-assist harvest all use this path.

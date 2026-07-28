@@ -7,13 +7,14 @@ export function workSteps(steps: CardStep[]): CardStep[] {
 
 /**
  * Active step priority (issue #1 / #4):
- * needs-user → ai-working → queued → pending → last work step.
+ * needs-user → ai-working → awaiting → queued → pending → last work step.
  */
 export function activeStep(steps: CardStep[]): CardStep | undefined {
   const work = workSteps(steps);
   return (
     work.find((s) => s.status === "needs-user") ??
     work.find((s) => s.status === "ai-working") ??
+    work.find((s) => s.status === "awaiting") ??
     work.find((s) => s.status === "queued") ??
     work.find((s) => s.status === "pending") ??
     work[work.length - 1]
@@ -38,6 +39,7 @@ export function activeTabKey(steps: CardStep[]): string {
   const focused =
     workTabs.find((s) => s.status === "needs-user") ??
     workTabs.find((s) => s.status === "ai-working") ??
+    workTabs.find((s) => s.status === "awaiting") ??
     workTabs.find((s) => s.status === "queued") ??
     workTabs[workTabs.length - 1];
 

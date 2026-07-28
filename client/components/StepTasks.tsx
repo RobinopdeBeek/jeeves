@@ -47,9 +47,12 @@ type InspectorState =
  * Tasks shaping surface: tip `tasks-draft` tiles + inspector + AI side-chat
  * (ADR 0014; Spec-assist twin for revise / Q&A).
  */
-export function StepTasks({ card }: StepPanelProps) {
+export function StepTasks({ card, onCardChange }: StepPanelProps) {
   const tasksStep = card.steps.find((s) => s.key === "tasks");
   const editable = tasksStep?.status === "needs-user";
+  const awaiting = tasksStep?.status === "awaiting";
+  const children = card.children ?? [];
+  const progress = card.implementProgress;
 
   const [tip, setTip] = useState<TasksDraft>({ tasks: [] });
   const [loaded, setLoaded] = useState(false);
@@ -63,6 +66,7 @@ export function StepTasks({ card }: StepPanelProps) {
   const [versionCount, setVersionCount] = useState(0);
   const [redoStack, setRedoStack] = useState<TasksDraft[]>([]);
   const [inspector, setInspector] = useState<InspectorState>(null);
+  const [implementing, setImplementing] = useState(false);
   const [form, setForm] = useState({
     title: "",
     description: "",
@@ -272,6 +276,32 @@ export function StepTasks({ card }: StepPanelProps) {
     return tip.tasks.find((t) => t.id === id)?.title || id;
   }
 
+  function tipIsValidForImplement(draft: TasksDraft): boolean {
+    // Light gate — server fanOut re-validates Zod + DAG. Tip Save already
+    // rejects cycles; this only blocks empty/blank titles before the POST.
+    return (
+      draft.tasks.length >= 1 && draft.tasks.every((t) => t.title.trim().length > 0)
+    );
+  }
+
+  const canImplement =
+    editable && !busy && !streaming && !displaced && tipIsValidForImplement(tip);
+
+  async function implement() {
+    if (!canImplement || implementing) return;
+    setImplementing(true);
+    setActionError(null);
+    setInspector(null);
+    try {
+      const updated = await api.implement(card.id);
+      onCardChange(updated);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setImplementing(false);
+    }
+  }
+
   function toggleDepend(id: string) {
     setForm((prev) => ({
       ...prev,
@@ -377,7 +407,48 @@ export function StepTasks({ card }: StepPanelProps) {
             </div>
           ) : null}
 
-          {tip.tasks.length === 0 ? (
+          {awaiting && progress ? (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <p className="text-sm text-muted-foreground">
+                    Implementing Task {progress.current} of {progress.total}
+                  </p>
+                </TooltipTrigger>
+                <TooltipContent>awaiting child tasks</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          ) : null}
+
+          {awaiting ? (
+            children.length === 0 ? (
+              <div className="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center">
+                <p className="text-muted-foreground">No child tasks.</p>
+              </div>
+            ) : (
+              <ul className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
+                {children.map((child, index) => (
+                  <li key={child.id}>
+                    <div className={cn(cardTileVariants({ attention: false }), "w-full")}>
+                      <div className="text-sm font-medium">
+                        {index + 1}. {child.title || (
+                          <em className="text-muted-foreground">Untitled</em>
+                        )}
+                      </div>
+                      {child.blockedBy.length > 0 ? (
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          Blocked by{" "}
+                          {child.blockedBy
+                            .map((b) => b.title || "Untitled")
+                            .join(", ")}
+                        </div>
+                      ) : null}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )
+          ) : tip.tasks.length === 0 ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center">
               <p className="text-muted-foreground">
                 {editable
@@ -435,6 +506,21 @@ export function StepTasks({ card }: StepPanelProps) {
               ))}
             </ul>
           )}
+
+          {editable ? (
+            <div className="flex justify-end border-t pt-3">
+              <Button
+                type="button"
+                disabled={!canImplement || implementing}
+                onClick={() => void implement()}
+              >
+                {implementing ? (
+                  <IconLoader2 data-icon="inline-start" className="animate-spin" />
+                ) : null}
+                Implement →
+              </Button>
+            </div>
+          ) : null}
         </div>
 
         {editable ? (

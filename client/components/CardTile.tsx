@@ -12,6 +12,12 @@ import {
   TileSegmentBar,
   cardTileVariants,
 } from "@/components/ui/pipeline-status";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 export function CardTile({ card }: { card: Card }) {
   const navigate = useNavigate();
@@ -22,6 +28,8 @@ export function CardTile({ card }: { card: Card }) {
       ? columnWorkSteps(card.steps, card.column)
       : [];
   const current = pipeline ? activeStep(card.steps) : undefined;
+  const tasksAwaiting = current?.key === "tasks" && current.status === "awaiting";
+  const progress = card.implementProgress;
 
   return (
     <button
@@ -41,6 +49,12 @@ export function CardTile({ card }: { card: Card }) {
         )}
       </div>
 
+      {card.blockedBy.length > 0 ? (
+        <div className="mt-1 text-xs text-muted-foreground">
+          Blocked by {card.blockedBy.map((b) => b.title || "Untitled").join(", ")}
+        </div>
+      ) : null}
+
       {pipeline ? (
         <div className="mt-2 flex flex-col gap-1.5">
           <TileSegmentBar steps={segments} />
@@ -54,6 +68,20 @@ export function CardTile({ card }: { card: Card }) {
               <StepStatusIcon status="ai-working" />
               <span>Creating Tasks…</span>
             </div>
+          ) : tasksAwaiting && progress ? (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <StepStatusIcon status="awaiting" />
+                    <span>
+                      Implementing Task {progress.current} of {progress.total}
+                    </span>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent>awaiting child tasks</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           ) : current ? (
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <StepStatusIcon status={current.status} />

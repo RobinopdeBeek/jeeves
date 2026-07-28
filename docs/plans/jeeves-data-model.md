@@ -69,9 +69,10 @@ card_steps                   -- CURRENT state only; one row per (card, step), mu
   card_id       fk → cards
   step_key      'info' | 'grill' | 'spec' | 'tasks' | 'plan' | 'impl' | 'airev'
                 | 'review' | 'document' | 'deploy'
-  status        'pending' | 'queued' | 'ai-working' | 'needs-user' | 'done'
+  status        'pending' | 'queued' | 'ai-working' | 'needs-user' | 'awaiting' | 'done'
   started_at, completed_at   -- overwritten on rework; per-round timing lives in runs
                              -- rows created lazily as the card reaches each column
+                             -- awaiting = watching child tasks (never auto-reset like orphaned ai-working)
 
 card_blockers                -- blocked-by edges between cards (active tasks after fan-out)
   card_id           fk → cards (cascade delete)
@@ -157,7 +158,7 @@ normalize:
 ```
 
 Skill / exchange files may emit `depends_on` as 0-based indices; the host maps those to stable
-ids before appending a tip. **Implement →** (later) materializes active child `cards` +
+ids before appending a tip. **Implement →** materializes active child `cards` +
 `card_blockers` from the tip — there is no `status = 'draft'` shaping row.
 
 Child vs standalone task is **derived from `parent_card_id`**, never stored — a stored

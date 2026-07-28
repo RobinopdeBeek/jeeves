@@ -1,7 +1,14 @@
 import { and, asc, eq, max } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import type { ArtifactStore } from "../artifacts/store.js";
+import {
+  parseTasksDraft,
+  TasksDraftError,
+  type TasksDraft,
+} from "../artifacts/tasks-draft.js";
 import type { Db } from "../db/index.js";
 import {
+  cardBlockers,
   cardSteps,
   cards,
   projects,
@@ -36,6 +43,22 @@ export class CardStoreError extends Error {
   }
 }
 
+export type BlockedByRef = { id: string; title: string };
+
+export type CardChildSummary = {
+  id: string;
+  title: string;
+  status: Card["status"];
+  column: Card["column"];
+  position: number;
+  blockedBy: BlockedByRef[];
+};
+
+export type ImplementProgress = {
+  current: number;
+  total: number;
+};
+
 export type CardWithSteps = Card & {
   steps: EnrichedStep[];
   /** Same predicate as grill→spec hand-off (board Create Spec). */
@@ -52,6 +75,15 @@ export type CardWithSteps = Card & {
    * Survives board↔card navigation so the Spec tab stays on the synthesizing UI.
    */
   creatingTasks: boolean;
+  /** Cards this card is blocked by (from `card_blockers`). */
+  blockedBy: BlockedByRef[];
+  /** Child task summaries when this card is a feature parent. */
+  children: CardChildSummary[];
+  /**
+   * Derived “Implementing Task X of Y” for a feature with fanned-out children.
+   * `current` stays 0 until later slices track child completion.
+   */
+  implementProgress: ImplementProgress | null;
 };
 
 /**
@@ -113,11 +145,13 @@ export class CardStore {
     const card: Card = {
       id: nanoid(10),
       projectId,
+      parentCardId: null,
       kind: null,
       status: "active",
       column: "backlog",
       title: "",
       description: "",
+      branch: null,
       position: (maxPosition ?? -1) + 1,
       createdAt: new Date(),
     };
@@ -297,6 +331,93 @@ export class CardStore {
   }
 
   /**
+   * Implement → fan-out: freeze tip, materialize child task cards + blockers,
+   * set Tasks to awaiting. No child Plan enqueue. Second call → 409.
+   */
+  fanOut(
+    cardId: string,
+    artifacts: ArtifactStore,
+    round = 0,
+  ): {
+    card: CardWithSteps;
+    children: CardWithSteps[];
+    sideEffects: AdvanceSideEffect[];
+  } {
+    const parent = this.getCard(cardId);
+    if (!parent) throw new CardStoreError(404, "card not found");
+    if (parent.kind !== "feature") {
+      throw new CardStoreError(409, "fan-out requires a feature card");
+    }
+
+    const plan = this.requireAdvance(parent, { type: "tasks-to-implement" });
+
+    let tip: TasksDraft;
+    try {
+      tip = parseTasksDraft(artifacts.readTasksDraftTip(cardId, round));
+    } catch (err) {
+      throw new CardStoreError(
+        400,
+        err instanceof TasksDraftError ? err.message : String(err),
+      );
+    }
+    if (tip.tasks.length < 1) {
+      throw new CardStoreError(400, "fan-out requires at least one task");
+    }
+    if (tip.tasks.some((t) => !t.title.trim())) {
+      throw new CardStoreError(400, "all task titles must be non-empty");
+    }
+
+    const childIds: string[] = [];
+    const draftIdToCardId = new Map<string, string>();
+
+    this.db.transaction(() => {
+      artifacts.freezeTasksBreakdown(cardId, round);
+
+      for (const [index, task] of tip.tasks.entries()) {
+        const childId = nanoid(10);
+        draftIdToCardId.set(task.id, childId);
+        childIds.push(childId);
+        this.db.insert(cards).values({
+          id: childId,
+          projectId: parent.projectId,
+          parentCardId: cardId,
+          kind: "task",
+          status: "active",
+          column: "implement",
+          title: task.title.trim(),
+          description: task.description,
+          branch: null,
+          position: index,
+          createdAt: new Date(),
+        }).run();
+        this.insertStep(childId, "plan", "pending");
+        this.insertStep(childId, "impl", "pending");
+        this.insertStep(childId, "airev", "pending");
+      }
+
+      for (const task of tip.tasks) {
+        const childId = draftIdToCardId.get(task.id)!;
+        for (const depDraftId of task.dependsOn) {
+          const blocksOn = draftIdToCardId.get(depDraftId);
+          if (!blocksOn) continue;
+          this.db
+            .insert(cardBlockers)
+            .values({ cardId: childId, blocksOnCardId: blocksOn })
+            .run();
+        }
+      }
+
+      this.applyAdvancePlan(cardId, plan);
+    });
+
+    return {
+      card: this.getCard(cardId)!,
+      children: childIds.map((id) => this.getCard(id)!),
+      sideEffects: plan.sideEffects,
+    };
+  }
+
+  /**
    * Apply a step-finished advance (ExecutionEngine after a run settles).
    */
   applyStepFinished(
@@ -432,20 +553,26 @@ export class CardStore {
       stepKey: r.stepKey as StepKey,
       status: r.status as StepStatus,
     }));
+    const hasParent = card.parentCardId != null;
 
     const steps =
       card.kind === null || card.column === null
         ? backlogEnrichedSteps(stepRows)
-        : orderEnrichedSteps(
-            card.kind,
-            card.column,
-            false, // parent_card_id arrives in slice 7
-            stepRows,
-          );
+        : orderEnrichedSteps(card.kind, card.column, hasParent, stepRows);
+
+    const blockedBy = this.loadBlockedBy(card.id);
+    const children = this.loadChildren(card.id);
+    const implementProgress =
+      children.length > 0
+        ? { current: 0, total: children.length }
+        : null;
 
     return {
       ...card,
       steps,
+      blockedBy,
+      children,
+      implementProgress,
       creatingSpec: this.creatingSpecIds.has(card.id),
       creatingTasks: this.creatingTasksIds.has(card.id),
       canCreateSpec:
@@ -459,5 +586,34 @@ export class CardStore {
           steps.map((s) => ({ key: s.key, status: s.status })),
         ),
     };
+  }
+
+  private loadBlockedBy(cardId: string): BlockedByRef[] {
+    return this.db
+      .select({
+        id: cards.id,
+        title: cards.title,
+      })
+      .from(cardBlockers)
+      .innerJoin(cards, eq(cardBlockers.blocksOnCardId, cards.id))
+      .where(eq(cardBlockers.cardId, cardId))
+      .all();
+  }
+
+  private loadChildren(parentId: string): CardChildSummary[] {
+    const kids = this.db
+      .select()
+      .from(cards)
+      .where(eq(cards.parentCardId, parentId))
+      .orderBy(asc(cards.position))
+      .all();
+    return kids.map((kid) => ({
+      id: kid.id,
+      title: kid.title,
+      status: kid.status,
+      column: kid.column,
+      position: kid.position,
+      blockedBy: this.loadBlockedBy(kid.id),
+    }));
   }
 }

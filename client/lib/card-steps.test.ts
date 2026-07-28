@@ -55,6 +55,18 @@ describe("card-steps", () => {
     expect(activeTabKey(steps)).toBe("plan");
   });
 
+  it("keeps Tasks focused while awaiting child tasks", () => {
+    const steps: CardStep[] = [
+      { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
+      { key: "grill", status: "done", label: "Grill", stepKind: "ai-chat", column: "define" },
+      { key: "spec", status: "done", label: "Spec", stepKind: "ai-chat", column: "define" },
+      { key: "tasks", status: "awaiting", label: "Tasks", stepKind: "ai-chat", column: "define" },
+    ];
+    expect(activeStep(steps)?.key).toBe("tasks");
+    expect(activeTabKey(steps)).toBe("tasks");
+    expect(isTabVisible(steps[3]!)).toBe(true);
+  });
+
   it("opens the last visible tab when later steps are still pending", () => {
     const steps: CardStep[] = [
       { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },

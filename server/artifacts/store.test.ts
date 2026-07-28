@@ -345,6 +345,37 @@ describe("ArtifactStore", () => {
     expect(undone.id).not.toBe(previous!.artifact.id);
   });
 
+  it("freezes tip as tasks-breakdown and prunes older draft versions", () => {
+    cardWithTasksStep();
+    const v1 = {
+      tasks: [{ id: "a", title: "A", description: "", dependsOn: [] }],
+    };
+    const tip = {
+      tasks: [
+        { id: "a", title: "A", description: "api", dependsOn: [] },
+        { id: "b", title: "B", description: "ui", dependsOn: ["a"] },
+      ],
+    };
+    const first = artifacts.appendTasksDraft(cardId, 0, v1);
+    const second = artifacts.appendTasksDraft(cardId, 0, tip);
+
+    const breakdown = artifacts.freezeTasksBreakdown(cardId, 0);
+    expect(breakdown).toMatchObject({
+      cardId,
+      stepKey: "tasks",
+      round: 0,
+      kind: "tasks-breakdown",
+    });
+    expect(JSON.parse(artifacts.readContent(breakdown))).toEqual(tip);
+
+    const drafts = artifacts.list(cardId).filter((a) => a.kind === "tasks-draft");
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]!.id).toBe(second.id);
+    expect(fs.existsSync(path.join(artifactRoot, first.path))).toBe(false);
+    expect(fs.existsSync(path.join(artifactRoot, second.path))).toBe(true);
+    expect(artifacts.readTasksDraftTip(cardId, 0)).toEqual(tip);
+  });
+
   it("harvests tasks-draft exchange with index→id normalize as a new version", () => {
     cardWithTasksStep();
     const storeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-ps-"));

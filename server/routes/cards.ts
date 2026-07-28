@@ -167,6 +167,33 @@ export function cardRoutes(
     }
   });
 
+  app.post("/:id/implement", (c) => {
+    const cardId = c.req.param("id");
+    try {
+      const { card, children, sideEffects } = store.fanOut(
+        cardId,
+        deps.artifacts,
+      );
+      deps.events.emit({ type: "card.updated", card });
+      for (const child of children) {
+        deps.events.emit({ type: "card.updated", card: child });
+      }
+      dispatchAdvanceEffects(card.id, sideEffects, {
+        enqueue: (id, step) => deps.engine.enqueue(id, step),
+        sessions: deps.sessions,
+      });
+      return c.json(card);
+    } catch (e) {
+      if (e instanceof CardStoreError) {
+        return c.json({ error: e.message }, e.status as 400 | 404 | 409);
+      }
+      if (e instanceof ArtifactStoreError) {
+        return c.json({ error: e.message }, 400);
+      }
+      throw e;
+    }
+  });
+
   app.get("/:id/tasks", (c) => {
     const cardId = c.req.param("id");
     const card = store.getCard(cardId);

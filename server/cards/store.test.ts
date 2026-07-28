@@ -112,7 +112,7 @@ describe("CardStore", () => {
         { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
         { key: "grill", status: "needs-user", label: "Grill", stepKind: "ai-chat", column: "define" },
         { key: "spec", status: "pending", label: "Spec", stepKind: "ai-chat", column: "define" },
-        { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-execution", column: "define" },
+        { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-chat", column: "define" },
       ]);
     });
 
@@ -173,7 +173,7 @@ describe("CardStore", () => {
       { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
       { key: "grill", status: "needs-user", label: "Grill", stepKind: "ai-chat", column: "define" },
       { key: "spec", status: "pending", label: "Spec", stepKind: "ai-chat", column: "define" },
-      { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-execution", column: "define" },
+      { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-chat", column: "define" },
     ]);
   });
 

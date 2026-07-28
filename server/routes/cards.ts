@@ -10,12 +10,28 @@ import { dispatchAdvanceEffects } from "../execution/dispatch-effects.js";
 import type { ExecutionEngine } from "../execution/engine.js";
 import type { EventBus } from "../execution/events.js";
 import type { RunStore } from "../execution/run-store.js";
-import type { ArtifactStore } from "../artifacts/store.js";
+import {
+  ArtifactStoreError,
+  type ArtifactStore,
+} from "../artifacts/store.js";
+import {
+  parseTasksDraft,
+  TasksDraftError,
+} from "../artifacts/tasks-draft.js";
 import type { ChatSessionRegistry } from "../ws/session-registry.js";
 import { artifactRoutes } from "./artifacts.js";
 
 function isKindPath(value: unknown): value is KindPath {
   return value === "feature" || value === "standalone";
+}
+
+function tasksDraftErrorStatus(err: unknown): number | null {
+  if (err instanceof TasksDraftError) return 400;
+  if (err instanceof ArtifactStoreError) {
+    return err.message === "nothing to undo" ? 409 : 400;
+  }
+  if (err instanceof CardStoreError) return err.status;
+  return null;
 }
 
 export interface CardRouteDeps {
@@ -150,6 +166,82 @@ export function cardRoutes(
     } catch (e) {
       if (e instanceof CardStoreError) {
         return c.json({ error: e.message }, e.status as 400 | 404 | 409);
+      }
+      throw e;
+    }
+  });
+
+  app.get("/:id/tasks", (c) => {
+    const cardId = c.req.param("id");
+    const card = store.getCard(cardId);
+    if (!card) return c.json({ error: "not found" }, 404);
+    return c.json({
+      ...deps.artifacts.readTasksDraftTip(cardId, 0),
+      versionCount: deps.artifacts.tasksDraftVersionCount(cardId, 0),
+    });
+  });
+
+  app.put("/:id/tasks", async (c) => {
+    const cardId = c.req.param("id");
+    try {
+      store.assertTasksDraftMutable(cardId);
+      const body = await c.req.json();
+      const draft = parseTasksDraft(body);
+      deps.artifacts.appendTasksDraft(cardId, 0, draft, "human");
+      return c.json({
+        ...deps.artifacts.readTasksDraftTip(cardId, 0),
+        versionCount: deps.artifacts.tasksDraftVersionCount(cardId, 0),
+      });
+    } catch (e) {
+      const status = tasksDraftErrorStatus(e);
+      if (status !== null) {
+        return c.json(
+          { error: e instanceof Error ? e.message : String(e) },
+          status as 400 | 404 | 409,
+        );
+      }
+      throw e;
+    }
+  });
+
+  app.delete("/:id/tasks/:taskId", (c) => {
+    const cardId = c.req.param("id");
+    const taskId = c.req.param("taskId");
+    try {
+      store.assertTasksDraftMutable(cardId);
+      const tip = deps.artifacts.deleteTaskFromTasksDraft(cardId, 0, taskId);
+      return c.json({
+        ...tip,
+        versionCount: deps.artifacts.tasksDraftVersionCount(cardId, 0),
+      });
+    } catch (e) {
+      const status = tasksDraftErrorStatus(e);
+      if (status !== null) {
+        return c.json(
+          { error: e instanceof Error ? e.message : String(e) },
+          status as 400 | 404 | 409,
+        );
+      }
+      throw e;
+    }
+  });
+
+  app.post("/:id/tasks/undo", (c) => {
+    const cardId = c.req.param("id");
+    try {
+      store.assertTasksDraftMutable(cardId);
+      const tip = deps.artifacts.undoTasksDraft(cardId, 0);
+      return c.json({
+        ...tip,
+        versionCount: deps.artifacts.tasksDraftVersionCount(cardId, 0),
+      });
+    } catch (e) {
+      const status = tasksDraftErrorStatus(e);
+      if (status !== null) {
+        return c.json(
+          { error: e instanceof Error ? e.message : String(e) },
+          status as 400 | 404 | 409,
+        );
       }
       throw e;
     }

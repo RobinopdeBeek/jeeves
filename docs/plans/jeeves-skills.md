@@ -48,9 +48,9 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
 | [`grill-with-docs`](#grill-with-docs) | Grill | AI Chat | Adapted from Matt Pocock | P1 |
 | [`grill-session`](#grill-session) | Grill → Spec hand-off | Host prompt | From scratch | P1 |
 | [`spec-assist`](#spec-assist) | Spec side-chat | AI Chat | From scratch | P2 |
-| [`to-tasks`](#to-tasks) | Tasks | AI Execution | Adapted from `/to-tickets` | P1 |
+| [`to-draft-tasks`](#to-draft-tasks) | Tasks | AI Chat (headless) | Adapted from `/to-tickets` | P1 |
 | [`to-tasks-revise`](#to-tasks-revise) | Tasks side-chat | AI Chat | Adapted from `/to-tickets` | P2 |
-| [`to-rework-tasks`](#to-rework-tasks) | Tasks (rework) | AI Execution | Adapted from `/to-tasks` | P2 |
+| [`to-rework-tasks`](#to-rework-tasks) | Tasks (rework) | AI Chat (headless) | Adapted from `/to-draft-tasks` | P2 |
 
 #### Implement Task
 
@@ -130,7 +130,7 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
   [slice 5](./jeeves-build-order.md#the-slice-sequence)). Failed or empty extract **blocks**
   the Grill → Spec advance; transcript remains for retry. Artifact is read-only after harvest;
   the done Grill tab renders this document (not the raw transcript).
-- **Workflow awareness:** explicit input to Spec and, indirectly, `/to-tasks`. Lineage:
+- **Workflow awareness:** explicit input to Spec and, indirectly, `/to-draft-tasks`. Lineage:
   Grill session derived from transcript.
 
 #### `spec-assist`
@@ -142,17 +142,18 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
   acceptance-criteria checklist authored here is the exact list that reappears in the
   feature-level QA gate (`eval-acceptance`). Suggest criteria; human edits in MDXEditor.
 - **Workflow awareness:** follows Grill; precedes Tasks. Spec is the primary input to
-  `/to-tasks`.
+  `/to-draft-tasks`.
 
-#### `to-tasks`
+#### `to-draft-tasks`
 
-- **Step:** Define Feature → Tasks (`ai-execution`, first pass)
+- **Step:** Define Feature → Tasks (`ai-chat`, first-pass synthesis)
 - **Inputs (injected):** spec artifact; Grill session; `CONTEXT.md`; module map / ADRs;
   existing merged child tasks of this feature (if any)
-- **Outputs:** `.jeeves/to-tasks.json` exchange file → harvested → `cards` rows (`status = 'draft'`)
-  + `card_blockers` edges + `tasks-breakdown` artifact metadata. **No source commits.**
+- **Outputs:** project-store exchange JSON (e.g. `.jeeves/exchange/<cardId>/tasks-draft.json`)
+  → harvested → append-only `tasks-draft` tip (host assigns stable ids; maps `depends_on`
+  indices → `dependsOn`). **No card rows until Implement →.** **No source commits.**
 - **Sidecar schema (Zod-validated):** array of tasks; `depends_on` holds 0-based indices of
-  other tasks in the same array (maps to `card_blockers` on harvest):
+  other tasks in the same array:
 
 ```json
 {
@@ -167,28 +168,27 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
 ```
 
 - **Behavior:** break the feature into **vertical slices** per `/to-tickets` rules (tracer
-  bullets, expand–contract for wide refactors). Each slice is independently demoable. Runner
-  creates real card rows — fan-out is a status flip, not a copy. Retry loop on Zod failure.
-- **Workflow awareness:** child tasks inherit the feature branch as merge target. Blocker edges
-  gate the execution queue. Quality here determines whether children are truly independent.
+  bullets, expand–contract for wide refactors). Each slice is independently demoable. Host
+  appends a tip version — fan-out materializes active children later. Retry loop on Zod failure.
+- **Workflow awareness:** child tasks inherit the feature branch as merge target after fan-out.
+  Blocker edges gate the execution queue. Quality here determines whether children are truly independent.
 
 #### `to-tasks-revise`
 
 - **Step:** Define Feature → Tasks side-chat (`ai-chat`)
-- **Inputs:** current draft task list (from DB); spec; user's revision request
-- **Outputs:** chat only — human applies edits to drafts in the UI (add/delete/reorder/blockers)
-- **Behavior:** answer questions and propose revised breakdowns; do **not** write
-  `.jeeves/to-tasks.json` (that is the autonomous `/to-tasks` run on first pass or rework).
-  Same vertical-slice discipline as `/to-tasks`.
-- **Workflow awareness:** optional refinement before fan-out; does not replace the structured
-  exchange file path for bulk creation.
+- **Inputs:** current tip `tasks-draft` JSON; spec; user's revision request
+- **Outputs:** exchange JSON harvested as a new tip version (or chat-only Q&A when no exchange)
+- **Behavior:** answer questions and propose revised breakdowns; when revising, write
+  exchange JSON for the host to Zod-validate and append. Same vertical-slice discipline as
+  `/to-draft-tasks`.
+- **Workflow awareness:** optional refinement before fan-out; shares the tip document with the human editor.
 
 #### `to-rework-tasks`
 
-- **Step:** Define Feature → Tasks on feature rework (`ai-execution`)
+- **Step:** Define Feature → Tasks on feature rework (`ai-chat`, headless)
 - **Inputs (injected):** open `change_requests` (one document); spec; prior round's merged
   tasks (read-only context); feature evaluation artifact if present
-- **Outputs:** same exchange file + draft cards as `/to-tasks`; new drafts tagged with
+- **Outputs:** same exchange → `tasks-draft` tip as `/to-draft-tasks`; new tip tagged with
   `round = parent.rework_round`
 - **Behavior:** merge overlapping change requests into one task or split a large request across
   slices; may reference prior round tasks but must not mutate them. Requests marked `consumed`
@@ -390,7 +390,7 @@ Prioritise prompt quality in this order (P0 = hardest / highest leverage):
 | **P0** | `eval-diff-narrative` | Hardest to get right; highest value for review speed |
 | **P0** | `eval-qa-plan` | Must be specific and actionable, not generic |
 | P1 | `grill-with-docs` + `grill-session` | Sets the quality ceiling for the whole feature |
-| P1 | `to-tasks` | Determines whether child cards are truly independent slices |
+| P1 | `to-draft-tasks` | Determines whether child cards are truly independent slices |
 | P1 | `plan-implementation` | Bad plans waste entire Implement runs |
 | P1 | `implement-task` | Core autonomous builder |
 | P1 | `thermo-nuclear-review` | Already exists — wire and constrain scope |

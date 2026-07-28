@@ -10,8 +10,16 @@ import {
   type ArtifactKind,
 } from "../db/schema.js";
 import type { StepKey } from "../pipelines.js";
+import {
+  deleteTaskFromDraft,
+  parseTasksDraft,
+  type TasksDraft,
+  TasksDraftError,
+  validateAndNormalizeExchange,
+} from "./tasks-draft.js";
 
 export type { UIMessage };
+export type { TasksDraft };
 
 const TRANSCRIPT_FILE_ID = "transcript";
 const SPEC_FILE_ID = "spec";
@@ -164,6 +172,140 @@ export class ArtifactStore {
   }
 
   /**
+   * Append-only versioned tasks-draft JSON tip (ADR 0014).
+   * Every Save / Delete / undo / AI harvest writes a new row; `latest` is the tip.
+   * Raw JSON — no YAML frontmatter. Caller asserts Tasks mutability.
+   */
+  appendTasksDraft(
+    cardId: string,
+    round: number,
+    draft: TasksDraft,
+    sourceSkill = "human",
+  ): Artifact {
+    let validated: TasksDraft;
+    try {
+      validated = parseTasksDraft(draft);
+    } catch (err) {
+      throw new ArtifactStoreError(
+        err instanceof TasksDraftError ? err.message : String(err),
+      );
+    }
+    const content = `${JSON.stringify(validated, null, 2)}\n`;
+    const id = nanoid(10);
+    const createdAt = new Date();
+    const relativePath = this.destinationPath(cardId, round, "tasks-draft", id);
+    const absPath = this.assertUnderRoot(relativePath);
+    fs.mkdirSync(path.dirname(absPath), { recursive: true });
+    this.writeAtomic(absPath, content);
+
+    const row: Artifact = {
+      id,
+      cardId,
+      stepKey: "tasks",
+      round,
+      kind: "tasks-draft",
+      path: relativePath,
+      gitSha: null,
+      schemaVersion: 1,
+      createdAt,
+    };
+    try {
+      this.db.insert(artifacts).values(row).run();
+    } catch (error) {
+      fs.rmSync(absPath, { force: true });
+      throw error;
+    }
+    this.regenerateManifest(cardId);
+    return row;
+  }
+
+  /** Tip content, or empty draft when no versions exist. */
+  readTasksDraftTip(cardId: string, round: number): TasksDraft {
+    const tip = this.latest(cardId, {
+      stepKey: "tasks",
+      round,
+      kind: "tasks-draft",
+    });
+    if (!tip) return { tasks: [] };
+    return parseTasksDraft(JSON.parse(this.readContent(tip)));
+  }
+
+  /** Number of append-only tasks-draft versions for undo affordances. */
+  tasksDraftVersionCount(cardId: string, round: number): number {
+    return this.db
+      .select()
+      .from(artifacts)
+      .where(
+        and(
+          eq(artifacts.cardId, cardId),
+          eq(artifacts.stepKey, "tasks"),
+          eq(artifacts.round, round),
+          eq(artifacts.kind, "tasks-draft"),
+        ),
+      )
+      .all().length;
+  }
+
+  /**
+   * Delete a task from the tip and append the cleaned draft as a new version.
+   */
+  deleteTaskFromTasksDraft(
+    cardId: string,
+    round: number,
+    taskId: string,
+    sourceSkill = "human",
+  ): TasksDraft {
+    const tip = this.readTasksDraftTip(cardId, round);
+    const next = deleteTaskFromDraft(tip, taskId);
+    this.appendTasksDraft(cardId, round, next, sourceSkill);
+    return this.readTasksDraftTip(cardId, round);
+  }
+
+  /**
+   * Undo: append a copy of the previous tip. Throws if nothing to undo.
+   */
+  undoTasksDraft(
+    cardId: string,
+    round: number,
+  ): TasksDraft {
+    const previous = this.previousTasksDraft(cardId, round);
+    if (!previous) {
+      throw new ArtifactStoreError("nothing to undo");
+    }
+    this.appendTasksDraft(cardId, round, previous.draft, "undo");
+    return this.readTasksDraftTip(cardId, round);
+  }
+
+  /**
+   * Previous tip (second-newest by created_at, then id), if any.
+   * Used by undo — prefer undoTasksDraft from routes.
+   */
+  previousTasksDraft(
+    cardId: string,
+    round: number,
+  ): { artifact: Artifact; draft: TasksDraft } | undefined {
+    const versions = this.db
+      .select()
+      .from(artifacts)
+      .where(
+        and(
+          eq(artifacts.cardId, cardId),
+          eq(artifacts.stepKey, "tasks"),
+          eq(artifacts.round, round),
+          eq(artifacts.kind, "tasks-draft"),
+        ),
+      )
+      .orderBy(desc(artifacts.createdAt), desc(artifacts.id))
+      .all();
+    const previous = versions[1];
+    if (!previous) return undefined;
+    return {
+      artifact: previous,
+      draft: parseTasksDraft(JSON.parse(this.readContent(previous))),
+    };
+  }
+
+  /**
    * Mutable Spec markdown — overwrites the same file and DB row while Spec is active.
    * Caller must assert the step is still mutable (CardStore.assertSpecMutable).
    * Human PUT, /to-spec harvest, and spec-assist harvest all use this path.
@@ -249,6 +391,24 @@ export class ArtifactStore {
         // Spec is mutable within the round (like transcripts) — upsert, don't append.
         harvested.push(
           this.upsertSpec(ctx.cardId, ctx.round, content, ctx.sourceSkill),
+        );
+      } else if (decl.kind === "tasks-draft") {
+        // Append-only tip versions — normalize exchange indices → stable ids.
+        let draft: TasksDraft;
+        try {
+          draft = validateAndNormalizeExchange(raw);
+        } catch (err) {
+          throw new ArtifactStoreError(
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+        harvested.push(
+          this.appendTasksDraft(
+            ctx.cardId,
+            ctx.round,
+            draft,
+            ctx.sourceSkill,
+          ),
         );
       } else {
         harvested.push(
@@ -348,7 +508,9 @@ export class ArtifactStore {
         ? "html"
         : kind === "runlog"
           ? "log"
-          : kind === "transcript"
+          : kind === "transcript" ||
+              kind === "tasks-draft" ||
+              kind === "tasks-breakdown"
             ? "json"
             : "md";
     return path.posix.join("cards", cardId, String(round), kind, `${id}.${ext}`);

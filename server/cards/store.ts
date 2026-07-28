@@ -205,6 +205,17 @@ export class CardStore {
     }
   }
 
+  /** Tasks-draft writes are forbidden once the Tasks step leaves needs-user. */
+  assertTasksDraftMutable(cardId: string): void {
+    const card = this.getCard(cardId);
+    if (!card) throw new CardStoreError(404, "card not found");
+    const step = card.steps.find((s) => s.key === "tasks");
+    if (!step) throw new CardStoreError(404, "unknown step: tasks");
+    if (step.status !== "needs-user") {
+      throw new CardStoreError(409, "tasks draft is frozen");
+    }
+  }
+
   /**
    * Validate grill→spec without mutating — routes close ACP before apply.
    */

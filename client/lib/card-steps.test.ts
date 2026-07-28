@@ -14,7 +14,7 @@ const featureAfterDecide: CardStep[] = [
   { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
   { key: "grill", status: "needs-user", label: "Grill", stepKind: "ai-chat", column: "define" },
   { key: "spec", status: "pending", label: "Spec", stepKind: "ai-chat", column: "define" },
-  { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-execution", column: "define" },
+  { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-chat", column: "define" },
 ];
 
 const standaloneAfterDecide: CardStep[] = [
@@ -96,7 +96,7 @@ describe("card-steps", () => {
         { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
         { key: "grill", status: "done", label: "Grill", stepKind: "ai-chat", column: "define" },
         { key: "spec", status: "ai-working", label: "Spec", stepKind: "ai-chat", column: "define" },
-        { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-execution", column: "define" },
+        { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-chat", column: "define" },
       ];
       expect(needsUserAttention({ column: "define", steps: idleDefine })).toBe(false);
 

@@ -76,6 +76,19 @@ export interface ArtifactContent {
   content: string;
 }
 
+export interface TasksDraftTask {
+  id: string;
+  title: string;
+  description: string;
+  dependsOn: string[];
+}
+
+export interface TasksDraft {
+  tasks: TasksDraftTask[];
+  /** Append-only version count for this tip (for undo affordance). */
+  versionCount?: number;
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     headers: { "Content-Type": "application/json" },
@@ -118,6 +131,18 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ content }),
     }),
+  getTasksDraft: (id: string) => request<TasksDraft>(`/api/cards/${id}/tasks`),
+  putTasksDraft: (id: string, draft: TasksDraft) =>
+    request<TasksDraft>(`/api/cards/${id}/tasks`, {
+      method: "PUT",
+      body: JSON.stringify(draft),
+    }),
+  deleteTasksDraftTask: (id: string, taskId: string) =>
+    request<TasksDraft>(`/api/cards/${id}/tasks/${taskId}`, {
+      method: "DELETE",
+    }),
+  undoTasksDraft: (id: string) =>
+    request<TasksDraft>(`/api/cards/${id}/tasks/undo`, { method: "POST" }),
   deleteCard: (id: string) =>
     request<{ ok: boolean }>(`/api/cards/${id}`, { method: "DELETE" }),
   listRuns: (cardId: string) => request<Run[]>(`/api/cards/${cardId}/runs`),

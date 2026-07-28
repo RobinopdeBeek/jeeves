@@ -87,6 +87,7 @@ export const runs = sqliteTable("runs", {
 export const artifactKinds = [
   "grill",
   "spec",
+  "tasks-draft",
   "tasks-breakdown",
   "plan",
   "eval",

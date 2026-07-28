@@ -70,7 +70,7 @@ const STEP_DEFS: Record<StepKey, StepDef> = {
   info: { label: "Info", stepKind: "human", column: "backlog" },
   grill: { label: "Grill", stepKind: "ai-chat", column: "define" },
   spec: { label: "Spec", stepKind: "ai-chat", column: "define" },
-  tasks: { label: "Tasks", stepKind: "ai-execution", column: "define" },
+  tasks: { label: "Tasks", stepKind: "ai-chat", column: "define" },
   plan: { label: "Plan", stepKind: "ai-execution", column: "implement" },
   impl: { label: "Implement", stepKind: "ai-execution", column: "implement" },
   airev: { label: "AI Review", stepKind: "ai-execution", column: "implement" },

@@ -38,6 +38,9 @@ describe("PUT /:id/spec", () => {
       createSpec: vi.fn(async () => {
         throw new Error("unused");
       }),
+      createTasks: vi.fn(async () => {
+        throw new Error("unused");
+      }),
       promptsRoot: path.resolve(import.meta.dirname, "../../prompts"),
     };
   });

@@ -34,6 +34,8 @@ export interface Card {
   canCreateTasks: boolean;
   /** True while create-spec synthesis is in flight (survives remounts). */
   creatingSpec: boolean;
+  /** True while create-tasks synthesis is in flight (survives remounts). */
+  creatingTasks: boolean;
 }
 
 export interface Project {

@@ -105,6 +105,7 @@ export function CardView() {
     if (!card || !card.canCreateTasks) return;
     setCreatingTasks(true);
     setCreateTasksError(null);
+    setTabOverride("spec"); // stay on Spec while synthesis runs
     try {
       await flushSpecRef.current?.();
       const updated = await api.createTasks(card.id);
@@ -142,13 +143,15 @@ export function CardView() {
   const specStep = card.steps.find((s) => s.key === "spec");
   // Local flag for instant UI; card.creatingSpec survives board remounts (SSE/GET).
   const synthesizingSpec = creatingSpec || card.creatingSpec;
+  const synthesizingTasks = creatingTasks || card.creatingTasks;
   const showCreateSpec =
     activeKey === "grill" && grillStep !== undefined && grillStep.status !== "done";
   const createSpecDisabled =
     synthesizingSpec || !card.canCreateSpec || grillStarting;
   const showCreateTasks =
     activeKey === "spec" && specStep !== undefined && specStep.status !== "done";
-  const createTasksDisabled = creatingTasks || !card.canCreateTasks;
+  const createTasksDisabled =
+    synthesizingTasks || !card.canCreateTasks || synthesizingSpec;
   const wideLayout = activeKey === "spec" || activeKey === "tasks";
 
   return (
@@ -191,6 +194,7 @@ export function CardView() {
             onCardChange={setCard}
             registerSpecFlush={registerSpecFlush}
             synthesizingSpec={synthesizingSpec}
+            synthesizingTasks={synthesizingTasks}
             onGrillStartingChange={onGrillStartingChange}
           />
         ) : null}
@@ -263,7 +267,11 @@ export function CardView() {
               ) : null}
             </div>
             <Button disabled={createTasksDisabled} onClick={() => void createTasks()}>
-              {creatingTasks ? "Creating Tasks…" : "Create Tasks →"}
+              {synthesizingTasks
+                ? "Creating Tasks…"
+                : createTasksError
+                  ? "Retry"
+                  : "Create Tasks →"}
             </Button>
           </>
         )}

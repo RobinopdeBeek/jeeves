@@ -16,7 +16,9 @@ import { WorktreeManager } from "./execution/worktree-manager.js";
 import { isStepKey } from "./pipelines.js";
 import { extractGrillSession } from "./chat/grill-session-extract.js";
 import { createCreateSpec } from "./chat/create-spec.js";
+import { createCreateTasks } from "./chat/create-tasks.js";
 import { createSynthesizeSpec } from "./chat/to-spec-synthesis.js";
+import { createSynthesizeTasksDraft } from "./chat/to-tasks-synthesis.js";
 import { cardRoutes } from "./routes/cards.js";
 import { eventRoutes } from "./routes/events.js";
 import { artifactRoutes } from "./routes/artifacts.js";
@@ -85,6 +87,18 @@ app.route(
       events,
       extractGrillSession,
       synthesizeSpec: createSynthesizeSpec({ spawn: spawnAcp, artifacts }),
+    }),
+    createTasks: createCreateTasks({
+      store,
+      artifacts,
+      sessions: chatSessions,
+      engine,
+      events,
+      runs,
+      synthesizeTasksDraft: createSynthesizeTasksDraft({
+        spawn: spawnAcp,
+        artifacts,
+      }),
     }),
     promptsRoot: path.join(rootDir, "prompts"),
   }),

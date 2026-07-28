@@ -6,6 +6,10 @@ import {
   CreateSpecError,
   type CreateSpec,
 } from "../chat/create-spec.js";
+import {
+  CreateTasksError,
+  type CreateTasks,
+} from "../chat/create-tasks.js";
 import { dispatchAdvanceEffects } from "../execution/dispatch-effects.js";
 import type { ExecutionEngine } from "../execution/engine.js";
 import type { EventBus } from "../execution/events.js";
@@ -41,6 +45,7 @@ export interface CardRouteDeps {
   artifacts: ArtifactStore;
   sessions: ChatSessionRegistry;
   createSpec: CreateSpec;
+  createTasks: CreateTasks;
   promptsRoot: string;
 }
 
@@ -144,26 +149,17 @@ export function cardRoutes(
   app.post("/:id/create-tasks", async (c) => {
     const cardId = c.req.param("id");
     try {
-      const plan = store.assertSpecToTasksHandOff(cardId);
-
-      const latest = deps.artifacts.latest(cardId, {
-        stepKey: "spec",
-        round: 0,
-        kind: "spec",
+      const card = await deps.createTasks({
+        cardId,
+        repoPath: project.repoPath,
+        promptsRoot: deps.promptsRoot,
       });
-      const markdown = latest ? deps.artifacts.readBody(latest) : "";
-      if (!markdown.trim()) {
-        return c.json({ error: "spec body is empty" }, 422);
-      }
-
-      dispatchAdvanceEffects(cardId, plan.sideEffects, {
-        enqueue: (id, step) => deps.engine.enqueue(id, step),
-        sessions: deps.sessions,
-      });
-      const { card } = store.handOffSpecToTasks(cardId);
-      deps.events.emit({ type: "card.updated", card });
+      // createTasks emits card.updated when synthesis starts and when it settles.
       return c.json(card);
     } catch (e) {
+      if (e instanceof CreateTasksError) {
+        return c.json({ error: e.message }, e.status as 422 | 502);
+      }
       if (e instanceof CardStoreError) {
         return c.json({ error: e.message }, e.status as 400 | 404 | 409);
       }

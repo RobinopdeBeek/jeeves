@@ -118,6 +118,9 @@ describe("POST /:id/create-spec", () => {
         extractGrillSession,
         synthesizeSpec,
       }),
+      createTasks: vi.fn(async () => {
+        throw new Error("unused");
+      }),
       promptsRoot: path.resolve(import.meta.dirname, "../../prompts"),
     };
   });

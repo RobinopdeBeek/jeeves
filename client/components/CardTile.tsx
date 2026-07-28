@@ -49,6 +49,11 @@ export function CardTile({ card }: { card: Card }) {
               <StepStatusIcon status="ai-working" />
               <span>Creating Spec…</span>
             </div>
+          ) : card.creatingTasks ? (
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <StepStatusIcon status="ai-working" />
+              <span>Creating Tasks…</span>
+            </div>
           ) : current ? (
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <StepStatusIcon status={current.status} />

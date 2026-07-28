@@ -30,7 +30,32 @@ const SAVE_DEBOUNCE_MS = 500;
  * Spec authoring surface: MDXEditor + Spec assist side-chat (Grill chat stack).
  * Grill session is Spec's upstream input ([ADR 0012](../../docs/adr/0012-grill-session-qa-handoff.md)).
  */
-export function StepSpec({ card, registerSpecFlush }: StepPanelProps) {
+export function StepSpec({
+  card,
+  registerSpecFlush,
+  synthesizingTasks,
+}: StepPanelProps) {
+  if (synthesizingTasks) {
+    return (
+      <div
+        className="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center"
+        role="status"
+        aria-live="polite"
+      >
+        <p className="text-sm text-muted-foreground">
+          Creating Tasks from Spec…
+        </p>
+      </div>
+    );
+  }
+
+  return <LiveSpec card={card} registerSpecFlush={registerSpecFlush} />;
+}
+
+function LiveSpec({
+  card,
+  registerSpecFlush,
+}: Pick<StepPanelProps, "card" | "registerSpecFlush">) {
   const specStep = card.steps.find((s) => s.key === "spec");
   const stepDone = specStep?.status === "done";
   const [markdown, setMarkdown] = useState("");

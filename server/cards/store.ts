@@ -47,6 +47,11 @@ export type CardWithSteps = Card & {
    * Survives board↔card navigation so the Grill tab stays on the synthesizing UI.
    */
   creatingSpec: boolean;
+  /**
+   * True while POST create-tasks is in flight for this card (in-memory).
+   * Survives board↔card navigation so the Spec tab stays on the synthesizing UI.
+   */
+  creatingTasks: boolean;
 };
 
 /**
@@ -56,6 +61,8 @@ export type CardWithSteps = Card & {
 export class CardStore {
   /** In-process: create-spec host op running for these card ids. */
   private readonly creatingSpecIds = new Set<string>();
+  /** In-process: create-tasks host op running for these card ids. */
+  private readonly creatingTasksIds = new Set<string>();
 
   constructor(private readonly db: Db) {}
 
@@ -67,6 +74,16 @@ export class CardStore {
 
   isCreatingSpec(cardId: string): boolean {
     return this.creatingSpecIds.has(cardId);
+  }
+
+  /** Mark/clear create-tasks in flight so GET/SSE cards stay truthful across remounts. */
+  setCreatingTasks(cardId: string, creating: boolean): void {
+    if (creating) this.creatingTasksIds.add(cardId);
+    else this.creatingTasksIds.delete(cardId);
+  }
+
+  isCreatingTasks(cardId: string): boolean {
+    return this.creatingTasksIds.has(cardId);
   }
 
   /** Idempotently seed the single default project (slice 1: no picker). */
@@ -250,17 +267,23 @@ export class CardStore {
   assertSpecToTasksHandOff(cardId: string): AdvancePlan & { ok: true } {
     const card = this.getCard(cardId);
     if (!card) throw new CardStoreError(404, "card not found");
+    if (this.creatingTasksIds.has(cardId)) {
+      throw new CardStoreError(409, "tasks synthesis already in progress");
+    }
     return this.requireAdvance(card, { type: "spec-to-tasks" });
   }
 
   /**
    * Spec → Tasks hand-off: freeze Spec as done and open Tasks for the user.
+   * Does not check creatingTasks — create-tasks holds that lock until after hand-off.
    */
   handOffSpecToTasks(cardId: string): {
     card: CardWithSteps;
     sideEffects: AdvanceSideEffect[];
   } {
-    const plan = this.assertSpecToTasksHandOff(cardId);
+    const card = this.getCard(cardId);
+    if (!card) throw new CardStoreError(404, "card not found");
+    const plan = this.requireAdvance(card, { type: "spec-to-tasks" });
     this.applyAdvancePlan(cardId, plan);
     return { card: this.getCard(cardId)!, sideEffects: plan.sideEffects };
   }
@@ -416,14 +439,17 @@ export class CardStore {
       ...card,
       steps,
       creatingSpec: this.creatingSpecIds.has(card.id),
+      creatingTasks: this.creatingTasksIds.has(card.id),
       canCreateSpec:
         !this.creatingSpecIds.has(card.id) &&
         canCreateSpec(
           steps.map((s) => ({ key: s.key, status: s.status })),
         ),
-      canCreateTasks: canCreateTasks(
-        steps.map((s) => ({ key: s.key, status: s.status })),
-      ),
+      canCreateTasks:
+        !this.creatingTasksIds.has(card.id) &&
+        canCreateTasks(
+          steps.map((s) => ({ key: s.key, status: s.status })),
+        ),
     };
   }
 }

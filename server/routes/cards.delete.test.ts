@@ -33,6 +33,9 @@ describe("DELETE /:id", () => {
       createSpec: async () => {
         throw new Error("unused");
       },
+      createTasks: async () => {
+        throw new Error("unused");
+      },
       promptsRoot: path.resolve(import.meta.dirname, "../../prompts"),
     };
   });

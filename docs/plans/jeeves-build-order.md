@@ -22,7 +22,7 @@ modules, not modules of their own.
 | `CardStore` | CRUD, kind decision, fan-out, blocker edges, derived queries ("X of Y", queue candidates, Round N history); persists `advance` patches | SQLite/Drizzle, the unified draft/active/merged model, every derivation rule |
 | `ArtifactStore` | `save`, `harvest(worktree, declarations)`, `list(card)`, serve-path resolution; transcript upsert is file/index only | atomic/versioned files, metadata, containment, manifest regeneration, lineage, rounds, supersession |
 | `ExecutionEngine` | `enqueue(card, step)` + run events; `startPreview(card, gitSha)` / `stopPreview()`; dispatches `advance` side-effects on finish | `AgentRunner` (today: `@cursor/sdk` local), `WorktreeManager`, per-run worktrees/finalization, branch strategy, sequential queue, host-process preview lifecycle, blocker checks, restart recovery, eval-skill sequencing |
-| `AcpBridge` | push-only session (`attach`/`onChunk`); warm registry acquire/reattach; `openChat` for WS adapters | spawning `agent acp`, ACP→`UIMessage` projection, permission responses, JSON-RPC piping, warm registry (cap + eviction, inside module), seed-once history, disconnect/hand-off close |
+| `AcpBridge` | push-only session (`attach`/`onChunk`); headless `runToCompletion`; warm registry acquire/reattach; `openChat` for WS adapters | spawning `agent acp`, ACP→`UIMessage` projection, permission responses (incl. headless cursor-like policy), JSON-RPC piping, warm registry (cap + eviction, inside module), seed-once history, disconnect/hand-off close |
 
 ### The slice sequence
 

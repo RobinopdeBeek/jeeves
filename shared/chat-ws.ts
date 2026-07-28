@@ -18,8 +18,19 @@ export type PermissionRequestData = {
 };
 
 export type WsClientMessage =
-  | { type: "user-message"; text: string }
-  | { type: "permission-response"; requestId: string; optionId: string };
+  | {
+      type: "user-message";
+      /** User-visible chat text (and transcript). */
+      text: string;
+      /**
+       * Spec side-chat: live editor draft. Server appends this to the agent
+       * prompt only — it must not appear in the chat transcript.
+       */
+      currentSpecMarkdown?: string;
+    }
+  | { type: "permission-response"; requestId: string; optionId: string }
+  /** Liveness probe; answered with `pong`. Never touches the ACP session. */
+  | { type: "ping"; id: string };
 
 export type WsServerMessage =
   | { type: "ready"; messages: UIMessage[]; streaming?: boolean }
@@ -27,5 +38,9 @@ export type WsServerMessage =
   | { type: "session"; status: "open"; streaming?: boolean }
   | { type: "chunk"; chunk: UIMessageChunk }
   | { type: "status"; status: "ai-working" | "needs-user" }
+  /** Answer to a client `ping` — proves the socket is not half-open. */
+  | { type: "pong"; id: string }
+  /** Spec side-chat harvested a revision — replace editor content. */
+  | { type: "spec-revised"; markdown: string }
   | { type: "displaced"; reason: string }
   | { type: "error"; error: string };

@@ -203,10 +203,47 @@ export function canCreateSpec(
   return grillToSpecTransition(steps).ok;
 }
 
+/**
+ * Spec → Tasks hand-off: spec must be needs-user and tasks pending.
+ * Returns the status patches to apply, or a rejection reason.
+ */
+export function specToTasksTransition(
+  steps: Array<{ key: StepKey; status: StepStatus }>,
+):
+  | { ok: true; patches: Array<{ key: StepKey; status: StepStatus }> }
+  | { ok: false; reason: string } {
+  const spec = steps.find((s) => s.key === "spec");
+  const tasks = steps.find((s) => s.key === "tasks");
+  if (!spec || !tasks) {
+    return { ok: false, reason: "tasks hand-off requires spec and tasks steps" };
+  }
+  if (spec.status !== "needs-user") {
+    return { ok: false, reason: "spec must be needs-user to hand off" };
+  }
+  if (tasks.status !== "pending") {
+    return { ok: false, reason: "tasks must be pending to receive hand-off" };
+  }
+  return {
+    ok: true,
+    patches: [
+      { key: "spec", status: "done" },
+      { key: "tasks", status: "needs-user" },
+    ],
+  };
+}
+
+/** Board/Create Tasks affordance — same rules as spec→tasks hand-off. */
+export function canCreateTasks(
+  steps: Array<{ key: StepKey; status: StepStatus }>,
+): boolean {
+  return specToTasksTransition(steps).ok;
+}
+
 /** What triggered a pipeline advance (routes / engine are thin adapters). */
 export type AdvanceTrigger =
   | { type: "kind-decision"; path: KindPath }
   | { type: "grill-to-spec" }
+  | { type: "spec-to-tasks" }
   | {
       type: "step-finished";
       stepKey: StepKey;
@@ -277,6 +314,23 @@ export function advance(
           stepKey: "grill",
           round: 0,
           reason: "grill handed off to spec",
+        },
+      ],
+    };
+  }
+
+  if (trigger.type === "spec-to-tasks") {
+    const transition = specToTasksTransition(card.steps);
+    if (!transition.ok) return transition;
+    return {
+      ok: true,
+      stepPatches: transition.patches,
+      sideEffects: [
+        {
+          type: "close-chat",
+          stepKey: "spec",
+          round: 0,
+          reason: "spec handed off to tasks",
         },
       ],
     };

@@ -3,15 +3,14 @@ import { CardStoreError, type KindPath } from "../cards/store.js";
 import type { CardStore } from "../cards/store.js";
 import type { Project } from "../db/schema.js";
 import {
-  GrillSessionExtractError,
-  type ExtractGrillSession,
-} from "../chat/grill-session-extract.js";
+  CreateSpecError,
+  type CreateSpec,
+} from "../chat/create-spec.js";
 import { dispatchAdvanceEffects } from "../execution/dispatch-effects.js";
 import type { ExecutionEngine } from "../execution/engine.js";
 import type { EventBus } from "../execution/events.js";
 import type { RunStore } from "../execution/run-store.js";
 import type { ArtifactStore } from "../artifacts/store.js";
-import { loadTranscript } from "../ws/open-chat.js";
 import type { ChatSessionRegistry } from "../ws/session-registry.js";
 import { artifactRoutes } from "./artifacts.js";
 
@@ -25,7 +24,7 @@ export interface CardRouteDeps {
   events: EventBus;
   artifacts: ArtifactStore;
   sessions: ChatSessionRegistry;
-  extractGrillSession: ExtractGrillSession;
+  createSpec: CreateSpec;
   promptsRoot: string;
 }
 
@@ -81,49 +80,71 @@ export function cardRoutes(
   app.post("/:id/create-spec", async (c) => {
     const cardId = c.req.param("id");
     try {
-      // Validate before extract / ACP teardown so a 409 leaves the session intact.
-      const plan = store.assertGrillToSpecHandOff(cardId);
-
-      const transcript = loadTranscript(deps.artifacts, {
+      const card = await deps.createSpec({
         cardId,
-        stepKey: "grill",
-        round: 0,
+        repoPath: project.repoPath,
+        promptsRoot: deps.promptsRoot,
       });
-      if (transcript.length === 0) {
-        return c.json({ error: "grill transcript is empty" }, 422);
+      // createSpec emits card.updated when synthesis starts and when it settles.
+      return c.json(card);
+    } catch (e) {
+      if (e instanceof CreateSpecError) {
+        return c.json({ error: e.message }, e.status as 422 | 502);
       }
-
-      let body: string;
-      try {
-        body = await deps.extractGrillSession({
-          transcript,
-          repoPath: project.repoPath,
-          promptsRoot: deps.promptsRoot,
-        });
-      } catch (e) {
-        const message =
-          e instanceof GrillSessionExtractError
-            ? e.message
-            : e instanceof Error
-              ? e.message
-              : "grill-session extract failed";
-        return c.json({ error: message }, 502);
+      if (e instanceof CardStoreError) {
+        return c.json({ error: e.message }, e.status as 400 | 404 | 409);
       }
+      throw e;
+    }
+  });
 
-      deps.artifacts.save({
-        cardId,
-        stepKey: "grill",
-        round: 0,
-        kind: "grill",
-        content: body,
-        sourceSkill: "grill-session",
+  app.put("/:id/spec", async (c) => {
+    const cardId = c.req.param("id");
+    try {
+      const body = await c.req.json<{ content?: unknown }>();
+      if (typeof body.content !== "string") {
+        return c.json({ error: "content must be a string" }, 400);
+      }
+      store.assertSpecMutable(cardId);
+      const artifact = deps.artifacts.upsertSpec(cardId, 0, body.content);
+      return c.json({
+        id: artifact.id,
+        cardId: artifact.cardId,
+        stepKey: artifact.stepKey,
+        round: artifact.round,
+        kind: artifact.kind,
+        gitSha: artifact.gitSha,
+        createdAt: artifact.createdAt.toISOString(),
+        content: deps.artifacts.readBody(artifact),
       });
+    } catch (e) {
+      if (e instanceof CardStoreError) {
+        return c.json({ error: e.message }, e.status as 400 | 404 | 409);
+      }
+      throw e;
+    }
+  });
+
+  app.post("/:id/create-tasks", async (c) => {
+    const cardId = c.req.param("id");
+    try {
+      const plan = store.assertSpecToTasksHandOff(cardId);
+
+      const latest = deps.artifacts.latest(cardId, {
+        stepKey: "spec",
+        round: 0,
+        kind: "spec",
+      });
+      const markdown = latest ? deps.artifacts.readBody(latest) : "";
+      if (!markdown.trim()) {
+        return c.json({ error: "spec body is empty" }, 422);
+      }
 
       dispatchAdvanceEffects(cardId, plan.sideEffects, {
         enqueue: (id, step) => deps.engine.enqueue(id, step),
         sessions: deps.sessions,
       });
-      const { card } = store.handOffGrillToSpec(cardId);
+      const { card } = store.handOffSpecToTasks(cardId);
       deps.events.emit({ type: "card.updated", card });
       return c.json(card);
     } catch (e) {

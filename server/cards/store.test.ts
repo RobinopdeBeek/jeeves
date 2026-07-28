@@ -233,4 +233,54 @@ describe("CardStore", () => {
       );
     });
   });
+
+  describe("handOffSpecToTasks", () => {
+    function featureInSpec(): string {
+      const card = store.createCard(projectId);
+      store.updateCard(card.id, { title: "Workout streaks" });
+      const id = store.decideKind(card.id, "feature").card.id;
+      store.handOffGrillToSpec(id);
+      return id;
+    }
+
+    it("marks spec done and promotes tasks to needs-user", () => {
+      const id = featureInSpec();
+      const { card: handed, sideEffects } = store.handOffSpecToTasks(id);
+      expect(handed.steps.find((s) => s.key === "spec")?.status).toBe("done");
+      expect(handed.steps.find((s) => s.key === "tasks")?.status).toBe("needs-user");
+      expect(handed.column).toBe("define");
+      expect(handed.canCreateTasks).toBe(false);
+      expect(sideEffects).toEqual([
+        {
+          type: "close-chat",
+          stepKey: "spec",
+          round: 0,
+          reason: "spec handed off to tasks",
+        },
+      ]);
+    });
+
+    it("rejects missing card with 404", () => {
+      expect(() => store.handOffSpecToTasks("missing")).toThrow(
+        expect.objectContaining({ status: 404 }),
+      );
+    });
+
+    it("rejects when spec is already done with 409", () => {
+      const id = featureInSpec();
+      store.handOffSpecToTasks(id);
+      expect(() => store.handOffSpecToTasks(id)).toThrow(
+        expect.objectContaining({ status: 409 }),
+      );
+    });
+
+    it("rejects when still in grill with 409", () => {
+      const card = store.createCard(projectId);
+      store.updateCard(card.id, { title: "Still grilling" });
+      const id = store.decideKind(card.id, "feature").card.id;
+      expect(() => store.handOffSpecToTasks(id)).toThrow(
+        expect.objectContaining({ status: 409 }),
+      );
+    });
+  });
 });

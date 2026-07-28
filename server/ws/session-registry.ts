@@ -4,6 +4,7 @@ import {
   AcpBridge,
   type AcpLiveCallbacks,
   type ChunkSubscriber,
+  type InteractivePermissionPolicy,
   type SpawnAcp,
 } from "./chat.js";
 
@@ -27,6 +28,9 @@ export interface ColdAcquireParams {
   history: UIMessage[];
   onStatus: AcpLiveCallbacks["onStatus"];
   onTranscript: AcpLiveCallbacks["onTranscript"];
+  onTurnComplete?: AcpLiveCallbacks["onTurnComplete"];
+  /** Spec (and future) live chats: Cursor-like auto-approve. */
+  interactivePermissionPolicy?: InteractivePermissionPolicy;
 }
 
 /** Cap on live ACP bridges across all chat steps (issue #24). */
@@ -41,7 +45,11 @@ export interface WarmSessionHandle {
   bridge: AcpBridge;
   attach(subscriber: ChunkSubscriber): void;
   detach(subscriber: ChunkSubscriber): void;
-  sendMessage(text: string): Promise<void>;
+  /** Send a user message; chunks arrive via attach / onChunk buffering. */
+  sendMessage(
+    text: string,
+    opts?: { currentSpecMarkdown?: string },
+  ): Promise<void>;
   respondToPermission(requestId: string, optionId: string): void;
   getPendingPermissionIds(): string[];
 }
@@ -104,6 +112,7 @@ export class ChatSessionRegistry {
       existing.setLiveCallbacks({
         onStatus: params.onStatus,
         onTranscript: params.onTranscript,
+        onTurnComplete: params.onTurnComplete,
       });
       return this.handleFor(existing, true);
     }
@@ -114,6 +123,7 @@ export class ChatSessionRegistry {
         again.setLiveCallbacks({
           onStatus: params.onStatus,
           onTranscript: params.onTranscript,
+          onTurnComplete: params.onTurnComplete,
         });
         return this.handleFor(again, true);
       }
@@ -122,12 +132,14 @@ export class ChatSessionRegistry {
         spawn: params.spawn,
         onStatus: params.onStatus,
         onTranscript: params.onTranscript,
+        onTurnComplete: params.onTurnComplete,
       });
       this.warm.set(id, bridge);
       await bridge.openSession({
         cwd: params.cwd,
         openingPrompt: params.openingPrompt,
         history: params.history,
+        interactivePermissionPolicy: params.interactivePermissionPolicy,
       });
       return this.handleFor(bridge, false);
     });
@@ -139,7 +151,7 @@ export class ChatSessionRegistry {
       bridge,
       attach: (sub) => bridge.attach(sub),
       detach: (sub) => bridge.detach(sub),
-      sendMessage: (text) => bridge.sendMessage(text),
+      sendMessage: (text, opts) => bridge.sendMessage(text, opts),
       respondToPermission: (requestId, optionId) =>
         bridge.respondToPermission(requestId, optionId),
       getPendingPermissionIds: () => bridge.getPendingPermissionIds(),

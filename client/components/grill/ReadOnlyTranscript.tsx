@@ -8,12 +8,14 @@ import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { PermissionPartView } from "./PermissionPartView";
 
-/** Frozen / displaced grill transcript from the artifact API (no live ACP). */
+/** Frozen / displaced chat transcript from the artifact API (no live ACP). */
 export function ReadOnlyTranscript({
   cardId,
+  stepKey = "grill",
   fallbackMessages,
 }: {
   cardId: string;
+  stepKey?: "grill" | "spec";
   fallbackMessages: UIMessage[];
 }) {
   const [messages, setMessages] = useState<UIMessage[]>(fallbackMessages);
@@ -23,7 +25,7 @@ export function ReadOnlyTranscript({
     void (async () => {
       try {
         const artifact = await api.getLatestArtifact(cardId, {
-          stepKey: "grill",
+          stepKey,
           round: 0,
           kind: "transcript",
         });
@@ -36,7 +38,7 @@ export function ReadOnlyTranscript({
     return () => {
       cancelled = true;
     };
-  }, [cardId]);
+  }, [cardId, stepKey]);
 
   return (
     <ScrollArea

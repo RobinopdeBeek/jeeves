@@ -6,7 +6,9 @@ import type {
 import type { ArtifactStore } from "../artifacts/store.js";
 import type { CardStore } from "../cards/store.js";
 import type { EventBus } from "../execution/events.js";
+import { resolveProjectStorePaths } from "../project-store.js";
 import type { SpawnAcp } from "./chat.js";
+import { chatStepProfile } from "./chat-step-profile.js";
 import { loadTranscript, openChat } from "./open-chat.js";
 import {
   ChatSessionRegistry,
@@ -62,11 +64,29 @@ export class ChatConnection {
     });
     if (this.closed) return;
 
+    const profile = chatStepProfile(this.key.stepKey);
+    const onTurnComplete = profile.onTurnComplete
+      ? () => {
+          const repoPath = this.deps.store.getRepoPath(this.key.cardId);
+          const storeRoot = resolveProjectStorePaths(repoPath).storeRoot;
+          profile.onTurnComplete!({
+            cardId: this.key.cardId,
+            artifacts: this.deps.artifacts,
+            storeRoot,
+            send: (msg) => this.send(msg),
+            sendError: (error) => this.send({ type: "error", error }),
+            isClosed: () => this.closed,
+          });
+        }
+      : undefined;
+
     try {
       const opened = await openChat(this.key, this.deps, {
         onStatusNotify: (status) => {
-          if (!this.closed) this.send({ type: "status", status });
+          if (this.closed) return;
+          this.send({ type: "status", status });
         },
+        onTurnComplete,
       });
       if (this.closed) return;
 
@@ -87,7 +107,7 @@ export class ChatConnection {
   }
 
   async onClientMessage(raw: string): Promise<void> {
-    if (!this.handle || this.closed) return;
+    if (this.closed) return;
 
     let msg: WsClientMessage;
     try {
@@ -96,6 +116,15 @@ export class ChatConnection {
       this.send({ type: "error", error: "invalid message" });
       return;
     }
+
+    // Answered before the ACP session exists — the client probes liveness
+    // while the agent is still starting up.
+    if (msg.type === "ping") {
+      this.send({ type: "pong", id: typeof msg.id === "string" ? msg.id : "" });
+      return;
+    }
+
+    if (!this.handle) return;
 
     if (msg.type === "permission-response") {
       if (typeof msg.requestId !== "string" || typeof msg.optionId !== "string") {
@@ -121,7 +150,11 @@ export class ChatConnection {
 
     this.sending = true;
     try {
-      await this.handle.sendMessage(msg.text.trim());
+      const currentSpecMarkdown =
+        typeof msg.currentSpecMarkdown === "string"
+          ? msg.currentSpecMarkdown
+          : undefined;
+      await this.handle.sendMessage(msg.text.trim(), { currentSpecMarkdown });
     } catch (err) {
       this.send({
         type: "error",

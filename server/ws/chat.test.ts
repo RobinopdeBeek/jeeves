@@ -1,6 +1,10 @@
 import type { UIMessage, UIMessageChunk } from "ai";
 import { describe, expect, it } from "vitest";
-import { AcpBridge, type ChunkSubscriber } from "./chat.js";
+import {
+  AcpBridge,
+  decideInteractivePermission,
+  type ChunkSubscriber,
+} from "./chat.js";
 import { MockAcpProcess, viWaitFor } from "./mock-acp-process.js";
 
 function collectingSubscriber(): ChunkSubscriber & { chunks: UIMessageChunk[] } {
@@ -276,6 +280,61 @@ describe("AcpBridge", () => {
     expect(promptText(process, 1)).not.toContain("Prior transcript");
   });
 
+  it("keeps Spec markdown out of the transcript while framing the agent prompt", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-spec");
+    const transcripts: UIMessage[][] = [];
+
+    const bridge = new AcpBridge({
+      spawn: () => process,
+      onTranscript: (messages) => transcripts.push(messages),
+    });
+    bridge.attach(collectingSubscriber());
+
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: "unused",
+      history: [
+        {
+          id: "a1",
+          role: "assistant",
+          parts: [{ type: "text", text: "How can I help with the Spec?" }],
+        },
+      ],
+    });
+
+    const replyPromise = bridge.sendMessage("Tighten acceptance criteria", {
+      currentSpecMarkdown: "# Spec\n\nDraft body\n",
+    });
+    await viWaitFor(() => process.prompts().length === 1);
+    const promptReq = process.promptRequest();
+    process.emit({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "sess-spec",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "Updated." },
+        },
+      },
+    });
+    process.emit({
+      jsonrpc: "2.0",
+      id: promptReq.id,
+      result: { stopReason: "end_turn" },
+    });
+    await replyPromise;
+
+    const userTurn = transcripts.at(-1)?.find((m) => m.role === "user");
+    expect(userTurn?.parts).toEqual([
+      { type: "text", text: "Tighten acceptance criteria" },
+    ]);
+    expect(promptText(process, 0)).toContain("Tighten acceptance criteria");
+    expect(promptText(process, 0)).toContain("## Current Spec markdown (from editor)");
+    expect(promptText(process, 0)).toContain("Draft body");
+  });
+
   it("projects session/request_permission into a data-permission part and round-trips approve/deny", async () => {
     const process = new MockAcpProcess();
     process.autoHandshake("sess-perm");
@@ -529,5 +588,362 @@ describe("AcpBridge", () => {
     expect(saved[0].parts).toEqual([{ type: "text", text: "First question?" }]);
 
     fs.rmSync(artifactRoot, { recursive: true, force: true });
+  });
+
+  it("runToCompletion runs one headless prompt turn then closes", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-headless");
+
+    const bridge = new AcpBridge({ spawn: () => process });
+    const done = bridge.runToCompletion({
+      cwd: "C:/target-repo",
+      prompt: "Synthesize the spec into exchange/card/spec.md",
+      permissionPolicy: "cursor-like",
+    });
+
+    await viWaitFor(() => process.prompts().length === 1);
+    expect(promptText(process, 0)).toBe(
+      "Synthesize the spec into exchange/card/spec.md",
+    );
+
+    process.emit({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "sess-headless",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "Wrote the exchange file." },
+        },
+      },
+    });
+    process.emit({
+      jsonrpc: "2.0",
+      id: process.promptRequest().id,
+      result: { stopReason: "end_turn" },
+    });
+
+    await done;
+    expect(process.killed).toBe(true);
+  });
+
+  it("runToCompletion auto-approves read permissions without a subscriber", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-headless-read");
+
+    const bridge = new AcpBridge({ spawn: () => process });
+    const done = bridge.runToCompletion({
+      cwd: "C:/target-repo",
+      prompt: "Read CONTEXT.md then write the spec",
+      permissionPolicy: "cursor-like",
+    });
+
+    await viWaitFor(() => process.prompts().length === 1);
+    const promptReq = process.promptRequest();
+
+    process.emit({
+      jsonrpc: "2.0",
+      id: 42,
+      method: "session/request_permission",
+      params: {
+        sessionId: "sess-headless-read",
+        toolCall: { toolCallId: "call_1", title: "Read file CONTEXT.md" },
+        options: [
+          { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+          { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+        ],
+      },
+    });
+
+    await viWaitFor(() =>
+      process.written.some(
+        (m) =>
+          (m as { id?: number; result?: unknown }).id === 42 &&
+          (m as { result?: unknown }).result !== undefined,
+      ),
+    );
+
+    const reply = process.written.find(
+      (m): m is { id: number; result: unknown } =>
+        (m as { id?: number }).id === 42 &&
+        (m as { result?: unknown }).result !== undefined,
+    );
+    expect(reply?.result).toEqual({
+      outcome: { outcome: "selected", optionId: "allow-once" },
+    });
+    expect(bridge.getPendingPermissionIds()).toEqual([]);
+
+    process.emit({
+      jsonrpc: "2.0",
+      id: promptReq.id,
+      result: { stopReason: "end_turn" },
+    });
+    await done;
+  });
+
+  it("runToCompletion fails a disallowed write without stalling on UI", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-headless-write");
+
+    const bridge = new AcpBridge({ spawn: () => process });
+    const done = bridge.runToCompletion({
+      cwd: "C:/target-repo",
+      prompt: "Write something",
+      permissionPolicy: "cursor-like",
+    });
+
+    await viWaitFor(() => process.prompts().length === 1);
+
+    process.emit({
+      jsonrpc: "2.0",
+      id: 77,
+      method: "session/request_permission",
+      params: {
+        sessionId: "sess-headless-write",
+        toolCall: {
+          toolCallId: "call_w",
+          title: "Write file src/index.ts",
+        },
+        options: [
+          { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+          { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+        ],
+      },
+    });
+
+    await expect(done).rejects.toThrow(/disallowed|write/i);
+    expect(process.killed).toBe(true);
+
+    const reply = process.written.find(
+      (m): m is { id: number; result: unknown } =>
+        (m as { id?: number }).id === 77 &&
+        (m as { result?: unknown }).result !== undefined,
+    );
+    expect(reply?.result).toEqual({
+      outcome: { outcome: "selected", optionId: "reject-once" },
+    });
+  });
+
+  it("runToCompletion auto-approves writes under the project-store exchange path", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-headless-ex");
+
+    const bridge = new AcpBridge({ spawn: () => process });
+    const done = bridge.runToCompletion({
+      cwd: "C:/target-repo",
+      prompt: "Write the spec exchange file",
+      permissionPolicy: "cursor-like",
+    });
+
+    await viWaitFor(() => process.prompts().length === 1);
+    const promptReq = process.promptRequest();
+
+    process.emit({
+      jsonrpc: "2.0",
+      id: 88,
+      method: "session/request_permission",
+      params: {
+        sessionId: "sess-headless-ex",
+        toolCall: {
+          toolCallId: "call_ex",
+          title: "Write file .jeeves/exchange/abc/spec.md",
+        },
+        options: [
+          { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+          { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+        ],
+      },
+    });
+
+    await viWaitFor(() =>
+      process.written.some(
+        (m) =>
+          (m as { id?: number; result?: unknown }).id === 88 &&
+          (m as { result?: unknown }).result !== undefined,
+      ),
+    );
+
+    const reply = process.written.find(
+      (m): m is { id: number; result: unknown } =>
+        (m as { id?: number }).id === 88 &&
+        (m as { result?: unknown }).result !== undefined,
+    );
+    expect(reply?.result).toEqual({
+      outcome: { outcome: "selected", optionId: "allow-once" },
+    });
+
+    process.emit({
+      jsonrpc: "2.0",
+      id: promptReq.id,
+      result: { stopReason: "end_turn" },
+    });
+    await done;
+  });
+
+  it("runToCompletion fails a shell permission without stalling on UI", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-headless-shell");
+
+    const bridge = new AcpBridge({ spawn: () => process });
+    const done = bridge.runToCompletion({
+      cwd: "C:/target-repo",
+      prompt: "Run a shell",
+      permissionPolicy: "cursor-like",
+    });
+
+    await viWaitFor(() => process.prompts().length === 1);
+
+    process.emit({
+      jsonrpc: "2.0",
+      id: 55,
+      method: "session/request_permission",
+      params: {
+        sessionId: "sess-headless-shell",
+        toolCall: { toolCallId: "call_sh", title: "Shell ls" },
+        options: [
+          { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+          { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+        ],
+      },
+    });
+
+    await expect(done).rejects.toThrow(/disallowed|write/i);
+    expect(process.killed).toBe(true);
+  });
+
+  it("runToCompletion rejects on timeout", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-timeout");
+
+    const bridge = new AcpBridge({ spawn: () => process });
+    const done = bridge.runToCompletion({
+      cwd: "C:/target-repo",
+      prompt: "Hang forever",
+      permissionPolicy: "cursor-like",
+      timeoutMs: 30,
+    });
+
+    await viWaitFor(() => process.prompts().length === 1);
+    await expect(done).rejects.toThrow(/timed out/i);
+    expect(process.killed).toBe(true);
+  });
+
+  it("interactive cursor-like auto-approves reads without a permission UI chunk", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-live-read");
+
+    const bridge = new AcpBridge({ spawn: () => process });
+    const sub = collectingSubscriber();
+    bridge.attach(sub);
+
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: "Assist with the spec",
+      history: [],
+      interactivePermissionPolicy: "cursor-like",
+    });
+    await viWaitFor(() => process.prompts().length === 1);
+    const promptReq = process.promptRequest();
+
+    process.emit({
+      jsonrpc: "2.0",
+      id: 77,
+      method: "session/request_permission",
+      params: {
+        sessionId: "sess-live-read",
+        toolCall: { toolCallId: "call_r", title: "Read file CONTEXT.md" },
+        options: [
+          { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+          { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+        ],
+      },
+    });
+
+    await viWaitFor(() =>
+      process.written.some(
+        (m) =>
+          (m as { id?: number; result?: unknown }).id === 77 &&
+          (m as { result?: unknown }).result !== undefined,
+      ),
+    );
+
+    expect(bridge.getPendingPermissionIds()).toEqual([]);
+    expect(
+      sub.chunks.some((c) => (c as { type?: string }).type === "data-permission"),
+    ).toBe(false);
+
+    process.emit({
+      jsonrpc: "2.0",
+      id: promptReq.id,
+      result: { stopReason: "end_turn" },
+    });
+    await bridge.whenIdle();
+  });
+
+  it("interactive cursor-like still prompts for shell / crucial writes", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-live-shell");
+
+    const bridge = new AcpBridge({ spawn: () => process });
+    const sub = collectingSubscriber();
+    bridge.attach(sub);
+
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: "Assist with the spec",
+      history: [],
+      interactivePermissionPolicy: "cursor-like",
+    });
+    await viWaitFor(() => process.prompts().length === 1);
+
+    process.emit({
+      jsonrpc: "2.0",
+      id: 88,
+      method: "session/request_permission",
+      params: {
+        sessionId: "sess-live-shell",
+        toolCall: { toolCallId: "call_s", title: "Shell: rm -rf /" },
+        options: [
+          { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+          { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+        ],
+      },
+    });
+
+    await viWaitFor(() => bridge.getPendingPermissionIds().includes("88"));
+    expect(
+      sub.chunks.some((c) => (c as { type?: string }).type === "data-permission"),
+    ).toBe(true);
+
+    bridge.respondToPermission("88", "reject-once");
+    expect(bridge.getPendingPermissionIds()).toEqual([]);
+  });
+});
+
+describe("decideInteractivePermission", () => {
+  const options = [
+    { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+    { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+  ];
+
+  it("allows reads and exchange writes", () => {
+    expect(
+      decideInteractivePermission({ title: "Read file CONTEXT.md", options }),
+    ).toEqual({ action: "allow", optionId: "allow-once" });
+    expect(
+      decideInteractivePermission({
+        title: "Write file .jeeves/exchange/c1/spec.md",
+        options,
+      }),
+    ).toEqual({ action: "allow", optionId: "allow-once" });
+  });
+
+  it("prompts for shell and non-exchange writes", () => {
+    expect(
+      decideInteractivePermission({ title: "Shell: npm test", options }),
+    ).toEqual({ action: "prompt" });
+    expect(
+      decideInteractivePermission({ title: "Write file src/app.ts", options }),
+    ).toEqual({ action: "prompt" });
   });
 });

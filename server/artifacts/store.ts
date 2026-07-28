@@ -14,9 +14,14 @@ import type { StepKey } from "../pipelines.js";
 export type { UIMessage };
 
 const TRANSCRIPT_FILE_ID = "transcript";
+const SPEC_FILE_ID = "spec";
 
 function transcriptArtifactId(cardId: string, stepKey: StepKey, round: number): string {
   return `${cardId}-${stepKey}-${round}-transcript`;
+}
+
+function specArtifactId(cardId: string, round: number): string {
+  return `${cardId}-spec-${round}-spec`;
 }
 
 export class ArtifactStoreError extends Error {
@@ -104,6 +109,7 @@ export class ArtifactStore {
 
   /**
    * Mutable transcript for ai-chat steps — overwrites the same file and DB row each turn.
+   * Stored at `cards/<cardId>/<round>/<stepKey>/transcript.json` so steps do not collide.
    * Caller must assert the step is still mutable (CardStore.assertTranscriptMutable).
    */
   upsertTranscript(
@@ -124,7 +130,14 @@ export class ArtifactStore {
 
     const createdAt = new Date();
     const id = transcriptArtifactId(cardId, stepKey, round);
-    const relativePath = this.destinationPath(cardId, round, "transcript", TRANSCRIPT_FILE_ID);
+    // Step-scoped so grill/spec/… each keep their own file (not a shared transcript/ folder).
+    const relativePath = path.posix.join(
+      "cards",
+      cardId,
+      String(round),
+      stepKey,
+      `${TRANSCRIPT_FILE_ID}.json`,
+    );
     const absPath = this.assertUnderRoot(relativePath);
     fs.mkdirSync(path.dirname(absPath), { recursive: true });
     this.writeAtomic(absPath, content);
@@ -135,6 +148,63 @@ export class ArtifactStore {
       stepKey,
       round,
       kind: "transcript",
+      path: relativePath,
+      gitSha: null,
+      schemaVersion: 1,
+      createdAt,
+    };
+    try {
+      this.db.insert(artifacts).values(row).run();
+    } catch (error) {
+      fs.rmSync(absPath, { force: true });
+      throw error;
+    }
+    this.regenerateManifest(cardId);
+    return row;
+  }
+
+  /**
+   * Mutable Spec markdown — overwrites the same file and DB row while Spec is active.
+   * Caller must assert the step is still mutable (CardStore.assertSpecMutable).
+   * Human PUT, /to-spec harvest, and spec-assist harvest all use this path.
+   */
+  upsertSpec(
+    cardId: string,
+    round: number,
+    markdown: string,
+    sourceSkill = "human",
+  ): Artifact {
+    const existing = this.latest(cardId, { stepKey: "spec", round, kind: "spec" });
+    const createdAt = existing?.createdAt ?? new Date();
+    const body = withFrontmatter(markdown, {
+      cardId,
+      step: "spec",
+      round,
+      kind: "spec",
+      sourceSkill,
+      schemaVersion: 1,
+      createdAt,
+    });
+
+    if (existing) {
+      const absPath = this.resolveServePath(cardId, existing.path);
+      this.writeAtomic(absPath, body);
+      this.regenerateManifest(cardId);
+      return existing;
+    }
+
+    const id = specArtifactId(cardId, round);
+    const relativePath = this.destinationPath(cardId, round, "spec", SPEC_FILE_ID);
+    const absPath = this.assertUnderRoot(relativePath);
+    fs.mkdirSync(path.dirname(absPath), { recursive: true });
+    this.writeAtomic(absPath, body);
+
+    const row: Artifact = {
+      id,
+      cardId,
+      stepKey: "spec",
+      round,
+      kind: "spec",
       path: relativePath,
       gitSha: null,
       schemaVersion: 1,
@@ -174,17 +244,25 @@ export class ArtifactStore {
           );
         }
       }
-      harvested.push(
-        this.save({
-          cardId: ctx.cardId,
-          stepKey: decl.stepKey,
-          round: ctx.round,
-          kind: decl.kind,
-          content: stripFrontmatter(raw),
-          sourceSkill: ctx.sourceSkill,
-          gitSha: ctx.gitSha,
-        }),
-      );
+      const content = stripFrontmatter(raw);
+      if (decl.kind === "spec") {
+        // Spec is mutable within the round (like transcripts) — upsert, don't append.
+        harvested.push(
+          this.upsertSpec(ctx.cardId, ctx.round, content, ctx.sourceSkill),
+        );
+      } else {
+        harvested.push(
+          this.save({
+            cardId: ctx.cardId,
+            stepKey: decl.stepKey,
+            round: ctx.round,
+            kind: decl.kind,
+            content,
+            sourceSkill: ctx.sourceSkill,
+            gitSha: ctx.gitSha,
+          }),
+        );
+      }
       fs.rmSync(exchangeAbs, { force: true });
     }
     return harvested;

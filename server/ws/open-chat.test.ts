@@ -26,6 +26,26 @@ describe("resolveOpeningPrompt", () => {
     expect(prompt).toContain(path.join("C:/repo", "CONTEXT.md"));
   });
 
+  it("builds a spec-assist opener with grill session and exchange path", () => {
+    const prompt = resolveOpeningPrompt(
+      "spec",
+      { title: "Pantry", description: "Track expiry" },
+      "C:/repo",
+      promptsRoot,
+      {
+        grillSession: "## Q1\nSettled: fridge only.",
+        cardId: "card1",
+      },
+    );
+    expect(prompt).toContain("Pantry");
+    expect(prompt).toContain("Track expiry");
+    expect(prompt).toContain("Settled: fridge only.");
+    expect(prompt).toContain("exchange/card1/spec.md");
+    expect(prompt).toContain(path.join("C:/repo", "CONTEXT.md"));
+    expect(prompt).toContain("Here for you if you need me.");
+    expect(prompt).toContain("Do **not** recap the Grill session");
+  });
+
   it("rejects unknown step keys", () => {
     expect(() =>
       resolveOpeningPrompt(

@@ -12,6 +12,7 @@ import {
   advance,
   backlogEnrichedSteps,
   canCreateSpec,
+  canCreateTasks,
   orderEnrichedSteps,
   type AdvancePlan,
   type AdvanceSideEffect,
@@ -39,6 +40,13 @@ export type CardWithSteps = Card & {
   steps: EnrichedStep[];
   /** Same predicate as grill→spec hand-off (board Create Spec). */
   canCreateSpec: boolean;
+  /** Same predicate as spec→tasks hand-off (board Create Tasks). */
+  canCreateTasks: boolean;
+  /**
+   * True while POST create-spec is in flight for this card (in-memory).
+   * Survives board↔card navigation so the Grill tab stays on the synthesizing UI.
+   */
+  creatingSpec: boolean;
 };
 
 /**
@@ -46,7 +54,20 @@ export type CardWithSteps = Card & {
  * every derivation rule; routes and the client are thin adapters over this.
  */
 export class CardStore {
+  /** In-process: create-spec host op running for these card ids. */
+  private readonly creatingSpecIds = new Set<string>();
+
   constructor(private readonly db: Db) {}
+
+  /** Mark/clear create-spec in flight so GET/SSE cards stay truthful across remounts. */
+  setCreatingSpec(cardId: string, creating: boolean): void {
+    if (creating) this.creatingSpecIds.add(cardId);
+    else this.creatingSpecIds.delete(cardId);
+  }
+
+  isCreatingSpec(cardId: string): boolean {
+    return this.creatingSpecIds.has(cardId);
+  }
 
   /** Idempotently seed the single default project (slice 1: no picker). */
   ensureDefaultProject(name: string, repoPath: string): Project {
@@ -173,24 +194,62 @@ export class CardStore {
     }
   }
 
+  /** Spec upserts are forbidden once the Spec step is done (frozen). */
+  assertSpecMutable(cardId: string): void {
+    const card = this.getCard(cardId);
+    if (!card) throw new CardStoreError(404, "card not found");
+    const step = card.steps.find((s) => s.key === "spec");
+    if (!step) throw new CardStoreError(404, "unknown step: spec");
+    if (step.status === "done") {
+      throw new CardStoreError(409, "spec is frozen");
+    }
+  }
+
   /**
    * Validate grill→spec without mutating — routes close ACP before apply.
    */
   assertGrillToSpecHandOff(cardId: string): AdvancePlan & { ok: true } {
     const card = this.getCard(cardId);
     if (!card) throw new CardStoreError(404, "card not found");
+    if (this.creatingSpecIds.has(cardId)) {
+      throw new CardStoreError(409, "spec synthesis already in progress");
+    }
     return this.requireAdvance(card, { type: "grill-to-spec" });
   }
 
   /**
    * Grill → Spec hand-off: freeze grill as done and open Spec for the user.
    * Transition rules live in PipelineEngine; this applies them.
+   * Does not check creatingSpec — create-spec holds that lock until after hand-off.
    */
   handOffGrillToSpec(cardId: string): {
     card: CardWithSteps;
     sideEffects: AdvanceSideEffect[];
   } {
-    const plan = this.assertGrillToSpecHandOff(cardId);
+    const card = this.getCard(cardId);
+    if (!card) throw new CardStoreError(404, "card not found");
+    const plan = this.requireAdvance(card, { type: "grill-to-spec" });
+    this.applyAdvancePlan(cardId, plan);
+    return { card: this.getCard(cardId)!, sideEffects: plan.sideEffects };
+  }
+
+  /**
+   * Validate spec→tasks without mutating — routes may close ACP before apply.
+   */
+  assertSpecToTasksHandOff(cardId: string): AdvancePlan & { ok: true } {
+    const card = this.getCard(cardId);
+    if (!card) throw new CardStoreError(404, "card not found");
+    return this.requireAdvance(card, { type: "spec-to-tasks" });
+  }
+
+  /**
+   * Spec → Tasks hand-off: freeze Spec as done and open Tasks for the user.
+   */
+  handOffSpecToTasks(cardId: string): {
+    card: CardWithSteps;
+    sideEffects: AdvanceSideEffect[];
+  } {
+    const plan = this.assertSpecToTasksHandOff(cardId);
     this.applyAdvancePlan(cardId, plan);
     return { card: this.getCard(cardId)!, sideEffects: plan.sideEffects };
   }
@@ -345,7 +404,13 @@ export class CardStore {
     return {
       ...card,
       steps,
-      canCreateSpec: canCreateSpec(
+      creatingSpec: this.creatingSpecIds.has(card.id),
+      canCreateSpec:
+        !this.creatingSpecIds.has(card.id) &&
+        canCreateSpec(
+          steps.map((s) => ({ key: s.key, status: s.status })),
+        ),
+      canCreateTasks: canCreateTasks(
         steps.map((s) => ({ key: s.key, status: s.status })),
       ),
     };

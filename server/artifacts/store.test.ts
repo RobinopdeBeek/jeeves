@@ -182,7 +182,7 @@ describe("ArtifactStore", () => {
       round: 0,
       kind: "transcript",
     });
-    expect(first.path).toBe(`cards/${cardId}/0/transcript/transcript.json`);
+    expect(first.path).toBe(`cards/${cardId}/0/grill/transcript.json`);
 
     const updatedTranscript: UIMessage[] = [
       ...sampleTranscript,
@@ -199,6 +199,37 @@ describe("ArtifactStore", () => {
     expect(JSON.parse(artifacts.readContent(latest!))).toEqual(updatedTranscript);
   });
 
+  it("keeps grill and spec transcripts on separate step-scoped paths", () => {
+    cardWithGrillStep();
+    const grillMessages: UIMessage[] = [
+      { id: "g1", role: "user", parts: [{ type: "text", text: "Grill question" }] },
+    ];
+    const grill = artifacts.upsertTranscript(cardId, "grill", 0, grillMessages);
+
+    store.handOffGrillToSpec(cardId);
+    const specMessages: UIMessage[] = [
+      { id: "s1", role: "user", parts: [{ type: "text", text: "Spec assist" }] },
+    ];
+    const spec = artifacts.upsertTranscript(cardId, "spec", 0, specMessages);
+
+    expect(grill.path).toBe(`cards/${cardId}/0/grill/transcript.json`);
+    expect(spec.path).toBe(`cards/${cardId}/0/spec/transcript.json`);
+    expect(grill.path).not.toBe(spec.path);
+
+    const latestGrill = artifacts.latest(cardId, {
+      stepKey: "grill",
+      round: 0,
+      kind: "transcript",
+    });
+    const latestSpec = artifacts.latest(cardId, {
+      stepKey: "spec",
+      round: 0,
+      kind: "transcript",
+    });
+    expect(JSON.parse(artifacts.readContent(latestGrill!))).toEqual(grillMessages);
+    expect(JSON.parse(artifacts.readContent(latestSpec!))).toEqual(specMessages);
+  });
+
   it("round-trips UIMessage[] transcript content", () => {
     cardWithGrillStep();
     artifacts.upsertTranscript(cardId, "grill", 0, sampleTranscript);
@@ -210,6 +241,76 @@ describe("ArtifactStore", () => {
     cardWithGrillStep();
     store.setStepStatus(cardId, "grill", "done");
     expect(() => store.assertTranscriptMutable(cardId, "grill")).toThrow(/frozen/i);
+  });
+
+  function cardWithSpecStep(): void {
+    cardWithGrillStep();
+    store.handOffGrillToSpec(cardId);
+  }
+
+  it("creates a mutable spec artifact on first upsert and overwrites on subsequent writes", () => {
+    cardWithSpecStep();
+    const first = artifacts.upsertSpec(cardId, 0, "# Spec\n\nDo the thing.\n");
+    expect(first).toMatchObject({
+      cardId,
+      stepKey: "spec",
+      round: 0,
+      kind: "spec",
+    });
+    expect(first.path).toBe(`cards/${cardId}/0/spec/spec.md`);
+
+    const second = artifacts.upsertSpec(cardId, 0, "# Spec\n\nUpdated body.\n");
+    expect(second.id).toBe(first.id);
+    expect(second.path).toBe(first.path);
+    expect(artifacts.list(cardId)).toHaveLength(1);
+    expect(artifacts.readBody(second)).toBe("# Spec\n\nUpdated body.");
+  });
+
+  it("rejects spec writes when the caller asserts the step is frozen", () => {
+    cardWithSpecStep();
+    store.setStepStatus(cardId, "spec", "done");
+    expect(() => store.assertSpecMutable(cardId)).toThrow(/frozen/i);
+  });
+
+  it("harvests a project-store spec exchange file into an indexed durable artifact", () => {
+    cardWithSpecStep();
+    const storeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-ps-"));
+    const exchangeRel = `exchange/${cardId}/spec.md`;
+    const exchangeAbs = path.join(storeRoot, exchangeRel);
+    fs.mkdirSync(path.dirname(exchangeAbs), { recursive: true });
+    fs.writeFileSync(exchangeAbs, "# Spec\n\nFrom exchange.\n");
+
+    const harvested = artifacts.harvest(
+      storeRoot,
+      [{ exchangePath: exchangeRel, kind: "spec", stepKey: "spec" }],
+      { cardId, round: 0, sourceSkill: "spec-assist" },
+    );
+
+    expect(harvested).toHaveLength(1);
+    expect(harvested[0]).toMatchObject({
+      cardId,
+      stepKey: "spec",
+      round: 0,
+      kind: "spec",
+    });
+    expect(harvested[0].path).toBe(`cards/${cardId}/0/spec/spec.md`);
+    expect(artifacts.readBody(harvested[0])).toContain("From exchange.");
+    expect(fs.existsSync(exchangeAbs)).toBe(false);
+
+    // Second harvest upserts the same canonical Spec path (no nanoid sprawl).
+    fs.mkdirSync(path.dirname(exchangeAbs), { recursive: true });
+    fs.writeFileSync(exchangeAbs, "# Spec\n\nRevised.\n");
+    const second = artifacts.harvest(
+      storeRoot,
+      [{ exchangePath: exchangeRel, kind: "spec", stepKey: "spec" }],
+      { cardId, round: 0, sourceSkill: "to-spec" },
+    );
+    expect(second[0]!.id).toBe(harvested[0].id);
+    expect(second[0]!.path).toBe(harvested[0].path);
+    expect(artifacts.list(cardId).filter((a) => a.kind === "spec")).toHaveLength(1);
+    expect(artifacts.readBody(second[0]!)).toContain("Revised.");
+
+    fs.rmSync(storeRoot, { recursive: true, force: true });
   });
 
   it("throws when a plan exchange file has no useful content beyond headings", async () => {

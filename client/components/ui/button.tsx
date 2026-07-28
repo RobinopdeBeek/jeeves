@@ -19,6 +19,9 @@ const buttonVariants = cva(
         ghost:
           "hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
         link: "text-primary underline-offset-4 hover:underline",
+        /** Floating chat launcher (always light, widget-style). */
+        launcher:
+          "rounded-full border border-border bg-white text-foreground shadow-md hover:bg-white/90",
       },
       size: {
         default: "h-9 px-4 py-2 has-[>svg]:px-3",
@@ -31,6 +34,8 @@ const buttonVariants = cva(
         "icon-lg": "size-10",
         /** Round composer actions (send / attach / voice). */
         "icon-round": "size-7 rounded-full",
+        /** Floating chat launcher FAB (~50% larger than size-14). */
+        "icon-launcher": "size-[5.25rem] rounded-full p-1",
       },
     },
     defaultVariants: {

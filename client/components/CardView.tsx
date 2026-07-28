@@ -1,5 +1,5 @@
 import { IconArrowLeft, IconTrash } from "@tabler/icons-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, type Card, type KindPath } from "@/lib/api";
 import { activeTabKey, visibleSteps } from "@/lib/card-steps";
@@ -29,10 +29,24 @@ export function CardView() {
   const [deciding, setDeciding] = useState(false);
   const [creatingSpec, setCreatingSpec] = useState(false);
   const [createSpecError, setCreateSpecError] = useState<string | null>(null);
+  const [creatingTasks, setCreatingTasks] = useState(false);
+  const [createTasksError, setCreateTasksError] = useState<string | null>(null);
+  /** Pessimistic until LiveGrill reports ACP handshake finished. */
+  const [grillStarting, setGrillStarting] = useState(true);
+  const flushSpecRef = useRef<(() => Promise<void>) | null>(null);
+
+  const registerSpecFlush = useCallback((flush: (() => Promise<void>) | null) => {
+    flushSpecRef.current = flush;
+  }, []);
+
+  const onGrillStartingChange = useCallback((starting: boolean) => {
+    setGrillStarting(starting);
+  }, []);
 
   useEffect(() => {
     if (!id) return;
     setTabOverride(null);
+    setGrillStarting(true);
     api
       .getCard(id)
       .then(setCard)
@@ -75,6 +89,7 @@ export function CardView() {
     if (!card) return;
     setCreatingSpec(true);
     setCreateSpecError(null);
+    setTabOverride("grill"); // stay on Grill while synthesis runs
     try {
       const updated = await api.createSpec(card.id);
       setCard(updated);
@@ -83,6 +98,22 @@ export function CardView() {
       setCreateSpecError(err instanceof Error ? err.message : String(err));
     } finally {
       setCreatingSpec(false);
+    }
+  }
+
+  async function createTasks() {
+    if (!card || !card.canCreateTasks) return;
+    setCreatingTasks(true);
+    setCreateTasksError(null);
+    try {
+      await flushSpecRef.current?.();
+      const updated = await api.createTasks(card.id);
+      setCard(updated);
+      setTabOverride(null); // activeTabKey prefers Tasks once needs-user
+    } catch (err) {
+      setCreateTasksError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCreatingTasks(false);
     }
   }
 
@@ -108,12 +139,25 @@ export function CardView() {
   const inBacklog = card.column === "backlog";
   const hasTitle = card.title.trim().length > 0;
   const grillStep = card.steps.find((s) => s.key === "grill");
+  const specStep = card.steps.find((s) => s.key === "spec");
+  // Local flag for instant UI; card.creatingSpec survives board remounts (SSE/GET).
+  const synthesizingSpec = creatingSpec || card.creatingSpec;
   const showCreateSpec =
     activeKey === "grill" && grillStep !== undefined && grillStep.status !== "done";
-  const createSpecDisabled = creatingSpec || !card.canCreateSpec;
+  const createSpecDisabled =
+    synthesizingSpec || !card.canCreateSpec || grillStarting;
+  const showCreateTasks =
+    activeKey === "spec" && specStep !== undefined && specStep.status !== "done";
+  const createTasksDisabled = creatingTasks || !card.canCreateTasks;
+  const wideLayout = activeKey === "spec" || activeKey === "tasks";
 
   return (
-    <div className="mx-auto flex h-dvh max-w-3xl flex-col">
+    <div
+      className={cn(
+        "mx-auto flex h-dvh flex-col",
+        wideLayout ? "max-w-6xl" : "max-w-3xl",
+      )}
+    >
       <header className="flex items-center gap-2 border-b px-4 py-2.5">
         <Button variant="ghost" size="icon-sm" onClick={() => navigate("/")} title="Back to board">
           <IconArrowLeft />
@@ -140,7 +184,16 @@ export function CardView() {
       </div>
 
       <main className="flex flex-1 flex-col overflow-hidden p-4">
-        {Panel ? <Panel card={card} stepKey={activeKey} onCardChange={setCard} /> : null}
+        {Panel ? (
+          <Panel
+            card={card}
+            stepKey={activeKey}
+            onCardChange={setCard}
+            registerSpecFlush={registerSpecFlush}
+            synthesizingSpec={synthesizingSpec}
+            onGrillStartingChange={onGrillStartingChange}
+          />
+        ) : null}
       </main>
 
       <footer className="flex items-center gap-2 border-t px-4 py-3">
@@ -191,7 +244,26 @@ export function CardView() {
               ) : null}
             </div>
             <Button disabled={createSpecDisabled} onClick={createSpec}>
-              {creatingSpec ? "Creating Spec…" : "Create Spec →"}
+              {synthesizingSpec
+                ? "Creating Spec…"
+                : createSpecError
+                  ? "Retry"
+                  : "Create Spec →"}
+            </Button>
+          </>
+        )}
+
+        {showCreateTasks && (
+          <>
+            <div className="flex min-w-0 flex-1 flex-col items-end gap-1">
+              {createTasksError ? (
+                <p className="max-w-md text-right text-sm text-destructive" role="alert">
+                  {createTasksError}
+                </p>
+              ) : null}
+            </div>
+            <Button disabled={createTasksDisabled} onClick={() => void createTasks()}>
+              {creatingTasks ? "Creating Tasks…" : "Create Tasks →"}
             </Button>
           </>
         )}

@@ -91,6 +91,78 @@
   }
 }
 
+/*
+ * Shared markdown typography for MarkdownBody and MDXEditor
+ * (contentEditableClassName). Tailwind preflight resets heading sizes.
+ */
+.markdown-body {
+  @apply text-sm;
+}
+
+.markdown-body h1 {
+  @apply mt-5 mb-2 scroll-m-20 text-xl font-semibold first:mt-0 last:mb-0;
+}
+
+.markdown-body h2 {
+  @apply mt-5 mb-2 scroll-m-20 text-lg font-semibold first:mt-0 last:mb-0;
+}
+
+.markdown-body h3 {
+  @apply mt-4 mb-1.5 scroll-m-20 text-base font-semibold first:mt-0 last:mb-0;
+}
+
+.markdown-body h4 {
+  @apply mt-3.5 mb-1 scroll-m-20 text-base font-medium first:mt-0 last:mb-0;
+}
+
+.markdown-body h5 {
+  @apply mt-3 mb-1 text-sm font-semibold first:mt-0 last:mb-0;
+}
+
+.markdown-body h6 {
+  @apply mt-3 mb-1 text-sm font-medium first:mt-0 last:mb-0;
+}
+
+.markdown-body p {
+  @apply my-3 leading-relaxed first:mt-0 last:mb-0;
+}
+
+.markdown-body ul {
+  @apply my-3 ms-5 list-disc marker:text-muted-foreground [&>li]:mt-1;
+}
+
+.markdown-body ol {
+  @apply my-3 ms-5 list-decimal marker:text-muted-foreground [&>li]:mt-1;
+}
+
+.markdown-body strong {
+  @apply font-semibold;
+}
+
+.markdown-body em {
+  @apply italic;
+}
+
+.markdown-body a {
+  @apply text-primary underline underline-offset-2 hover:text-primary/80;
+}
+
+.markdown-body hr {
+  @apply my-3 border-muted-foreground/20;
+}
+
+.markdown-body blockquote {
+  @apply my-3 border-s-2 border-muted-foreground/30 ps-4 text-muted-foreground;
+}
+
+.markdown-body :not(pre) > code {
+  @apply rounded-md bg-muted px-1.5 py-0.5 font-mono text-[0.85em];
+}
+
+.markdown-body pre {
+  @apply overflow-x-auto rounded-xl border border-border/50 bg-muted/30 p-3.5 text-[13px] leading-relaxed;
+}
+
 /* Match shadcn ScrollArea thumb look on assistant-ui's live viewport.
    Radix ScrollArea can't wrap ThreadPrimitive.Viewport (asChild conflict). */
 .aui-thread-viewport {
@@ -111,4 +183,25 @@
 
 .aui-thread-viewport::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* Lexical composer input (chips for @ / / directives). */
+.aui-lexical-editor {
+  position: relative;
+}
+
+.aui-lexical-input {
+  min-height: 2.5rem;
+  outline: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.aui-lexical-placeholder {
+  position: absolute;
+  inset-inline-start: 0.625rem;
+  top: 0.25rem;
+  pointer-events: none;
+  user-select: none;
+  color: color-mix(in oklab, var(--muted-foreground) 80%, transparent);
 }

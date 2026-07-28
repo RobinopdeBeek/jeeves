@@ -1,14 +1,20 @@
 import { useChat } from "@ai-sdk/react";
 import { useAISDKRuntime } from "@assistant-ui/react-ai-sdk";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ChatTransport, UIMessage } from "ai";
-import { AcpChatTransport } from "./acp-chat-transport";
+import {
+  AcpChatTransport,
+  type ChatConnectionState,
+} from "./acp-chat-transport";
 
 export interface UseAcpChatOptions {
   cardId: string;
   stepKey: string;
   round?: number;
+  getCurrentSpecMarkdown?: () => string;
+  onSpecRevised?: (markdown: string) => void;
+  onStreamingChange?: (streaming: boolean) => void;
 }
 
 export type AcpChatState =
@@ -19,6 +25,13 @@ export type AcpChatState =
       messages: UIMessage[];
       /** ACP handshake done — composer send is allowed. */
       sessionOpen: boolean;
+      /** Socket health; "reconnecting" drives the recovery hint. */
+      connection: ChatConnectionState;
+      /**
+       * Bumped when a reconnect delivers a fresh transcript. Callers key the
+       * chat runtime on it so recovery re-seeds history (like remounting).
+       */
+      epoch: number;
     }
   | {
       status: "displaced";
@@ -29,14 +42,27 @@ export type AcpChatState =
   | { status: "error"; error: string };
 
 /**
- * Custom ChatTransport hook: connects Grill (and future ai-chat steps) to AcpBridge.
+ * Custom ChatTransport hook: connects Grill / Spec ai-chat steps to AcpBridge.
+ *
+ * The transport heals its own socket; this hook mirrors that into UI state and
+ * re-seeds the runtime from the server transcript after a reconnect.
  */
 export function useAcpChat({
   cardId,
   stepKey,
   round = 0,
+  getCurrentSpecMarkdown,
+  onSpecRevised,
+  onStreamingChange,
 }: UseAcpChatOptions): AcpChatState {
   const [state, setState] = useState<AcpChatState>({ status: "connecting" });
+  const getSpecRef = useRef(getCurrentSpecMarkdown);
+  getSpecRef.current = getCurrentSpecMarkdown;
+  const onRevisedRef = useRef(onSpecRevised);
+  onRevisedRef.current = onSpecRevised;
+  const onStreamingRef = useRef(onStreamingChange);
+  onStreamingRef.current = onStreamingChange;
+  const injectSpec = getCurrentSpecMarkdown != null;
 
   useEffect(() => {
     let cancelled = false;
@@ -46,6 +72,27 @@ export function useAcpChat({
       cardId,
       stepKey,
       round,
+      getCurrentSpecMarkdown: injectSpec
+        ? () => getSpecRef.current?.() ?? ""
+        : undefined,
+      onSpecRevised: (markdown) => onRevisedRef.current?.(markdown),
+      onStreamingChange: (streaming) => onStreamingRef.current?.(streaming),
+      onConnectionChange: (connection) => {
+        if (cancelled) return;
+        setState((prev) =>
+          prev.status === "ready"
+            ? { ...prev, connection, sessionOpen: connection === "open" }
+            : prev,
+        );
+      },
+      onReconnected: (history) => {
+        if (cancelled) return;
+        setState((prev) =>
+          prev.status === "ready"
+            ? { ...prev, messages: history, epoch: prev.epoch + 1 }
+            : prev,
+        );
+      },
       onDisplaced: (reason) => {
         if (cancelled) return;
         setState((prev) => ({
@@ -65,13 +112,17 @@ export function useAcpChat({
           transport,
           messages: history,
           sessionOpen: transport.isSessionOpen(),
+          connection: transport.getConnectionState(),
+          epoch: 0,
         });
         void transport
           .whenSessionOpen()
           .then(() => {
             if (cancelled) return;
             setState((prev) =>
-              prev.status === "ready" ? { ...prev, sessionOpen: true } : prev,
+              prev.status === "ready"
+                ? { ...prev, sessionOpen: true, connection: "open" }
+                : prev,
             );
           })
           .catch((err: unknown) => {
@@ -102,7 +153,7 @@ export function useAcpChat({
       // CONNECTING-safe close waits for open before closing (no setTimeout defer).
       transport.close();
     };
-  }, [cardId, stepKey, round]);
+  }, [cardId, stepKey, round, injectSpec]);
 
   return state;
 }

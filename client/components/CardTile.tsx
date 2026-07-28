@@ -44,12 +44,17 @@ export function CardTile({ card }: { card: Card }) {
       {pipeline ? (
         <div className="mt-2 flex flex-col gap-1.5">
           <TileSegmentBar steps={segments} />
-          {current && (
+          {card.creatingSpec ? (
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <StepStatusIcon status="ai-working" />
+              <span>Creating Spec…</span>
+            </div>
+          ) : current ? (
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <StepStatusIcon status={current.status} />
               <span>{current.label}</span>
             </div>
-          )}
+          ) : null}
         </div>
       ) : card.description ? (
         <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">

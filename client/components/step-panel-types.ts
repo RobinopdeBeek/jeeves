@@ -5,4 +5,13 @@ export type StepPanelProps = {
   /** Which step tab this panel is rendering (StepExecution serves several). */
   stepKey: string;
   onCardChange: (card: Card) => void;
+  /** Spec tab: register flush-before-Create-Tasks (cleared on unmount). */
+  registerSpecFlush?: (flush: (() => Promise<void>) | null) => void;
+  /** Grill tab: Create Spec → headless /to-spec is in flight. */
+  synthesizingSpec?: boolean;
+  /**
+   * Grill tab: true while ACP is connecting or the opening handshake has not
+   * finished (`sessionOpen` false). CardView disables Create Spec → then.
+   */
+  onGrillStartingChange?: (starting: boolean) => void;
 };

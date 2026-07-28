@@ -4,8 +4,17 @@ import type {
   PermissionOptionPart,
   PermissionRequestData,
 } from "../../shared/chat-ws.js";
+import { frameSpecAssistUserMessage } from "../../shared/spec-assist-frame.js";
+import {
+  decideHeadlessPermission,
+  decideInteractivePermission,
+} from "./acp-permissions.js";
 
 export type { PermissionOptionPart, PermissionRequestData };
+export {
+  decideHeadlessPermission,
+  decideInteractivePermission,
+} from "./acp-permissions.js";
 
 /** Injected stdio boundary for `agent acp` (mocked in tests). */
 export interface AcpProcess {
@@ -19,6 +28,8 @@ export type SpawnAcp = (cwd: string) => AcpProcess | Promise<AcpProcess>;
 export interface AcpLiveCallbacks {
   onStatus: (status: "ai-working" | "needs-user") => void;
   onTranscript: (messages: UIMessage[]) => void;
+  /** Fired when a prompt turn reaches idle (not mid-turn detached permission). */
+  onTurnComplete?: () => void;
 }
 
 export interface OpenSessionOptions {
@@ -26,6 +37,36 @@ export interface OpenSessionOptions {
   /** Injected when history is empty — drives the agent's opening question. */
   openingPrompt: string;
   history?: UIMessage[];
+  /**
+   * Live chat: auto-approve reads/routine + exchange writes; prompt only for
+   * crucial actions (shell / non-exchange writes).
+   */
+  interactivePermissionPolicy?: InteractivePermissionPolicy;
+}
+
+/**
+ * Headless permission policy for one-shot ACP runs (e.g. /to-spec).
+ * Auto-approves reads/routine tools and project-store exchange writes;
+ * rejects other writes and fails the run — never stalls on a permission UI.
+ */
+export type HeadlessPermissionPolicy = "cursor-like";
+
+/** Live chat Cursor-like defaults — auto-approve routine; prompt for crucial. */
+export type InteractivePermissionPolicy = "cursor-like";
+
+export interface RunToCompletionOptions {
+  cwd: string;
+  prompt: string;
+  permissionPolicy: HeadlessPermissionPolicy;
+  /** Fail the run if the turn does not finish within this window. */
+  timeoutMs?: number;
+}
+
+export class AcpHeadlessError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AcpHeadlessError";
+  }
 }
 
 /** Receives projected UIMessage chunks while attached to a warm session. */
@@ -92,6 +133,11 @@ export class AcpBridge {
   inactiveSince = Date.now();
 
   private live: AcpLiveCallbacks;
+  /** When set, permission requests are resolved without a subscriber. */
+  private headlessPolicy: HeadlessPermissionPolicy | null = null;
+  private headlessFail: ((err: Error) => void) | null = null;
+  /** Live Cursor-like auto-approve for routine tools; prompt for crucial. */
+  private interactivePolicy: InteractivePermissionPolicy | null = null;
 
   constructor(
     private readonly deps: { spawn: SpawnAcp } & Partial<AcpLiveCallbacks>,
@@ -99,6 +145,7 @@ export class AcpBridge {
     this.live = {
       onStatus: deps.onStatus ?? (() => {}),
       onTranscript: deps.onTranscript ?? (() => {}),
+      onTurnComplete: deps.onTurnComplete,
     };
   }
 
@@ -169,6 +216,7 @@ export class AcpBridge {
   async openSession(options: OpenSessionOptions): Promise<void> {
     this.messages = options.history ? [...options.history] : [];
     this.contextSeeded = this.messages.length === 0;
+    this.interactivePolicy = options.interactivePermissionPolicy ?? null;
     this.process = await this.deps.spawn(options.cwd);
     this.process.onLine((line) => this.handleLine(line));
 
@@ -195,14 +243,75 @@ export class AcpBridge {
   }
 
   /** Send a user message; chunks arrive via attach / onChunk buffering. */
-  async sendMessage(text: string): Promise<void> {
+  async sendMessage(
+    text: string,
+    opts?: { currentSpecMarkdown?: string },
+  ): Promise<void> {
     if (!this.sessionId) throw new Error("session not open");
-    await this.runPromptTurn(text, { recordUser: true });
+    await this.runPromptTurn(text, {
+      recordUser: true,
+      currentSpecMarkdown: opts?.currentSpecMarkdown,
+    });
+  }
+
+  /**
+   * One-shot headless ACP turn: spawn, prompt, wait for idle, then kill.
+   * Permissions follow `permissionPolicy` — never waits for a UI subscriber.
+   */
+  async runToCompletion(options: RunToCompletionOptions): Promise<void> {
+    this.headlessPolicy = options.permissionPolicy;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+
+    const failPromise = new Promise<never>((_, reject) => {
+      this.headlessFail = reject;
+    });
+
+    try {
+      const work = (async () => {
+        await this.openSession({
+          cwd: options.cwd,
+          openingPrompt: options.prompt,
+          history: [],
+        });
+        await this.whenIdle();
+      })();
+
+      const raced =
+        options.timeoutMs != null
+          ? Promise.race([
+              work,
+              failPromise,
+              new Promise<never>((_, reject) => {
+                timeoutId = setTimeout(() => {
+                  timedOut = true;
+                  reject(
+                    new AcpHeadlessError(
+                      `headless ACP run timed out after ${options.timeoutMs}ms`,
+                    ),
+                  );
+                }, options.timeoutMs);
+              }),
+            ])
+          : Promise.race([work, failPromise]);
+
+      await raced;
+    } finally {
+      if (timeoutId != null) clearTimeout(timeoutId);
+      this.headlessPolicy = null;
+      this.headlessFail = null;
+      this.close();
+      if (timedOut) {
+        // close() already ran; error already thrown from race
+      }
+    }
   }
 
   close(): void {
     this.subscriber = null;
     this.pendingPermissions.clear();
+    this.headlessPolicy = null;
+    this.headlessFail = null;
     this.process?.kill();
     this.process = null;
     this.sessionId = null;
@@ -239,7 +348,7 @@ export class AcpBridge {
     return undefined;
   }
 
-  private endTurn(): void {
+  private endTurn(opts?: { turnCompleteAlreadyRun?: boolean }): void {
     this.activity = "idle";
     this.awaitingDetachedPermission = false;
     this.turnStartedAt = 0;
@@ -247,12 +356,17 @@ export class AcpBridge {
     this.inactiveSince = Date.now();
     this.resolveTurnDone?.();
     this.resolveTurnDone = null;
+    // Harvest Spec revisions before needs-user so the client can apply
+    // while still locked, then unlock on the status frame.
+    if (!opts?.turnCompleteAlreadyRun) {
+      this.live.onTurnComplete?.();
+    }
     this.live.onStatus("needs-user");
   }
 
   private async runPromptTurn(
     text: string,
-    opts: { recordUser: boolean },
+    opts: { recordUser: boolean; currentSpecMarkdown?: string },
   ): Promise<void> {
     if (!this.sessionId || !this.process) throw new Error("session not open");
 
@@ -278,10 +392,16 @@ export class AcpBridge {
     this.pushChunk({ type: "start", messageId });
     this.pushChunk({ type: "text-start", id: textId });
 
-    let promptText = text;
+    // Spec body (if any) is agent-prompt context only — never stored in transcript.
+    const agentText =
+      opts.currentSpecMarkdown != null
+        ? frameSpecAssistUserMessage(text, opts.currentSpecMarkdown)
+        : text;
+
+    let promptText = agentText;
     if (opts.recordUser) {
       if (!this.contextSeeded) {
-        promptText = this.formatPromptWithHistory(text);
+        promptText = this.formatPromptWithHistory(agentText);
         this.contextSeeded = true;
       }
     }
@@ -294,14 +414,17 @@ export class AcpBridge {
       if (this.currentTextId) {
         this.pushChunk({ type: "text-end", id: this.currentTextId });
       }
-      this.pushChunk({ type: "finish", finishReason: "stop" });
       if (this.currentAssistant) {
         this.messages.push(this.currentAssistant);
         this.currentAssistant = null;
       }
       this.currentTextId = null;
       this.live.onTranscript(this.messages);
-      this.endTurn();
+      // Harvest before `finish` so `spec-revised` arrives while the client still
+      // treats the turn as streaming (finish/markTurnDone unlocks the editor).
+      this.live.onTurnComplete?.();
+      this.pushChunk({ type: "finish", finishReason: "stop" });
+      this.endTurn({ turnCompleteAlreadyRun: true });
     } catch (err) {
       this.pushChunk({
         type: "error",
@@ -438,6 +561,37 @@ export class AcpBridge {
       status: "pending",
     };
 
+    this.pendingPermissions.set(requestId, rpcId);
+
+    if (this.headlessPolicy != null) {
+      const part: PermissionPart = {
+        type: "data-permission",
+        id: requestId,
+        data,
+      };
+      if (this.currentAssistant) {
+        this.currentAssistant.parts.push(part as UIMessage["parts"][number]);
+      } else {
+        this.currentAssistant = {
+          id: nanoid(10),
+          role: "assistant",
+          parts: [part as UIMessage["parts"][number]],
+        };
+        this.pushChunk({ type: "start", messageId: this.currentAssistant.id });
+      }
+      this.pushChunk(permissionChunk(requestId, data));
+      this.resolveHeadlessPermission(requestId, data);
+      return;
+    }
+
+    if (this.interactivePolicy != null) {
+      const decision = decideInteractivePermission(data);
+      if (decision.action === "allow") {
+        this.respondToPermission(requestId, decision.optionId);
+        return;
+      }
+    }
+
     const part: PermissionPart = {
       type: "data-permission",
       id: requestId,
@@ -455,8 +609,31 @@ export class AcpBridge {
       this.pushChunk({ type: "start", messageId: this.currentAssistant.id });
     }
 
-    this.pendingPermissions.set(requestId, rpcId);
     this.pushChunk(permissionChunk(requestId, data));
+  }
+
+  private resolveHeadlessPermission(
+    requestId: string,
+    data: PermissionRequestData,
+  ): void {
+    const decision = decideHeadlessPermission(data);
+    if (decision.action === "allow") {
+      this.respondToPermission(requestId, decision.optionId);
+      return;
+    }
+
+    if (decision.optionId) {
+      try {
+        this.respondToPermission(requestId, decision.optionId);
+      } catch {
+        // Process may already be closing; still fail the run below.
+      }
+    } else {
+      this.pendingPermissions.delete(requestId);
+    }
+
+    const err = new AcpHeadlessError(decision.reason);
+    this.headlessFail?.(err);
   }
 
   private findPermissionPart(requestId: string): PermissionPart | undefined {

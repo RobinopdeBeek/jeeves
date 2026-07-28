@@ -6,4 +6,5 @@ Re-running a step creates a new `(card, step, round)` artifact version, never an
 
 - Change requests are never deleted on consumption; they flip `open` → `consumed` and remain visible as "changes added later".
 - The artifact folder mirrors the rule: one subfolder per round and an immutable unique destination per successful version (for example `plan/<artifactId>.md`). Known exchange file paths such as `.jeeves/plan.md` are only staging locations; harvest never overwrites a prior canonical artifact, even within the same round.
+- **Exception — in-round mutable drafts:** transcripts and Spec markdown (`kind: transcript`, `kind: spec`) are intentionally overwritten in place while their step is still `needs-user`. They share one canonical path per `(card, step, round)` (e.g. `spec/spec.md`). Human edits, `/to-spec` harvest, and Spec-assist harvest all upsert that path; freeze on step hand-off (Spec → Tasks closes Spec mutability). Append-only harvest still applies to execution artifacts (plan, patch, eval, …).
 - Only the designated current-state tables (`cards`, `card_steps`) may be mutated in place (see ADR 0002).

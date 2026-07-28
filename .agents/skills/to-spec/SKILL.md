@@ -8,6 +8,15 @@ This skill takes the current conversation context and codebase understanding and
 
 The issue tracker and triage label vocabulary should have been provided to you — run `/setup-matt-pocock-skills` if not.
 
+## Inputs
+
+Prefer, in order:
+
+1. **Grill session artifact** (`kind: grill`) when one exists for the work being specified — the durable Q&A hand-off from Grill ([ADR 0012](../../docs/adr/0012-grill-session-qa-handoff.md)). Do **not** re-derive settled answers from the raw chat transcript; the transcript is resume/debug only.
+2. Otherwise the current conversation + codebase understanding.
+
+On the Jeeves board, feature Spec authoring is human MDXEditor + `spec-assist` (not this skill). This skill is for scoping *jeeves itself* (and similar) into tracker issues. When dogfooding after a Grill → Spec hand-off, still load the Grill session artifact as the Q&A source of truth.
+
 ## Process
 
 1. Explore the repo to understand the current state of the codebase, if you haven't already. Use the project's domain glossary vocabulary throughout the spec, and respect any ADRs in the area you're touching.

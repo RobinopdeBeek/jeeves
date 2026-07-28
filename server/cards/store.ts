@@ -206,6 +206,14 @@ export class CardStore {
     if (!card) throw new CardStoreError(404, "card not found");
     const step = card.steps.find((s) => s.key === stepKey);
     if (!step) throw new CardStoreError(404, `unknown step: ${stepKey}`);
+    // Grill/Spec freeze on `done`. Tasks freezes when it leaves needs-user
+    // (fan-out → awaiting) so the side-chat transcript stops upserting.
+    if (stepKey === "tasks") {
+      if (step.status !== "needs-user" && step.status !== "ai-working") {
+        throw new CardStoreError(409, "transcript is frozen");
+      }
+      return;
+    }
     if (step.status === "done") {
       throw new CardStoreError(409, "transcript is frozen");
     }

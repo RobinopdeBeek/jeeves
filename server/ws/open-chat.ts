@@ -1,5 +1,6 @@
 import type { UIMessage } from "ai";
 import { stripSpecAssistFrame } from "../../shared/spec-assist-frame.js";
+import { stripTasksAssistFrame } from "../../shared/tasks-assist-frame.js";
 import type { ArtifactStore } from "../artifacts/store.js";
 import type { CardStore } from "../cards/store.js";
 import type { EventBus } from "../execution/events.js";
@@ -39,7 +40,11 @@ export function resolveOpeningPrompt(
   card: { title: string; description: string },
   cwd: string,
   promptsRoot: string,
-  extras: { cardId: string; grillSession?: string } = { cardId: "" },
+  extras: {
+    cardId: string;
+    grillSession?: string;
+    spec?: string;
+  } = { cardId: "" },
 ): string {
   return chatStepProfile(stepKey).resolveOpeningPrompt({
     card,
@@ -47,6 +52,7 @@ export function resolveOpeningPrompt(
     promptsRoot,
     cardId: extras.cardId,
     grillSession: extras.grillSession,
+    spec: extras.spec,
   });
 }
 
@@ -63,12 +69,16 @@ export function loadTranscript(
   try {
     const parsed = JSON.parse(artifacts.readContent(row)) as UIMessage[];
     if (!Array.isArray(parsed)) return [];
-    // Older Spec-assist turns stored the framed Spec body in user parts —
+    // Older assist turns may have stored framed draft bodies in user parts —
     // strip for display so chat stays readable.
     return parsed.map(stripFramedUserParts);
   } catch {
     return [];
   }
+}
+
+function stripAssistFrame(text: string): string {
+  return stripTasksAssistFrame(stripSpecAssistFrame(text));
 }
 
 function stripFramedUserParts(message: UIMessage): UIMessage {
@@ -77,7 +87,7 @@ function stripFramedUserParts(message: UIMessage): UIMessage {
     ...message,
     parts: message.parts.map((part) =>
       part.type === "text"
-        ? { ...part, text: stripSpecAssistFrame(part.text) }
+        ? { ...part, text: stripAssistFrame(part.text) }
         : part,
     ),
   };
@@ -96,6 +106,24 @@ export function loadGrillSession(
   if (!row) return "";
   try {
     return artifacts.readContent(row);
+  } catch {
+    return "";
+  }
+}
+
+/** Spec markdown body for Tasks side-chat opener. */
+export function loadSpecMarkdown(
+  artifacts: ArtifactStore,
+  cardId: string,
+): string {
+  const row = artifacts.latest(cardId, {
+    stepKey: "spec",
+    round: 0,
+    kind: "spec",
+  });
+  if (!row) return "";
+  try {
+    return artifacts.readBody(row);
   } catch {
     return "";
   }
@@ -125,6 +153,9 @@ export async function openChat(
     cardId: key.cardId,
     grillSession: profile.needsGrillSession
       ? loadGrillSession(deps.artifacts, key.cardId)
+      : undefined,
+    spec: profile.needsSpec
+      ? loadSpecMarkdown(deps.artifacts, key.cardId)
       : undefined,
   });
 

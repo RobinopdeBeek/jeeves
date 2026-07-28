@@ -27,6 +27,11 @@ export type WsClientMessage =
        * prompt only — it must not appear in the chat transcript.
        */
       currentSpecMarkdown?: string;
+      /**
+       * Tasks side-chat: live tip JSON. Server appends this to the agent
+       * prompt only — it must not appear in the chat transcript.
+       */
+      currentTasksDraftJson?: string;
     }
   | { type: "permission-response"; requestId: string; optionId: string }
   /** Liveness probe; answered with `pong`. Never touches the ACP session. */
@@ -42,5 +47,18 @@ export type WsServerMessage =
   | { type: "pong"; id: string }
   /** Spec side-chat harvested a revision — replace editor content. */
   | { type: "spec-revised"; markdown: string }
+  /** Tasks side-chat harvested a revision — replace tip tiles. */
+  | {
+      type: "tasks-revised";
+      draft: {
+        tasks: Array<{
+          id: string;
+          title: string;
+          description: string;
+          dependsOn: string[];
+        }>;
+      };
+      versionCount: number;
+    }
   | { type: "displaced"; reason: string }
   | { type: "error"; error: string };

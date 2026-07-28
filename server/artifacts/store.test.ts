@@ -393,6 +393,53 @@ describe("ArtifactStore", () => {
     fs.rmSync(storeRoot, { recursive: true, force: true });
   });
 
+  it("harvests tasks-draft revise preserving tip ids by index", () => {
+    cardWithTasksStep();
+    artifacts.appendTasksDraft(
+      cardId,
+      0,
+      {
+        tasks: [
+          { id: "keep-a", title: "API", description: "", dependsOn: [] },
+          { id: "keep-b", title: "UI", description: "", dependsOn: ["keep-a"] },
+        ],
+      },
+      "to-draft-tasks",
+    );
+
+    const storeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-ps-"));
+    const exchangeRel = `exchange/${cardId}/tasks-draft.json`;
+    const exchangeAbs = path.join(storeRoot, exchangeRel);
+    fs.mkdirSync(path.dirname(exchangeAbs), { recursive: true });
+    fs.writeFileSync(
+      exchangeAbs,
+      JSON.stringify({
+        tasks: [
+          { title: "API revised", description: "a", depends_on: [] },
+          { title: "UI", description: "u", depends_on: [0] },
+        ],
+      }),
+    );
+
+    artifacts.harvest(
+      storeRoot,
+      [{ exchangePath: exchangeRel, kind: "tasks-draft", stepKey: "tasks" }],
+      {
+        cardId,
+        round: 0,
+        sourceSkill: "to-tasks-revise",
+        preserveTasksDraftIds: true,
+      },
+    );
+
+    const tip = artifacts.readTasksDraftTip(cardId, 0);
+    expect(tip.tasks.map((t) => t.id)).toEqual(["keep-a", "keep-b"]);
+    expect(tip.tasks[0]!.title).toBe("API revised");
+    expect(artifacts.tasksDraftVersionCount(cardId, 0)).toBe(2);
+
+    fs.rmSync(storeRoot, { recursive: true, force: true });
+  });
+
   it("harvests a project-store spec exchange file into an indexed durable artifact", () => {
     cardWithSpecStep();
     const storeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-ps-"));

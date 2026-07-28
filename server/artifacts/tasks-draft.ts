@@ -92,15 +92,32 @@ export function parseTasksDraftExchange(raw: unknown): TasksDraftExchange {
   return result.data;
 }
 
+export type NormalizeTasksDraftOptions = {
+  /**
+   * Prior tip — when present, reuse ids by index (revise harvest).
+   * New / extra exchange slots get fresh ids.
+   */
+  previousTip?: TasksDraft;
+  assignId?: () => string;
+};
+
 /**
  * Map exchange-style `depends_on` indices → stable `id` / `dependsOn`.
- * Assigns new ids for every task (first harvest / Create Tasks).
+ * Without `previousTip`, assigns new ids for every task (Create Tasks).
+ * With `previousTip`, preserves ids at matching indices (side-chat revise).
  */
 export function normalizeTasksDraft(
   exchange: TasksDraftExchange,
-  assignId: () => string = () => nanoid(10),
+  assignIdOrOpts: (() => string) | NormalizeTasksDraftOptions = () =>
+    nanoid(10),
 ): TasksDraft {
-  const ids = exchange.tasks.map(() => assignId());
+  const opts: NormalizeTasksDraftOptions =
+    typeof assignIdOrOpts === "function"
+      ? { assignId: assignIdOrOpts }
+      : assignIdOrOpts;
+  const assignId = opts.assignId ?? (() => nanoid(10));
+  const previous = opts.previousTip?.tasks ?? [];
+  const ids = exchange.tasks.map((_, i) => previous[i]?.id ?? assignId());
   const tasks: TasksDraftTask[] = exchange.tasks.map((task, i) => ({
     id: ids[i]!,
     title: task.title,
@@ -131,14 +148,17 @@ export function deleteTaskFromDraft(
 }
 
 /** Harvest/validate hook: parse exchange JSON string, then normalize to tip shape. */
-export function validateAndNormalizeExchange(raw: string): TasksDraft {
+export function validateAndNormalizeExchange(
+  raw: string,
+  opts?: NormalizeTasksDraftOptions,
+): TasksDraft {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
     throw new TasksDraftError("tasks-draft exchange is not valid JSON");
   }
-  return normalizeTasksDraft(parseTasksDraftExchange(parsed));
+  return normalizeTasksDraft(parseTasksDraftExchange(parsed), opts);
 }
 
 function hasCycle(tasks: TasksDraftTask[]): boolean {

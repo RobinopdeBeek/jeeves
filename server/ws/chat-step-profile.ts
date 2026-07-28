@@ -1,31 +1,45 @@
 import path from "node:path";
 import type { ArtifactStore } from "../artifacts/store.js";
+import type { TasksDraft } from "../artifacts/tasks-draft.js";
 import { finalizeSpecAssistTurn } from "../chat/finalize-spec-assist.js";
+import { finalizeTasksAssistTurn } from "../chat/finalize-tasks-assist.js";
 import type { StepKey } from "../pipelines.js";
 import { projectStoreExchangePath } from "../project-store.js";
 import type { InteractivePermissionPolicy } from "./chat.js";
 import { buildGrillOpeningPrompt } from "./grill-prompt.js";
 import { buildSpecAssistOpeningPrompt } from "./spec-assist-prompt.js";
+import { buildTasksReviseOpeningPrompt } from "./to-tasks-revise.js";
 
 export type OpeningPromptCard = { title: string; description: string };
+
+export type ChatTurnRevisionMessage =
+  | { type: "spec-revised"; markdown: string }
+  | {
+      type: "tasks-revised";
+      draft: TasksDraft;
+      versionCount: number;
+    };
 
 export type ChatStepProfile = {
   interactivePermissionPolicy?: InteractivePermissionPolicy;
   /** Spec assist needs the settled Grill session in its opening prompt. */
   needsGrillSession?: boolean;
+  /** Tasks revise needs the Spec markdown in its opening prompt. */
+  needsSpec?: boolean;
   resolveOpeningPrompt: (ctx: {
     card: OpeningPromptCard;
     cwd: string;
     promptsRoot: string;
     cardId: string;
     grillSession?: string;
+    spec?: string;
   }) => string;
-  /** Optional turn-finalizer (e.g. Spec-assist harvest). */
+  /** Optional turn-finalizer (e.g. Spec / Tasks assist harvest). */
   onTurnComplete?: (ctx: {
     cardId: string;
     artifacts: ArtifactStore;
     storeRoot: string;
-    send: (msg: { type: "spec-revised"; markdown: string }) => void;
+    send: (msg: ChatTurnRevisionMessage) => void;
     sendError: (error: string) => void;
     isClosed: () => boolean;
   }) => void;
@@ -70,9 +84,41 @@ const specProfile: ChatStepProfile = {
   },
 };
 
+const tasksProfile: ChatStepProfile = {
+  interactivePermissionPolicy: "cursor-like",
+  needsSpec: true,
+  resolveOpeningPrompt: ({ card, cwd, promptsRoot, cardId, spec }) =>
+    buildTasksReviseOpeningPrompt(
+      {
+        title: card.title,
+        description: card.description,
+        contextPath: path.join(cwd, "CONTEXT.md"),
+        spec: spec ?? "",
+        exchangePath: projectStoreExchangePath(cardId, "tasks-draft.json"),
+      },
+      promptsRoot,
+    ),
+  onTurnComplete: ({ cardId, artifacts, storeRoot, send, sendError, isClosed }) => {
+    try {
+      const result = finalizeTasksAssistTurn({ artifacts, storeRoot, cardId });
+      if (result.kind === "revision" && !isClosed()) {
+        send({
+          type: "tasks-revised",
+          draft: result.draft,
+          versionCount: result.versionCount,
+        });
+      }
+    } catch (err) {
+      if (isClosed()) return;
+      sendError(err instanceof Error ? err.message : String(err));
+    }
+  },
+};
+
 const PROFILES: Partial<Record<StepKey, ChatStepProfile>> = {
   grill: grillProfile,
   spec: specProfile,
+  tasks: tasksProfile,
 };
 
 /** Per-step chat policy — openChat / ChatConnection stay framing-only. */

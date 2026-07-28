@@ -456,4 +456,75 @@ describe("AcpChatTransport", () => {
 
     expect(revisions).toEqual(["# Spec\n\nRevised by assist\n"]);
   });
+
+  it("sends Tasks tip JSON as background context, not in the visible user text", async () => {
+    const transport = new AcpChatTransport({
+      cardId: "c1",
+      stepKey: "tasks",
+      getCurrentTasksDraftJson: () => '{\n  "tasks": []\n}',
+    });
+
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({
+      type: "ready",
+      messages: [
+        { id: "a0", role: "assistant", parts: [{ type: "text", text: "Ready" }] },
+      ],
+      streaming: false,
+    });
+    await connectP;
+    ws.deliver({ type: "session", status: "open", streaming: false });
+
+    const stream = await transport.sendMessages({
+      messages: [userMessage("Split the API task")],
+      abortSignal: undefined as unknown as AbortSignal,
+    } as Parameters<AcpChatTransport["sendMessages"]>[0]);
+    void readAll(stream);
+
+    const sent = ws.sent.map(
+      (s) =>
+        JSON.parse(s) as {
+          type: string;
+          text?: string;
+          currentTasksDraftJson?: string;
+        },
+    );
+    const userMsg = sent.find((m) => m.type === "user-message");
+    expect(userMsg?.text).toBe("Split the API task");
+    expect(userMsg?.currentTasksDraftJson).toContain('"tasks": []');
+    expect(userMsg?.text).not.toContain("tasks-draft tip JSON");
+  });
+
+  it("notifies onTasksRevised when the server harvests a Tasks revision", async () => {
+    const revisions: Array<{ tasks: Array<{ id: string }> }> = [];
+    const transport = new AcpChatTransport({
+      cardId: "c1",
+      stepKey: "tasks",
+      onTasksRevised: (draft) => revisions.push(draft),
+    });
+
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({ type: "ready", messages: [], streaming: false });
+    await connectP;
+    ws.deliver({ type: "session", status: "open", streaming: false });
+
+    ws.deliver({
+      type: "tasks-revised",
+      draft: {
+        tasks: [
+          { id: "a", title: "API", description: "", dependsOn: [] },
+        ],
+      },
+      versionCount: 2,
+    });
+
+    expect(revisions).toEqual([
+      {
+        tasks: [{ id: "a", title: "API", description: "", dependsOn: [] }],
+        versionCount: 2,
+      },
+    ]);
+  });
 });

@@ -3,6 +3,7 @@ import { useAISDKRuntime } from "@assistant-ui/react-ai-sdk";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ChatTransport, UIMessage } from "ai";
+import type { TasksDraft } from "@/lib/api";
 import {
   AcpChatTransport,
   type ChatConnectionState,
@@ -14,6 +15,8 @@ export interface UseAcpChatOptions {
   round?: number;
   getCurrentSpecMarkdown?: () => string;
   onSpecRevised?: (markdown: string) => void;
+  getCurrentTasksDraftJson?: () => string;
+  onTasksRevised?: (draft: TasksDraft) => void;
   onStreamingChange?: (streaming: boolean) => void;
 }
 
@@ -53,6 +56,8 @@ export function useAcpChat({
   round = 0,
   getCurrentSpecMarkdown,
   onSpecRevised,
+  getCurrentTasksDraftJson,
+  onTasksRevised,
   onStreamingChange,
 }: UseAcpChatOptions): AcpChatState {
   const [state, setState] = useState<AcpChatState>({ status: "connecting" });
@@ -60,9 +65,14 @@ export function useAcpChat({
   getSpecRef.current = getCurrentSpecMarkdown;
   const onRevisedRef = useRef(onSpecRevised);
   onRevisedRef.current = onSpecRevised;
+  const getTasksRef = useRef(getCurrentTasksDraftJson);
+  getTasksRef.current = getCurrentTasksDraftJson;
+  const onTasksRevisedRef = useRef(onTasksRevised);
+  onTasksRevisedRef.current = onTasksRevised;
   const onStreamingRef = useRef(onStreamingChange);
   onStreamingRef.current = onStreamingChange;
   const injectSpec = getCurrentSpecMarkdown != null;
+  const injectTasks = getCurrentTasksDraftJson != null;
 
   useEffect(() => {
     let cancelled = false;
@@ -76,6 +86,10 @@ export function useAcpChat({
         ? () => getSpecRef.current?.() ?? ""
         : undefined,
       onSpecRevised: (markdown) => onRevisedRef.current?.(markdown),
+      getCurrentTasksDraftJson: injectTasks
+        ? () => getTasksRef.current?.() ?? ""
+        : undefined,
+      onTasksRevised: (draft) => onTasksRevisedRef.current?.(draft),
       onStreamingChange: (streaming) => onStreamingRef.current?.(streaming),
       onConnectionChange: (connection) => {
         if (cancelled) return;
@@ -153,7 +167,7 @@ export function useAcpChat({
       // CONNECTING-safe close waits for open before closing (no setTimeout defer).
       transport.close();
     };
-  }, [cardId, stepKey, round, injectSpec]);
+  }, [cardId, stepKey, round, injectSpec, injectTasks]);
 
   return state;
 }

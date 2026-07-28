@@ -1,12 +1,22 @@
 import {
   IconArrowBackUp,
   IconArrowForwardUp,
+  IconLayoutSidebarRightCollapse,
+  IconLoader2,
   IconPlus,
   IconTrash,
   IconX,
 } from "@tabler/icons-react";
 import { nanoid } from "nanoid";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { UIMessage } from "ai";
+import { Thread, ThreadShell } from "@/components/assistant-ui/thread";
+import { AcpChatProvider, useAcpChat } from "@/hooks/useAcpChat";
+import { ReconnectingBanner } from "@/components/chat/ReconnectingBanner";
+import { PermissionDataUI } from "@/components/grill/PermissionPartView";
+import { ReadOnlyTranscript } from "@/components/grill/ReadOnlyTranscript";
+import { GrillTransportContext } from "@/components/grill/transport-context";
+import { Logo } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -18,6 +28,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cardTileVariants } from "@/components/ui/pipeline-status";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { api, type TasksDraft, type TasksDraftTask } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { StepPanelProps } from "./step-panel-types";
@@ -28,8 +44,8 @@ type InspectorState =
   | null;
 
 /**
- * Tasks shaping surface: tip `tasks-draft` tiles + inspector (ADR 0014).
- * Side-chat arrives in slice 7C — the slot is reserved and stacks below on narrow viewports.
+ * Tasks shaping surface: tip `tasks-draft` tiles + inspector + AI side-chat
+ * (ADR 0014; Spec-assist twin for revise / Q&A).
  */
 export function StepTasks({ card }: StepPanelProps) {
   const tasksStep = card.steps.find((s) => s.key === "tasks");
@@ -40,6 +56,10 @@ export function StepTasks({ card }: StepPanelProps) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [streaming, setStreaming] = useState(false);
+  const [displaced, setDisplaced] = useState(false);
+  const [assistOpen, setAssistOpen] = useState(true);
+  const [assistUnread, setAssistUnread] = useState(false);
   const [versionCount, setVersionCount] = useState(0);
   const [redoStack, setRedoStack] = useState<TasksDraft[]>([]);
   const [inspector, setInspector] = useState<InspectorState>(null);
@@ -48,6 +68,12 @@ export function StepTasks({ card }: StepPanelProps) {
     description: "",
     dependsOn: [] as string[],
   });
+
+  const tipRef = useRef(tip);
+  tipRef.current = tip;
+  const assistOpenRef = useRef(assistOpen);
+  assistOpenRef.current = assistOpen;
+  const wasStreamingRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -76,7 +102,56 @@ export function StepTasks({ card }: StepPanelProps) {
     };
   }, [card.id]);
 
+  const mutationsLocked = !editable || busy || streaming || displaced;
+
+  function applyRevision(draft: TasksDraft) {
+    setTip({ tasks: draft.tasks });
+    if (draft.versionCount != null) {
+      setVersionCount(draft.versionCount);
+    } else {
+      setVersionCount((c) => c + 1);
+    }
+    setRedoStack([]);
+    setActionError(null);
+    setInspector(null);
+  }
+
+  async function refreshTipFromArtifact() {
+    try {
+      const latest = await api.getTasksDraft(card.id);
+      const current = tipRef.current;
+      const same =
+        latest.tasks.length === current.tasks.length &&
+        latest.tasks.every(
+          (t, i) =>
+            t.id === current.tasks[i]?.id &&
+            t.title === current.tasks[i]?.title &&
+            t.description === current.tasks[i]?.description &&
+            JSON.stringify(t.dependsOn) ===
+              JSON.stringify(current.tasks[i]?.dependsOn),
+        );
+      if (same) {
+        if (latest.versionCount != null) setVersionCount(latest.versionCount);
+        return;
+      }
+      applyRevision(latest);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function setAssistStreaming(next: boolean) {
+    if (!next && wasStreamingRef.current && !assistOpenRef.current) {
+      setAssistUnread(true);
+    }
+    const turnEnded = wasStreamingRef.current && !next;
+    wasStreamingRef.current = next;
+    setStreaming(next);
+    if (turnEnded) void refreshTipFromArtifact();
+  }
+
   function openEdit(task: TasksDraftTask) {
+    if (mutationsLocked) return;
     setActionError(null);
     setInspector({ mode: "edit", taskId: task.id });
     setForm({
@@ -87,6 +162,7 @@ export function StepTasks({ card }: StepPanelProps) {
   }
 
   function openAdd() {
+    if (mutationsLocked) return;
     setActionError(null);
     const draft: TasksDraftTask = {
       id: nanoid(10),
@@ -103,7 +179,7 @@ export function StepTasks({ card }: StepPanelProps) {
   }
 
   async function saveInspector() {
-    if (!inspector || busy) return;
+    if (!inspector || mutationsLocked) return;
     const title = form.title.trim();
     if (!title) {
       setActionError("Title is required");
@@ -135,7 +211,7 @@ export function StepTasks({ card }: StepPanelProps) {
   }
 
   async function deleteTask(taskId: string) {
-    if (!editable || busy) return;
+    if (mutationsLocked) return;
     setBusy(true);
     setActionError(null);
     try {
@@ -154,7 +230,7 @@ export function StepTasks({ card }: StepPanelProps) {
   }
 
   async function undo() {
-    if (!editable || busy || versionCount < 2) return;
+    if (mutationsLocked || versionCount < 2) return;
     setBusy(true);
     setActionError(null);
     try {
@@ -176,7 +252,7 @@ export function StepTasks({ card }: StepPanelProps) {
   }
 
   async function redo() {
-    if (!editable || busy || redoStack.length === 0) return;
+    if (mutationsLocked || redoStack.length === 0) return;
     const next = redoStack[redoStack.length - 1]!;
     setBusy(true);
     setActionError(null);
@@ -231,6 +307,15 @@ export function StepTasks({ card }: StepPanelProps) {
         : null;
   const blockerCandidates = tip.tasks.filter((t) => t.id !== editingId);
 
+  function openAssist() {
+    setAssistOpen(true);
+    setAssistUnread(false);
+  }
+
+  function closeAssist() {
+    setAssistOpen(false);
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
       {actionError ? (
@@ -239,11 +324,31 @@ export function StepTasks({ card }: StepPanelProps) {
         </p>
       ) : null}
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 md:flex-row">
+      {displaced ? (
+        <p
+          className="border bg-muted px-3 py-2 text-center text-xs text-muted-foreground"
+          role="status"
+        >
+          Session continued elsewhere — tip is read-only here
+        </p>
+      ) : null}
+
+      <div
+        className={cn(
+          "relative flex min-h-0 flex-1 flex-col gap-4",
+          assistOpen && editable && "md:flex-row",
+        )}
+      >
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
           {editable ? (
             <div className="flex flex-wrap items-center gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={openAdd} disabled={busy}>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={openAdd}
+                disabled={mutationsLocked}
+              >
                 <IconPlus data-icon="inline-start" />
                 Add task
               </Button>
@@ -252,7 +357,7 @@ export function StepTasks({ card }: StepPanelProps) {
                 variant="ghost"
                 size="sm"
                 onClick={() => void undo()}
-                disabled={busy || versionCount < 2}
+                disabled={mutationsLocked || versionCount < 2}
                 aria-label="Undo"
               >
                 <IconArrowBackUp data-icon="inline-start" />
@@ -263,7 +368,7 @@ export function StepTasks({ card }: StepPanelProps) {
                 variant="ghost"
                 size="sm"
                 onClick={() => void redo()}
-                disabled={busy || redoStack.length === 0}
+                disabled={mutationsLocked || redoStack.length === 0}
                 aria-label="Redo"
               >
                 <IconArrowForwardUp data-icon="inline-start" />
@@ -289,6 +394,7 @@ export function StepTasks({ card }: StepPanelProps) {
                       type="button"
                       className={cn(cardTileVariants({ attention: false }), "w-full")}
                       onClick={() => openEdit(task)}
+                      disabled={mutationsLocked}
                     >
                       <div className="text-sm font-medium">
                         {index + 1}.{" "}
@@ -315,7 +421,7 @@ export function StepTasks({ card }: StepPanelProps) {
                         size="icon-xs"
                         className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
                         aria-label={`Delete ${task.title || "task"}`}
-                        disabled={busy}
+                        disabled={mutationsLocked}
                         onClick={(e) => {
                           e.stopPropagation();
                           void deleteTask(task.id);
@@ -331,16 +437,78 @@ export function StepTasks({ card }: StepPanelProps) {
           )}
         </div>
 
-        {/* Side-chat slot — slice 7C. Stacked under the list on narrow viewports. */}
-        <aside
-          className="flex min-h-40 shrink-0 flex-col overflow-hidden rounded-md border bg-background md:w-96"
-          aria-label="Tasks assist"
-        >
-          <div className="border-b px-3 py-2 text-sm font-medium">Jeeves</div>
-          <div className="flex flex-1 items-center justify-center p-3 text-center text-sm text-muted-foreground">
-            Tasks assist coming soon.
-          </div>
-        </aside>
+        {editable ? (
+          <TooltipProvider>
+            {assistOpen ? (
+              <button
+                type="button"
+                className="absolute inset-0 z-40 bg-foreground/20 md:hidden"
+                aria-label="Hide Tasks assist"
+                onClick={closeAssist}
+              />
+            ) : (
+              <AssistLauncherFab
+                streaming={streaming}
+                unread={assistUnread}
+                onExpand={openAssist}
+              />
+            )}
+            <aside
+              className={cn(
+                "flex min-h-40 shrink-0 flex-col overflow-hidden rounded-md border bg-background",
+                assistOpen
+                  ? "relative z-50 shadow-lg md:static md:z-auto md:w-96 md:shadow-none"
+                  : "hidden",
+              )}
+              aria-label="Tasks assist"
+            >
+              <div className="flex items-center gap-1 border-b px-2 py-1">
+                <span className="min-w-0 flex-1 truncate px-1 text-sm font-medium">
+                  Jeeves
+                </span>
+                {streaming ? (
+                  <IconLoader2
+                    className="size-3.5 shrink-0 animate-spin text-pipeline-ai"
+                    aria-label="Tasks assist is working"
+                  />
+                ) : null}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-expanded={true}
+                      aria-controls="tasks-assist-panel"
+                      aria-label="Hide Tasks assist"
+                      onClick={closeAssist}
+                    >
+                      <IconX className="md:hidden" />
+                      <IconLayoutSidebarRightCollapse className="hidden md:block" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Hide Tasks assist</TooltipContent>
+                </Tooltip>
+              </div>
+              {/* Keep chat mounted while collapsed so the ACP session stays alive. */}
+              <div
+                id="tasks-assist-panel"
+                className="flex min-h-0 flex-1 flex-col overflow-hidden"
+              >
+                <TasksAssistChat
+                  cardId={card.id}
+                  getCurrentTasksDraftJson={() =>
+                    JSON.stringify({ tasks: tipRef.current.tasks }, null, 2)
+                  }
+                  onTasksRevised={applyRevision}
+                  onStreamingChange={setAssistStreaming}
+                  onDisplaced={() => setDisplaced(true)}
+                  composerLocked={streaming}
+                />
+              </div>
+            </aside>
+          </TooltipProvider>
+        ) : null}
       </div>
 
       <Dialog
@@ -363,7 +531,7 @@ export function StepTasks({ card }: StepPanelProps) {
                 value={form.title}
                 onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
                 placeholder="Vertical slice title"
-                disabled={!editable || busy}
+                disabled={!editable || busy || streaming}
                 autoFocus
               />
             </label>
@@ -382,7 +550,7 @@ export function StepTasks({ card }: StepPanelProps) {
                         type="button"
                         size="sm"
                         variant={selected ? "default" : "outline"}
-                        disabled={!editable || busy}
+                        disabled={!editable || busy || streaming}
                         onClick={() => toggleDepend(t.id)}
                       >
                         {t.title || "Untitled"}
@@ -403,7 +571,7 @@ export function StepTasks({ card }: StepPanelProps) {
                 }
                 placeholder="Acceptance criteria and file hints…"
                 rows={6}
-                disabled={!editable || busy}
+                disabled={!editable || busy || streaming}
               />
             </label>
           </div>
@@ -414,7 +582,7 @@ export function StepTasks({ card }: StepPanelProps) {
                 type="button"
                 variant="destructive"
                 className="sm:mr-auto"
-                disabled={busy}
+                disabled={busy || streaming}
                 onClick={() => void deleteTask(inspector.taskId)}
               >
                 <IconTrash data-icon="inline-start" />
@@ -432,7 +600,7 @@ export function StepTasks({ card }: StepPanelProps) {
             {editable ? (
               <Button
                 type="button"
-                disabled={busy}
+                disabled={busy || streaming}
                 onClick={() => void saveInspector()}
               >
                 Save
@@ -441,6 +609,166 @@ export function StepTasks({ card }: StepPanelProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function AssistLauncherFab({
+  streaming,
+  unread,
+  onExpand,
+}: {
+  streaming: boolean;
+  unread: boolean;
+  onExpand: () => void;
+}) {
+  const statusLabel = streaming
+    ? "Tasks assist is working"
+    : unread
+      ? "New Tasks assist reply"
+      : "Show Tasks assist";
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          variant="launcher"
+          size="icon-launcher"
+          onClick={onExpand}
+          aria-expanded={false}
+          aria-controls="tasks-assist-panel"
+          aria-label={statusLabel}
+          className="absolute right-3 bottom-3 z-30"
+        >
+          <Logo className="size-20" />
+          {streaming ? (
+            <span className="pointer-events-none absolute -top-0.5 -right-0.5 flex size-6 items-center justify-center rounded-full bg-background shadow-sm">
+              <IconLoader2
+                className="size-4 animate-spin text-pipeline-ai"
+                aria-hidden
+              />
+            </span>
+          ) : unread ? (
+            <span
+              className="pointer-events-none absolute top-1 right-1 size-3 rounded-full bg-pipeline-user ring-2 ring-white"
+              aria-hidden
+            />
+          ) : null}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="left">{statusLabel}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function TasksAssistChat({
+  cardId,
+  getCurrentTasksDraftJson,
+  onTasksRevised,
+  onStreamingChange,
+  onDisplaced,
+  composerLocked,
+}: {
+  cardId: string;
+  getCurrentTasksDraftJson: () => string;
+  onTasksRevised: (draft: TasksDraft) => void;
+  onStreamingChange: (streaming: boolean) => void;
+  onDisplaced: () => void;
+  composerLocked: boolean;
+}) {
+  const chat = useAcpChat({
+    cardId,
+    stepKey: "tasks",
+    round: 0,
+    getCurrentTasksDraftJson,
+    onTasksRevised,
+    onStreamingChange,
+  });
+
+  const displacedNotified = useRef(false);
+  useEffect(() => {
+    if (chat.status === "displaced" && !displacedNotified.current) {
+      displacedNotified.current = true;
+      onDisplaced();
+    }
+  }, [chat.status, onDisplaced]);
+
+  if (chat.status === "error") {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-2 p-3 text-center">
+        <p className="text-sm text-destructive">Could not start Tasks assist</p>
+        <p className="text-xs text-muted-foreground">{chat.error}</p>
+      </div>
+    );
+  }
+
+  if (chat.status === "connecting") {
+    return <ThreadShell />;
+  }
+
+  if (chat.status === "displaced") {
+    return (
+      <DisplacedTasksAssist
+        cardId={cardId}
+        reason={chat.reason}
+        fallbackMessages={chat.messages}
+      />
+    );
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {chat.connection === "reconnecting" ? <ReconnectingBanner /> : null}
+      <AcpChatProvider
+        key={chat.epoch}
+        transport={chat.transport}
+        messages={chat.messages}
+      >
+        <GrillTransportContext.Provider value={chat.transport}>
+          <PermissionDataUI />
+          <Thread
+            sessionOpen={chat.sessionOpen && !composerLocked}
+            placeholder="Ask or request a change…"
+            openingPlaceholder={
+              composerLocked
+                ? "Tasks assist is working…"
+                : "Tasks assist starting…"
+            }
+          />
+        </GrillTransportContext.Provider>
+      </AcpChatProvider>
+    </div>
+  );
+}
+
+function DisplacedTasksAssist({
+  cardId,
+  reason,
+  fallbackMessages,
+}: {
+  cardId: string;
+  reason: string;
+  fallbackMessages: UIMessage[];
+}) {
+  const banner =
+    reason === "session continued elsewhere"
+      ? "Session continued elsewhere"
+      : reason;
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div
+        className="border-b bg-muted px-3 py-2 text-center text-xs text-muted-foreground"
+        role="status"
+      >
+        {banner}
+      </div>
+      <ReadOnlyTranscript
+        cardId={cardId}
+        stepKey="tasks"
+        fallbackMessages={fallbackMessages}
+      />
     </div>
   );
 }

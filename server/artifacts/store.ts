@@ -52,6 +52,11 @@ export interface HarvestContext {
   round: number;
   sourceSkill: string;
   gitSha?: string;
+  /**
+   * Tasks-draft revise: reuse tip ids by index when normalizing exchange JSON.
+   * Create Tasks / first harvest leave this unset (assign all new ids).
+   */
+  preserveTasksDraftIds?: boolean;
 }
 
 export interface SaveArtifactInput {
@@ -396,7 +401,13 @@ export class ArtifactStore {
         // Append-only tip versions — normalize exchange indices → stable ids.
         let draft: TasksDraft;
         try {
-          draft = validateAndNormalizeExchange(raw);
+          const previousTip = ctx.preserveTasksDraftIds
+            ? this.readTasksDraftTip(ctx.cardId, ctx.round)
+            : undefined;
+          draft = validateAndNormalizeExchange(
+            raw,
+            previousTip ? { previousTip } : undefined,
+          );
         } catch (err) {
           throw new ArtifactStoreError(
             err instanceof Error ? err.message : String(err),

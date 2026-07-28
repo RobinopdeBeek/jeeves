@@ -48,7 +48,7 @@ export interface WarmSessionHandle {
   /** Send a user message; chunks arrive via attach / onChunk buffering. */
   sendMessage(
     text: string,
-    opts?: { currentSpecMarkdown?: string },
+    opts?: { currentSpecMarkdown?: string; currentTasksDraftJson?: string },
   ): Promise<void>;
   respondToPermission(requestId: string, optionId: string): void;
   getPendingPermissionIds(): string[];

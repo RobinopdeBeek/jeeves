@@ -335,6 +335,63 @@ describe("AcpBridge", () => {
     expect(promptText(process, 0)).toContain("Draft body");
   });
 
+  it("keeps Tasks tip JSON out of the transcript while framing the agent prompt", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-tasks");
+    const transcripts: UIMessage[][] = [];
+
+    const bridge = new AcpBridge({
+      spawn: () => process,
+      onTranscript: (messages) => transcripts.push(messages),
+    });
+    bridge.attach(collectingSubscriber());
+
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: "unused",
+      history: [
+        {
+          id: "a1",
+          role: "assistant",
+          parts: [{ type: "text", text: "Here for you if you need me." }],
+        },
+      ],
+    });
+
+    const replyPromise = bridge.sendMessage("Split the API task", {
+      currentTasksDraftJson: '{\n  "tasks": []\n}',
+    });
+    await viWaitFor(() => process.prompts().length === 1);
+    const promptReq = process.promptRequest();
+    process.emit({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "sess-tasks",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "Updated." },
+        },
+      },
+    });
+    process.emit({
+      jsonrpc: "2.0",
+      id: promptReq.id,
+      result: { stopReason: "end_turn" },
+    });
+    await replyPromise;
+
+    const userTurn = transcripts.at(-1)?.find((m) => m.role === "user");
+    expect(userTurn?.parts).toEqual([
+      { type: "text", text: "Split the API task" },
+    ]);
+    expect(promptText(process, 0)).toContain("Split the API task");
+    expect(promptText(process, 0)).toContain(
+      "## Current tasks-draft tip JSON (from editor)",
+    );
+    expect(promptText(process, 0)).toContain('"tasks": []');
+  });
+
   it("projects session/request_permission into a data-permission part and round-trips approve/deny", async () => {
     const process = new MockAcpProcess();
     process.autoHandshake("sess-perm");

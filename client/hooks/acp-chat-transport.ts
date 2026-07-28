@@ -1,5 +1,6 @@
 import type { ChatTransport, UIMessage, UIMessageChunk } from "ai";
 import type { WsClientMessage, WsServerMessage } from "@shared/chat-ws";
+import type { TasksDraft } from "@/lib/api";
 
 export type { PermissionOptionPart, PermissionRequestData } from "@shared/chat-ws";
 
@@ -19,6 +20,10 @@ export interface AcpChatTransportOptions {
   getCurrentSpecMarkdown?: () => string;
   /** Spec side-chat: host harvested a revision — replace editor content. */
   onSpecRevised?: (markdown: string) => void;
+  /** Tasks side-chat: inject live tip JSON into the agent prompt (not the UI). */
+  getCurrentTasksDraftJson?: () => string;
+  /** Tasks side-chat: host harvested a revision — refresh tip tiles. */
+  onTasksRevised?: (draft: TasksDraft & { versionCount?: number }) => void;
   /** Notify when a turn starts/ends streaming (editor/composer lock). */
   onStreamingChange?: (streaming: boolean) => void;
   /** Socket health changed (reconnect banner, composer gating). */
@@ -195,11 +200,13 @@ export class AcpChatTransport {
     this.beginTurn();
     const stream = this.openChunkStream(abortSignal);
     const currentSpecMarkdown = this.options.getCurrentSpecMarkdown?.();
+    const currentTasksDraftJson = this.options.getCurrentTasksDraftJson?.();
     try {
       this.sendClient({
         type: "user-message",
         text,
         ...(currentSpecMarkdown != null ? { currentSpecMarkdown } : {}),
+        ...(currentTasksDraftJson != null ? { currentTasksDraftJson } : {}),
       });
     } catch (err) {
       this.abandonTurn();
@@ -724,6 +731,12 @@ export class AcpChatTransport {
       }
       case "spec-revised":
         this.options.onSpecRevised?.(msg.markdown);
+        break;
+      case "tasks-revised":
+        this.options.onTasksRevised?.({
+          ...msg.draft,
+          versionCount: msg.versionCount,
+        });
         break;
     }
   }

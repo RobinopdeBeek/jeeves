@@ -92,6 +92,33 @@ describe("normalizeTasksDraft", () => {
     expect(tip.tasks[0]!.title).toBe("Only");
     expect(tip.tasks[0]!.id).toBeTruthy();
   });
+
+  it("preserves tip ids by index on revise normalize", () => {
+    const tip = normalizeTasksDraft(
+      {
+        tasks: [
+          { title: "API (revised)", description: "api", depends_on: [] },
+          { title: "UI", description: "ui", depends_on: [0] },
+          { title: "New", description: "", depends_on: [] },
+        ],
+      },
+      {
+        previousTip: {
+          tasks: [
+            { id: "keep-a", title: "API", description: "", dependsOn: [] },
+            { id: "keep-b", title: "UI", description: "", dependsOn: ["keep-a"] },
+          ],
+        },
+        assignId: (() => {
+          let n = 0;
+          return () => `new-${n++}`;
+        })(),
+      },
+    );
+    expect(tip.tasks.map((t) => t.id)).toEqual(["keep-a", "keep-b", "new-0"]);
+    expect(tip.tasks[1]!.dependsOn).toEqual(["keep-a"]);
+    expect(tip.tasks[0]!.title).toBe("API (revised)");
+  });
 });
 
 describe("deleteTaskFromDraft", () => {

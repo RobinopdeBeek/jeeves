@@ -5,6 +5,7 @@ import type {
   PermissionRequestData,
 } from "../../shared/chat-ws.js";
 import { frameSpecAssistUserMessage } from "../../shared/spec-assist-frame.js";
+import { frameTasksAssistUserMessage } from "../../shared/tasks-assist-frame.js";
 import {
   decideHeadlessPermission,
   decideInteractivePermission,
@@ -245,12 +246,13 @@ export class AcpBridge {
   /** Send a user message; chunks arrive via attach / onChunk buffering. */
   async sendMessage(
     text: string,
-    opts?: { currentSpecMarkdown?: string },
+    opts?: { currentSpecMarkdown?: string; currentTasksDraftJson?: string },
   ): Promise<void> {
     if (!this.sessionId) throw new Error("session not open");
     await this.runPromptTurn(text, {
       recordUser: true,
       currentSpecMarkdown: opts?.currentSpecMarkdown,
+      currentTasksDraftJson: opts?.currentTasksDraftJson,
     });
   }
 
@@ -366,7 +368,11 @@ export class AcpBridge {
 
   private async runPromptTurn(
     text: string,
-    opts: { recordUser: boolean; currentSpecMarkdown?: string },
+    opts: {
+      recordUser: boolean;
+      currentSpecMarkdown?: string;
+      currentTasksDraftJson?: string;
+    },
   ): Promise<void> {
     if (!this.sessionId || !this.process) throw new Error("session not open");
 
@@ -392,11 +398,13 @@ export class AcpBridge {
     this.pushChunk({ type: "start", messageId });
     this.pushChunk({ type: "text-start", id: textId });
 
-    // Spec body (if any) is agent-prompt context only — never stored in transcript.
+    // Live draft (if any) is agent-prompt context only — never stored in transcript.
     const agentText =
-      opts.currentSpecMarkdown != null
-        ? frameSpecAssistUserMessage(text, opts.currentSpecMarkdown)
-        : text;
+      opts.currentTasksDraftJson != null
+        ? frameTasksAssistUserMessage(text, opts.currentTasksDraftJson)
+        : opts.currentSpecMarkdown != null
+          ? frameSpecAssistUserMessage(text, opts.currentSpecMarkdown)
+          : text;
 
     let promptText = agentText;
     if (opts.recordUser) {

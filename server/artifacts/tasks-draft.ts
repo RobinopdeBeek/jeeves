@@ -5,6 +5,8 @@ import { z } from "zod";
 export const TasksDraftExchangeSchema = z.object({
   tasks: z.array(
     z.object({
+      /** Tip id from a prior tip — required for revise id preserve; omit for new tasks. */
+      id: z.string().min(1).optional(),
       title: z.string().min(1, "title must be non-empty"),
       description: z.string().default(""),
       depends_on: z.array(z.number().int().nonnegative()).default([]),
@@ -94,8 +96,9 @@ export function parseTasksDraftExchange(raw: unknown): TasksDraftExchange {
 
 export type NormalizeTasksDraftOptions = {
   /**
-   * Prior tip — when present, reuse ids by index (revise harvest).
-   * New / extra exchange slots get fresh ids.
+   * Prior tip — when present, reuse ids only from explicit exchange `id`
+   * fields that already exist on the tip (revise harvest). Unknown ids reject.
+   * Slots without `id` get fresh ids (never by array index).
    */
   previousTip?: TasksDraft;
   assignId?: () => string;
@@ -104,7 +107,7 @@ export type NormalizeTasksDraftOptions = {
 /**
  * Map exchange-style `depends_on` indices → stable `id` / `dependsOn`.
  * Without `previousTip`, assigns new ids for every task (Create Tasks).
- * With `previousTip`, preserves ids at matching indices (side-chat revise).
+ * With `previousTip`, preserves ids only when the exchange carries a known tip id.
  */
 export function normalizeTasksDraft(
   exchange: TasksDraftExchange,
@@ -116,8 +119,24 @@ export function normalizeTasksDraft(
       ? { assignId: assignIdOrOpts }
       : assignIdOrOpts;
   const assignId = opts.assignId ?? (() => nanoid(10));
-  const previous = opts.previousTip?.tasks ?? [];
-  const ids = exchange.tasks.map((_, i) => previous[i]?.id ?? assignId());
+  const previousById = new Map(
+    (opts.previousTip?.tasks ?? []).map((t) => [t.id, t]),
+  );
+  const revising = previousById.size > 0;
+  const claimed = new Set<string>();
+  const ids = exchange.tasks.map((task) => {
+    if (!revising || task.id == null) {
+      return assignId();
+    }
+    if (!previousById.has(task.id)) {
+      throw new TasksDraftError(`unknown task id: ${task.id}`);
+    }
+    if (claimed.has(task.id)) {
+      throw new TasksDraftError(`duplicate task id in exchange: ${task.id}`);
+    }
+    claimed.add(task.id);
+    return task.id;
+  });
   const tasks: TasksDraftTask[] = exchange.tasks.map((task, i) => ({
     id: ids[i]!,
     title: task.title,

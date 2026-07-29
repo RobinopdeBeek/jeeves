@@ -22,10 +22,10 @@ describe("POST /:id/implement", () => {
 
   beforeEach(() => {
     db = openDb(":memory:");
-    store = new CardStore(db);
-    project = store.ensureDefaultProject("jeeves", "C:/repo");
     artifactRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-implement-"));
     artifacts = new ArtifactStore(db, artifactRoot);
+    store = new CardStore(db, artifacts);
+    project = store.ensureDefaultProject("jeeves", "C:/repo");
     events = new EventBus();
     closeCalls = [];
     const sessions = new ChatSessionRegistry();

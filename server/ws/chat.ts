@@ -4,8 +4,6 @@ import type {
   PermissionOptionPart,
   PermissionRequestData,
 } from "../../shared/chat-ws.js";
-import { frameSpecAssistUserMessage } from "../../shared/spec-assist-frame.js";
-import { frameTasksAssistUserMessage } from "../../shared/tasks-assist-frame.js";
 import {
   decideHeadlessPermission,
   decideInteractivePermission,
@@ -31,6 +29,8 @@ export interface AcpLiveCallbacks {
   onTranscript: (messages: UIMessage[]) => void;
   /** Fired when a prompt turn reaches idle (not mid-turn detached permission). */
   onTurnComplete?: () => void;
+  /** Profile-owned framing for live draft body → agent prompt. */
+  frameUserMessage?: (userText: string, liveDraftBody: string) => string;
 }
 
 export interface OpenSessionOptions {
@@ -147,6 +147,7 @@ export class AcpBridge {
       onStatus: deps.onStatus ?? (() => {}),
       onTranscript: deps.onTranscript ?? (() => {}),
       onTurnComplete: deps.onTurnComplete,
+      frameUserMessage: deps.frameUserMessage,
     };
   }
 
@@ -246,13 +247,12 @@ export class AcpBridge {
   /** Send a user message; chunks arrive via attach / onChunk buffering. */
   async sendMessage(
     text: string,
-    opts?: { currentSpecMarkdown?: string; currentTasksDraftJson?: string },
+    opts?: { liveDraftBody?: string },
   ): Promise<void> {
     if (!this.sessionId) throw new Error("session not open");
     await this.runPromptTurn(text, {
       recordUser: true,
-      currentSpecMarkdown: opts?.currentSpecMarkdown,
-      currentTasksDraftJson: opts?.currentTasksDraftJson,
+      liveDraftBody: opts?.liveDraftBody,
     });
   }
 
@@ -370,8 +370,7 @@ export class AcpBridge {
     text: string,
     opts: {
       recordUser: boolean;
-      currentSpecMarkdown?: string;
-      currentTasksDraftJson?: string;
+      liveDraftBody?: string;
     },
   ): Promise<void> {
     if (!this.sessionId || !this.process) throw new Error("session not open");
@@ -400,11 +399,9 @@ export class AcpBridge {
 
     // Live draft (if any) is agent-prompt context only — never stored in transcript.
     const agentText =
-      opts.currentTasksDraftJson != null
-        ? frameTasksAssistUserMessage(text, opts.currentTasksDraftJson)
-        : opts.currentSpecMarkdown != null
-          ? frameSpecAssistUserMessage(text, opts.currentSpecMarkdown)
-          : text;
+      opts.liveDraftBody != null && this.live.frameUserMessage
+        ? this.live.frameUserMessage(text, opts.liveDraftBody)
+        : text;
 
     let promptText = agentText;
     if (opts.recordUser) {

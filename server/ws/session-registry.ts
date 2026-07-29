@@ -29,6 +29,7 @@ export interface ColdAcquireParams {
   onStatus: AcpLiveCallbacks["onStatus"];
   onTranscript: AcpLiveCallbacks["onTranscript"];
   onTurnComplete?: AcpLiveCallbacks["onTurnComplete"];
+  frameUserMessage?: AcpLiveCallbacks["frameUserMessage"];
   /** Spec (and future) live chats: Cursor-like auto-approve. */
   interactivePermissionPolicy?: InteractivePermissionPolicy;
 }
@@ -48,7 +49,7 @@ export interface WarmSessionHandle {
   /** Send a user message; chunks arrive via attach / onChunk buffering. */
   sendMessage(
     text: string,
-    opts?: { currentSpecMarkdown?: string; currentTasksDraftJson?: string },
+    opts?: { liveDraftBody?: string },
   ): Promise<void>;
   respondToPermission(requestId: string, optionId: string): void;
   getPendingPermissionIds(): string[];
@@ -113,6 +114,7 @@ export class ChatSessionRegistry {
         onStatus: params.onStatus,
         onTranscript: params.onTranscript,
         onTurnComplete: params.onTurnComplete,
+        frameUserMessage: params.frameUserMessage,
       });
       return this.handleFor(existing, true);
     }
@@ -124,6 +126,7 @@ export class ChatSessionRegistry {
           onStatus: params.onStatus,
           onTranscript: params.onTranscript,
           onTurnComplete: params.onTurnComplete,
+          frameUserMessage: params.frameUserMessage,
         });
         return this.handleFor(again, true);
       }
@@ -133,6 +136,7 @@ export class ChatSessionRegistry {
         onStatus: params.onStatus,
         onTranscript: params.onTranscript,
         onTurnComplete: params.onTurnComplete,
+        frameUserMessage: params.frameUserMessage,
       });
       this.warm.set(id, bridge);
       await bridge.openSession({

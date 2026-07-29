@@ -285,7 +285,7 @@ describe("AcpChatTransport", () => {
     const transport = new AcpChatTransport({
       cardId: "c1",
       stepKey: "spec",
-      getCurrentSpecMarkdown: () => "# Spec\n\nDraft body\n",
+      getLiveDraftBody: () => "# Spec\n\nDraft body\n",
     });
 
     const connectP = transport.connect();
@@ -309,12 +309,12 @@ describe("AcpChatTransport", () => {
         JSON.parse(s) as {
           type: string;
           text?: string;
-          currentSpecMarkdown?: string;
+          liveDraftBody?: string;
         },
     );
     const userMsg = sent.find((m) => m.type === "user-message");
     expect(userMsg?.text).toBe("Tighten acceptance criteria");
-    expect(userMsg?.currentSpecMarkdown).toContain("Draft body");
+    expect(userMsg?.liveDraftBody).toContain("Draft body");
     expect(userMsg?.text).not.toContain("Current Spec markdown");
   });
 
@@ -461,7 +461,7 @@ describe("AcpChatTransport", () => {
     const transport = new AcpChatTransport({
       cardId: "c1",
       stepKey: "tasks",
-      getCurrentTasksDraftJson: () => '{\n  "tasks": []\n}',
+      getLiveDraftBody: () => '{\n  "tasks": []\n}',
     });
 
     const connectP = transport.connect();
@@ -487,12 +487,12 @@ describe("AcpChatTransport", () => {
         JSON.parse(s) as {
           type: string;
           text?: string;
-          currentTasksDraftJson?: string;
+          liveDraftBody?: string;
         },
     );
     const userMsg = sent.find((m) => m.type === "user-message");
     expect(userMsg?.text).toBe("Split the API task");
-    expect(userMsg?.currentTasksDraftJson).toContain('"tasks": []');
+    expect(userMsg?.liveDraftBody).toContain('"tasks": []');
     expect(userMsg?.text).not.toContain("tasks-draft tip JSON");
   });
 

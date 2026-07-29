@@ -1,23 +1,12 @@
-import {
-  IconLayoutSidebarRightCollapse,
-  IconLoader2,
-  IconX,
-} from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
-import type { UIMessage } from "ai";
-import { Thread, ThreadShell } from "@/components/assistant-ui/thread";
-import { AcpChatProvider, useAcpChat } from "@/hooks/useAcpChat";
-import { ReconnectingBanner } from "@/components/chat/ReconnectingBanner";
-import { PermissionDataUI } from "@/components/grill/PermissionPartView";
-import { ReadOnlyTranscript } from "@/components/grill/ReadOnlyTranscript";
-import { GrillTransportContext } from "@/components/grill/transport-context";
-import { Logo } from "@/components/Logo";
-import { Button } from "@/components/ui/button";
 import {
-  Tooltip,
-  TooltipContent,
+  AssistLauncherFab,
+  DefineAssistChat,
+  DefineAssistSidePanel,
+  SPEC_ASSIST_LABELS,
+} from "@/components/assist/DefineAssistPanel";
+import {
   TooltipProvider,
-  TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -247,222 +236,35 @@ function LiveSpec({
         </div>
         {!stepDone ? (
           <TooltipProvider>
-            {assistOpen ? (
-              <button
-                type="button"
-                className="absolute inset-0 z-40 bg-foreground/20 md:hidden"
-                aria-label="Hide Spec assist"
-                onClick={closeAssist}
-              />
-            ) : (
+            {!assistOpen ? (
               <AssistLauncherFab
+                panelId="spec-assist-panel"
+                labels={SPEC_ASSIST_LABELS}
                 streaming={streaming}
                 unread={assistUnread}
                 onExpand={openAssist}
               />
-            )}
-            <aside
-              className={cn(
-                "flex flex-col overflow-hidden rounded-md border bg-background",
-                assistOpen
-                  ? "absolute inset-x-3 top-1/4 bottom-3 z-50 shadow-lg md:static md:inset-auto md:z-auto md:w-96 md:shrink-0 md:shadow-none"
-                  : "hidden",
-              )}
+            ) : null}
+            <DefineAssistSidePanel
+              panelId="spec-assist-panel"
+              labels={SPEC_ASSIST_LABELS}
+              open={assistOpen}
+              streaming={streaming}
+              onClose={closeAssist}
             >
-              <div className="flex items-center gap-1 border-b px-2 py-1">
-                <span className="min-w-0 flex-1 truncate px-1 text-sm font-medium">
-                  Jeeves
-                </span>
-                {streaming ? (
-                  <IconLoader2
-                    className="size-3.5 shrink-0 animate-spin text-pipeline-ai"
-                    aria-label="Spec assist is working"
-                  />
-                ) : null}
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-expanded={true}
-                      aria-controls="spec-assist-panel"
-                      aria-label="Hide Spec assist"
-                      onClick={closeAssist}
-                    >
-                      <IconX className="md:hidden" />
-                      <IconLayoutSidebarRightCollapse className="hidden md:block" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Hide Spec assist</TooltipContent>
-                </Tooltip>
-              </div>
-              {/* Keep chat mounted while collapsed so the ACP session stays alive. */}
-              <div
-                id="spec-assist-panel"
-                className="flex min-h-0 flex-1 flex-col overflow-hidden"
-              >
-                <SpecAssistChat
-                  cardId={card.id}
-                  getCurrentSpecMarkdown={() => markdownRef.current}
-                  onSpecRevised={applyRevision}
-                  onStreamingChange={setAssistStreaming}
-                  composerLocked={streaming}
-                />
-              </div>
-            </aside>
+              <DefineAssistChat
+                cardId={card.id}
+                stepKey="spec"
+                labels={SPEC_ASSIST_LABELS}
+                getLiveDraftBody={() => markdownRef.current}
+                onSpecRevised={applyRevision}
+                onStreamingChange={setAssistStreaming}
+                composerLocked={streaming}
+              />
+            </DefineAssistSidePanel>
           </TooltipProvider>
         ) : null}
       </div>
-    </div>
-  );
-}
-
-function AssistLauncherFab({
-  streaming,
-  unread,
-  onExpand,
-}: {
-  streaming: boolean;
-  unread: boolean;
-  onExpand: () => void;
-}) {
-  const statusLabel = streaming
-    ? "Spec assist is working"
-    : unread
-      ? "New Spec assist reply"
-      : "Show Spec assist";
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          variant="launcher"
-          size="icon-launcher"
-          onClick={onExpand}
-          aria-expanded={false}
-          aria-controls="spec-assist-panel"
-          aria-label={statusLabel}
-          className="absolute right-3 bottom-3 z-30"
-        >
-          <Logo className="size-20" />
-          {streaming ? (
-            <span className="pointer-events-none absolute -top-0.5 -right-0.5 flex size-6 items-center justify-center rounded-full bg-background shadow-sm">
-              <IconLoader2
-                className="size-4 animate-spin text-pipeline-ai"
-                aria-hidden
-              />
-            </span>
-          ) : unread ? (
-            <span
-              className="pointer-events-none absolute top-1 right-1 size-3 rounded-full bg-pipeline-user ring-2 ring-white"
-              aria-hidden
-            />
-          ) : null}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="left">{statusLabel}</TooltipContent>
-    </Tooltip>
-  );
-}
-
-function SpecAssistChat({
-  cardId,
-  getCurrentSpecMarkdown,
-  onSpecRevised,
-  onStreamingChange,
-  composerLocked,
-}: {
-  cardId: string;
-  getCurrentSpecMarkdown: () => string;
-  onSpecRevised: (markdown: string) => void;
-  onStreamingChange: (streaming: boolean) => void;
-  composerLocked: boolean;
-}) {
-  const chat = useAcpChat({
-    cardId,
-    stepKey: "spec",
-    round: 0,
-    getCurrentSpecMarkdown,
-    onSpecRevised,
-    onStreamingChange,
-  });
-
-  if (chat.status === "error") {
-    return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-2 p-3 text-center">
-        <p className="text-sm text-destructive">Could not start Spec assist</p>
-        <p className="text-xs text-muted-foreground">{chat.error}</p>
-      </div>
-    );
-  }
-
-  if (chat.status === "connecting") {
-    return <ThreadShell />;
-  }
-
-  if (chat.status === "displaced") {
-    return (
-      <DisplacedSpecAssist
-        cardId={cardId}
-        reason={chat.reason}
-        fallbackMessages={chat.messages}
-      />
-    );
-  }
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {chat.connection === "reconnecting" ? <ReconnectingBanner /> : null}
-      {/* epoch remounts the runtime after a reconnect so the server transcript wins. */}
-      <AcpChatProvider
-        key={chat.epoch}
-        transport={chat.transport}
-        messages={chat.messages}
-      >
-        <GrillTransportContext.Provider value={chat.transport}>
-          <PermissionDataUI />
-          <Thread
-            sessionOpen={chat.sessionOpen && !composerLocked}
-            placeholder="Ask or request a change…"
-            openingPlaceholder={
-              composerLocked ? "Spec assist is working…" : "Spec assist starting…"
-            }
-          />
-        </GrillTransportContext.Provider>
-      </AcpChatProvider>
-    </div>
-  );
-}
-
-function DisplacedSpecAssist({
-  cardId,
-  reason,
-  fallbackMessages,
-}: {
-  cardId: string;
-  reason: string;
-  fallbackMessages: UIMessage[];
-}) {
-  const banner =
-    reason === "session continued elsewhere"
-      ? "Session continued elsewhere"
-      : reason;
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <div
-        className="border-b bg-muted px-3 py-2 text-center text-xs text-muted-foreground"
-        role="status"
-      >
-        {banner}
-      </div>
-      <ReadOnlyTranscript
-        cardId={cardId}
-        stepKey="spec"
-        fallbackMessages={fallbackMessages}
-      />
     </div>
   );
 }

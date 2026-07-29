@@ -291,10 +291,12 @@ describe("CardStore", () => {
   describe("fanOut", () => {
     let artifactRoot: string;
     let artifacts: ArtifactStore;
+    let fanStore: CardStore;
 
     beforeEach(() => {
       artifactRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-fanout-"));
       artifacts = new ArtifactStore(db, artifactRoot);
+      fanStore = new CardStore(db, artifacts);
     });
 
     afterEach(() => {
@@ -309,11 +311,11 @@ describe("CardStore", () => {
         dependsOn: string[];
       }>;
     }): string {
-      const card = store.createCard(projectId);
-      store.updateCard(card.id, { title: "Workout streaks" });
-      const id = store.decideKind(card.id, "feature").card.id;
-      store.handOffGrillToSpec(id);
-      store.handOffSpecToTasks(id);
+      const card = fanStore.createCard(projectId);
+      fanStore.updateCard(card.id, { title: "Workout streaks" });
+      const id = fanStore.decideKind(card.id, "feature").card.id;
+      fanStore.handOffGrillToSpec(id);
+      fanStore.handOffSpecToTasks(id);
       artifacts.appendTasksDraft(id, 0, tip);
       return id;
     }
@@ -326,7 +328,7 @@ describe("CardStore", () => {
         ],
       });
 
-      const { card, children, sideEffects } = store.fanOut(id, artifacts);
+      const { card, children, sideEffects } = fanStore.fanOut(id);
 
       expect(card.column).toBe("define");
       expect(card.steps.find((s) => s.key === "tasks")?.status).toBe("awaiting");
@@ -366,7 +368,7 @@ describe("CardStore", () => {
       ]);
       expect(sideEffects.some((e) => e.type === "enqueue")).toBe(false);
 
-      const listed = store.listCards(projectId);
+      const listed = fanStore.listCards(projectId);
       expect(listed.filter((c) => c.parentCardId === id)).toHaveLength(2);
 
       const drafts = artifacts
@@ -380,22 +382,22 @@ describe("CardStore", () => {
 
     it("rejects empty tip, blank titles, and second fan-out", () => {
       const emptyId = featureWithTip({ tasks: [] });
-      expect(() => store.fanOut(emptyId, artifacts)).toThrow(
+      expect(() => fanStore.fanOut(emptyId)).toThrow(
         expect.objectContaining({ status: 400 }),
       );
 
       const blankId = featureWithTip({
         tasks: [{ id: "a", title: "   ", description: "", dependsOn: [] }],
       });
-      expect(() => store.fanOut(blankId, artifacts)).toThrow(
+      expect(() => fanStore.fanOut(blankId)).toThrow(
         expect.objectContaining({ status: 400 }),
       );
 
       const okId = featureWithTip({
         tasks: [{ id: "a", title: "One", description: "", dependsOn: [] }],
       });
-      store.fanOut(okId, artifacts);
-      expect(() => store.fanOut(okId, artifacts)).toThrow(
+      fanStore.fanOut(okId);
+      expect(() => fanStore.fanOut(okId)).toThrow(
         expect.objectContaining({ status: 409 }),
       );
     });

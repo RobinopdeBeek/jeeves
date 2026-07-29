@@ -53,7 +53,7 @@ export interface HarvestContext {
   sourceSkill: string;
   gitSha?: string;
   /**
-   * Tasks-draft revise: reuse tip ids by index when normalizing exchange JSON.
+   * Tasks-draft revise: reuse tip ids from exchange `id` fields when normalizing.
    * Create Tasks / first harvest leave this unset (assign all new ids).
    */
   preserveTasksDraftIds?: boolean;

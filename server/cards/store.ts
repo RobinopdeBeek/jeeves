@@ -1,6 +1,9 @@
 import { and, asc, eq, max } from "drizzle-orm";
 import { nanoid } from "nanoid";
-import type { ArtifactStore } from "../artifacts/store.js";
+import {
+  ArtifactStoreError,
+  type ArtifactStore,
+} from "../artifacts/store.js";
 import {
   parseTasksDraft,
   TasksDraftError,
@@ -59,6 +62,9 @@ export type ImplementProgress = {
   total: number;
 };
 
+/** Tip document returned by tip CRUD — includes append-only version count. */
+export type TasksDraftTipView = TasksDraft & { versionCount: number };
+
 export type CardWithSteps = Card & {
   steps: EnrichedStep[];
   /** Same predicate as grill→spec hand-off (board Create Spec). */
@@ -89,6 +95,7 @@ export type CardWithSteps = Card & {
 /**
  * CardStore — the slice-1 seam over SQLite. Hides the unified card model and
  * every derivation rule; routes and the client are thin adapters over this.
+ * Tip Draft CRUD / fan-out use the optional ArtifactStore adapter (ADR 0014).
  */
 export class CardStore {
   /** In-process: create-spec host op running for these card ids. */
@@ -96,7 +103,10 @@ export class CardStore {
   /** In-process: create-tasks host op running for these card ids. */
   private readonly creatingTasksIds = new Set<string>();
 
-  constructor(private readonly db: Db) {}
+  constructor(
+    private readonly db: Db,
+    private readonly artifacts: ArtifactStore | null = null,
+  ) {}
 
   /** Mark/clear create-spec in flight so GET/SSE cards stay truthful across remounts. */
   setCreatingSpec(cardId: string, creating: boolean): void {
@@ -275,6 +285,55 @@ export class CardStore {
     }
   }
 
+  /** Read tip + versionCount (empty tip when no versions). */
+  readTasksTip(cardId: string, round = 0): TasksDraftTipView {
+    const card = this.getCard(cardId);
+    if (!card) throw new CardStoreError(404, "card not found");
+    return this.tasksTipView(cardId, round);
+  }
+
+  /** Assert mutable, parse body, append tip version, return tip view. */
+  saveTasksTip(cardId: string, raw: unknown, round = 0): TasksDraftTipView {
+    this.assertTasksDraftMutable(cardId);
+    let draft: TasksDraft;
+    try {
+      draft = parseTasksDraft(raw);
+    } catch (err) {
+      throw new CardStoreError(
+        400,
+        err instanceof TasksDraftError ? err.message : String(err),
+      );
+    }
+    this.requireArtifacts().appendTasksDraft(cardId, round, draft, "human");
+    return this.tasksTipView(cardId, round);
+  }
+
+  /** Assert mutable, delete task from tip, append version, return tip view. */
+  deleteTaskFromTasksTip(
+    cardId: string,
+    taskId: string,
+    round = 0,
+  ): TasksDraftTipView {
+    this.assertTasksDraftMutable(cardId);
+    try {
+      this.requireArtifacts().deleteTaskFromTasksDraft(cardId, round, taskId);
+    } catch (err) {
+      this.rethrowTipError(err);
+    }
+    return this.tasksTipView(cardId, round);
+  }
+
+  /** Assert mutable, undo tip (append previous), return tip view. */
+  undoTasksTip(cardId: string, round = 0): TasksDraftTipView {
+    this.assertTasksDraftMutable(cardId);
+    try {
+      this.requireArtifacts().undoTasksDraft(cardId, round);
+    } catch (err) {
+      this.rethrowTipError(err);
+    }
+    return this.tasksTipView(cardId, round);
+  }
+
   /**
    * Validate grill→spec without mutating — routes close ACP before apply.
    */
@@ -336,13 +395,13 @@ export class CardStore {
    */
   fanOut(
     cardId: string,
-    artifacts: ArtifactStore,
     round = 0,
   ): {
     card: CardWithSteps;
     children: CardWithSteps[];
     sideEffects: AdvanceSideEffect[];
   } {
+    const artifacts = this.requireArtifacts();
     const parent = this.getCard(cardId);
     if (!parent) throw new CardStoreError(404, "card not found");
     if (parent.kind !== "feature") {
@@ -519,6 +578,34 @@ export class CardStore {
   deleteCard(id: string): boolean {
     const result = this.db.delete(cards).where(eq(cards.id, id)).run();
     return result.changes > 0;
+  }
+
+  private requireArtifacts(): ArtifactStore {
+    if (!this.artifacts) {
+      throw new CardStoreError(500, "ArtifactStore not configured on CardStore");
+    }
+    return this.artifacts;
+  }
+
+  private tasksTipView(cardId: string, round: number): TasksDraftTipView {
+    const artifacts = this.requireArtifacts();
+    return {
+      ...artifacts.readTasksDraftTip(cardId, round),
+      versionCount: artifacts.tasksDraftVersionCount(cardId, round),
+    };
+  }
+
+  private rethrowTipError(err: unknown): never {
+    if (err instanceof TasksDraftError) {
+      throw new CardStoreError(400, err.message);
+    }
+    if (err instanceof ArtifactStoreError) {
+      throw new CardStoreError(
+        err.message === "nothing to undo" ? 409 : 400,
+        err.message,
+      );
+    }
+    throw err;
   }
 
   private insertStep(

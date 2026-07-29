@@ -20,10 +20,10 @@ describe("tasks-draft routes", () => {
 
   beforeEach(() => {
     db = openDb(":memory:");
-    store = new CardStore(db);
-    project = store.ensureDefaultProject("jeeves", "C:/repo");
     artifactRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-tasks-draft-"));
     artifacts = new ArtifactStore(db, artifactRoot);
+    store = new CardStore(db, artifacts);
+    project = store.ensureDefaultProject("jeeves", "C:/repo");
     deps = {
       engine: {
         enqueue() {},

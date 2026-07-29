@@ -424,7 +424,7 @@ describe("ArtifactStore", () => {
     fs.rmSync(storeRoot, { recursive: true, force: true });
   });
 
-  it("harvests tasks-draft revise preserving tip ids by index", () => {
+  it("harvests tasks-draft revise preserving tip ids from exchange", () => {
     cardWithTasksStep();
     artifacts.appendTasksDraft(
       cardId,
@@ -446,8 +446,13 @@ describe("ArtifactStore", () => {
       exchangeAbs,
       JSON.stringify({
         tasks: [
-          { title: "API revised", description: "a", depends_on: [] },
-          { title: "UI", description: "u", depends_on: [0] },
+          {
+            id: "keep-a",
+            title: "API revised",
+            description: "a",
+            depends_on: [],
+          },
+          { id: "keep-b", title: "UI", description: "u", depends_on: [0] },
         ],
       }),
     );

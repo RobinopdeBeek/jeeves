@@ -23,15 +23,11 @@ export type WsClientMessage =
       /** User-visible chat text (and transcript). */
       text: string;
       /**
-       * Spec side-chat: live editor draft. Server appends this to the agent
-       * prompt only — it must not appear in the chat transcript.
+       * Live editor/tip draft for Define assist steps. Server frames this into
+       * the agent prompt only — it must not appear in the chat transcript.
+       * Kind is implied by the step; body is opaque to the transport.
        */
-      currentSpecMarkdown?: string;
-      /**
-       * Tasks side-chat: live tip JSON. Server appends this to the agent
-       * prompt only — it must not appear in the chat transcript.
-       */
-      currentTasksDraftJson?: string;
+      liveDraftBody?: string;
     }
   | { type: "permission-response"; requestId: string; optionId: string }
   /** Liveness probe; answered with `pong`. Never touches the ACP session. */

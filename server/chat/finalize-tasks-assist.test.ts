@@ -60,7 +60,7 @@ describe("finalizeTasksAssistTurn", () => {
     expect(artifacts.readTasksDraftTip(cardId, 0).tasks[0]!.id).toBe("a");
   });
 
-  it("harvests exchange into a new tip version preserving ids by index", () => {
+  it("harvests exchange into a new tip version preserving ids from exchange", () => {
     artifacts.appendTasksDraft(
       cardId,
       0,
@@ -81,11 +81,13 @@ describe("finalizeTasksAssistTurn", () => {
       JSON.stringify({
         tasks: [
           {
+            id: "keep-a",
             title: "API revised",
             description: "updated",
             depends_on: [],
           },
           {
+            id: "keep-b",
             title: "UI",
             description: "ui",
             depends_on: [0],

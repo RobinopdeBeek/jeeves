@@ -150,18 +150,9 @@ export class ChatConnection {
 
     this.sending = true;
     try {
-      const currentSpecMarkdown =
-        typeof msg.currentSpecMarkdown === "string"
-          ? msg.currentSpecMarkdown
-          : undefined;
-      const currentTasksDraftJson =
-        typeof msg.currentTasksDraftJson === "string"
-          ? msg.currentTasksDraftJson
-          : undefined;
-      await this.handle.sendMessage(msg.text.trim(), {
-        currentSpecMarkdown,
-        currentTasksDraftJson,
-      });
+      const liveDraftBody =
+        typeof msg.liveDraftBody === "string" ? msg.liveDraftBody : undefined;
+      await this.handle.sendMessage(msg.text.trim(), { liveDraftBody });
     } catch (err) {
       this.send({
         type: "error",

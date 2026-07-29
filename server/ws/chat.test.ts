@@ -1,5 +1,7 @@
 import type { UIMessage, UIMessageChunk } from "ai";
 import { describe, expect, it } from "vitest";
+import { frameSpecAssistUserMessage } from "../../shared/spec-assist-frame.js";
+import { frameTasksAssistUserMessage } from "../../shared/tasks-assist-frame.js";
 import {
   AcpBridge,
   decideInteractivePermission,
@@ -288,6 +290,7 @@ describe("AcpBridge", () => {
     const bridge = new AcpBridge({
       spawn: () => process,
       onTranscript: (messages) => transcripts.push(messages),
+      frameUserMessage: frameSpecAssistUserMessage,
     });
     bridge.attach(collectingSubscriber());
 
@@ -304,7 +307,7 @@ describe("AcpBridge", () => {
     });
 
     const replyPromise = bridge.sendMessage("Tighten acceptance criteria", {
-      currentSpecMarkdown: "# Spec\n\nDraft body\n",
+      liveDraftBody: "# Spec\n\nDraft body\n",
     });
     await viWaitFor(() => process.prompts().length === 1);
     const promptReq = process.promptRequest();
@@ -343,6 +346,7 @@ describe("AcpBridge", () => {
     const bridge = new AcpBridge({
       spawn: () => process,
       onTranscript: (messages) => transcripts.push(messages),
+      frameUserMessage: frameTasksAssistUserMessage,
     });
     bridge.attach(collectingSubscriber());
 
@@ -359,7 +363,7 @@ describe("AcpBridge", () => {
     });
 
     const replyPromise = bridge.sendMessage("Split the API task", {
-      currentTasksDraftJson: '{\n  "tasks": []\n}',
+      liveDraftBody: '{\n  "tasks": []\n}',
     });
     await viWaitFor(() => process.prompts().length === 1);
     const promptReq = process.promptRequest();

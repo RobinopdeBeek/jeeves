@@ -1,22 +1,18 @@
 import {
   IconArrowBackUp,
-  IconArrowForwardUp,
-  IconLayoutSidebarRightCollapse,
   IconLoader2,
   IconPlus,
   IconTrash,
   IconX,
 } from "@tabler/icons-react";
 import { nanoid } from "nanoid";
-import { useEffect, useRef, useState } from "react";
-import type { UIMessage } from "ai";
-import { Thread, ThreadShell } from "@/components/assistant-ui/thread";
-import { AcpChatProvider, useAcpChat } from "@/hooks/useAcpChat";
-import { ReconnectingBanner } from "@/components/chat/ReconnectingBanner";
-import { PermissionDataUI } from "@/components/grill/PermissionPartView";
-import { ReadOnlyTranscript } from "@/components/grill/ReadOnlyTranscript";
-import { GrillTransportContext } from "@/components/grill/transport-context";
-import { Logo } from "@/components/Logo";
+import { useRef, useState } from "react";
+import {
+  AssistLauncherFab,
+  DefineAssistChat,
+  DefineAssistSidePanel,
+  TASKS_ASSIST_LABELS,
+} from "@/components/assist/DefineAssistPanel";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -34,7 +30,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { api, type TasksDraft, type TasksDraftTask } from "@/lib/api";
+import { useTasksTipSession } from "@/hooks/useTasksTipSession";
+import type { TasksDraftTask, TasksDraftTip } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { StepPanelProps } from "./step-panel-types";
 
@@ -45,7 +42,7 @@ type InspectorState =
 
 /**
  * Tasks shaping surface: tip `tasks-draft` tiles + inspector + AI side-chat
- * (ADR 0014; Spec-assist twin for revise / Q&A).
+ * (ADR 0014). Tip protocol lives in useTasksTipSession; assist chrome is shared.
  */
 export function StepTasks({ card, onCardChange }: StepPanelProps) {
   const tasksStep = card.steps.find((s) => s.key === "tasks");
@@ -54,94 +51,32 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
   const children = card.children ?? [];
   const progress = card.implementProgress;
 
-  const [tip, setTip] = useState<TasksDraft>({ tasks: [] });
-  const [loaded, setLoaded] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [displaced, setDisplaced] = useState(false);
   const [assistOpen, setAssistOpen] = useState(true);
   const [assistUnread, setAssistUnread] = useState(false);
-  const [versionCount, setVersionCount] = useState(0);
-  const [redoStack, setRedoStack] = useState<TasksDraft[]>([]);
   const [inspector, setInspector] = useState<InspectorState>(null);
-  const [implementing, setImplementing] = useState(false);
   const [form, setForm] = useState({
     title: "",
     description: "",
     dependsOn: [] as string[],
   });
 
-  const tipRef = useRef(tip);
-  tipRef.current = tip;
+  const tip = useTasksTipSession({
+    cardId: card.id,
+    editable,
+    streaming,
+    displaced,
+    onCardChange,
+  });
+
   const assistOpenRef = useRef(assistOpen);
   assistOpenRef.current = assistOpen;
   const wasStreamingRef = useRef(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoaded(false);
-    setLoadError(null);
-    setRedoStack([]);
-    setVersionCount(0);
-
-    void (async () => {
-      try {
-        const draft = await api.getTasksDraft(card.id);
-        if (cancelled) return;
-        setTip({ tasks: draft.tasks });
-        setVersionCount(draft.versionCount ?? 0);
-        setLoaded(true);
-      } catch (err) {
-        if (!cancelled) {
-          setLoadError(err instanceof Error ? err.message : String(err));
-          setLoaded(true);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [card.id]);
-
-  const mutationsLocked = !editable || busy || streaming || displaced;
-
-  function applyRevision(draft: TasksDraft) {
-    setTip({ tasks: draft.tasks });
-    if (draft.versionCount != null) {
-      setVersionCount(draft.versionCount);
-    } else {
-      setVersionCount((c) => c + 1);
-    }
-    setRedoStack([]);
-    setActionError(null);
+  function applyRevision(draft: TasksDraftTip) {
+    tip.applyRevision(draft);
     setInspector(null);
-  }
-
-  async function refreshTipFromArtifact() {
-    try {
-      const latest = await api.getTasksDraft(card.id);
-      const current = tipRef.current;
-      const same =
-        latest.tasks.length === current.tasks.length &&
-        latest.tasks.every(
-          (t, i) =>
-            t.id === current.tasks[i]?.id &&
-            t.title === current.tasks[i]?.title &&
-            t.description === current.tasks[i]?.description &&
-            JSON.stringify(t.dependsOn) ===
-              JSON.stringify(current.tasks[i]?.dependsOn),
-        );
-      if (same) {
-        if (latest.versionCount != null) setVersionCount(latest.versionCount);
-        return;
-      }
-      applyRevision(latest);
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    }
   }
 
   function setAssistStreaming(next: boolean) {
@@ -151,12 +86,12 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
     const turnEnded = wasStreamingRef.current && !next;
     wasStreamingRef.current = next;
     setStreaming(next);
-    if (turnEnded) void refreshTipFromArtifact();
+    if (turnEnded) void tip.refreshTipFromArtifact();
   }
 
   function openEdit(task: TasksDraftTask) {
-    if (mutationsLocked) return;
-    setActionError(null);
+    if (tip.mutationsLocked) return;
+    tip.setActionError(null);
     setInspector({ mode: "edit", taskId: task.id });
     setForm({
       title: task.title,
@@ -166,8 +101,8 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
   }
 
   function openAdd() {
-    if (mutationsLocked) return;
-    setActionError(null);
+    if (tip.mutationsLocked) return;
+    tip.setActionError(null);
     const draft: TasksDraftTask = {
       id: nanoid(10),
       title: "",
@@ -183,123 +118,35 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
   }
 
   async function saveInspector() {
-    if (!inspector || mutationsLocked) return;
+    if (!inspector || tip.mutationsLocked) return;
     const title = form.title.trim();
     if (!title) {
-      setActionError("Title is required");
+      tip.setActionError("Title is required");
       return;
     }
-    setBusy(true);
-    setActionError(null);
-    try {
-      const task: TasksDraftTask = {
-        id: inspector.mode === "add" ? inspector.draft.id : inspector.taskId,
-        title,
-        description: form.description,
-        dependsOn: form.dependsOn,
-      };
-      const tasks =
-        inspector.mode === "add"
-          ? [...tip.tasks, task]
-          : tip.tasks.map((t) => (t.id === task.id ? task : t));
-      const saved = await api.putTasksDraft(card.id, { tasks });
-      setTip({ tasks: saved.tasks });
-      setVersionCount(saved.versionCount ?? versionCount + 1);
-      setRedoStack([]);
-      closeInspector();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
+    const task: TasksDraftTask = {
+      id: inspector.mode === "add" ? inspector.draft.id : inspector.taskId,
+      title,
+      description: form.description,
+      dependsOn: form.dependsOn,
+    };
+    const tasks =
+      inspector.mode === "add"
+        ? [...tip.tip.tasks, task]
+        : tip.tip.tasks.map((t) => (t.id === task.id ? task : t));
+    const saved = await tip.saveTasks(tasks);
+    if (saved) closeInspector();
   }
 
   async function deleteTask(taskId: string) {
-    if (mutationsLocked) return;
-    setBusy(true);
-    setActionError(null);
-    try {
-      const saved = await api.deleteTasksDraftTask(card.id, taskId);
-      setTip({ tasks: saved.tasks });
-      setVersionCount(saved.versionCount ?? versionCount + 1);
-      setRedoStack([]);
-      if (inspector?.mode === "edit" && inspector.taskId === taskId) {
-        closeInspector();
-      }
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function undo() {
-    if (mutationsLocked || versionCount < 2) return;
-    setBusy(true);
-    setActionError(null);
-    try {
-      const before = tip;
-      const next = await api.undoTasksDraft(card.id);
-      setTip({ tasks: next.tasks });
-      setVersionCount(next.versionCount ?? versionCount + 1);
-      setRedoStack((stack) => [...stack, before]);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (/nothing to undo/i.test(message)) {
-        setVersionCount(1);
-      } else {
-        setActionError(message);
-      }
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function redo() {
-    if (mutationsLocked || redoStack.length === 0) return;
-    const next = redoStack[redoStack.length - 1]!;
-    setBusy(true);
-    setActionError(null);
-    try {
-      const saved = await api.putTasksDraft(card.id, next);
-      setTip({ tasks: saved.tasks });
-      setVersionCount(saved.versionCount ?? versionCount + 1);
-      setRedoStack((stack) => stack.slice(0, -1));
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
+    const saved = await tip.deleteTask(taskId);
+    if (saved && inspector?.mode === "edit" && inspector.taskId === taskId) {
+      closeInspector();
     }
   }
 
   function titleById(id: string): string {
-    return tip.tasks.find((t) => t.id === id)?.title || id;
-  }
-
-  function tipIsValidForImplement(draft: TasksDraft): boolean {
-    // Light gate — server fanOut re-validates Zod + DAG. Tip Save already
-    // rejects cycles; this only blocks empty/blank titles before the POST.
-    return (
-      draft.tasks.length >= 1 && draft.tasks.every((t) => t.title.trim().length > 0)
-    );
-  }
-
-  const canImplement =
-    editable && !busy && !streaming && !displaced && tipIsValidForImplement(tip);
-
-  async function implement() {
-    if (!canImplement || implementing) return;
-    setImplementing(true);
-    setActionError(null);
-    setInspector(null);
-    try {
-      const updated = await api.implement(card.id);
-      onCardChange(updated);
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setImplementing(false);
-    }
+    return tip.tip.tasks.find((t) => t.id === id)?.title || id;
   }
 
   function toggleDepend(id: string) {
@@ -311,7 +158,7 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
     }));
   }
 
-  if (!loaded) {
+  if (!tip.loaded) {
     return (
       <div className="flex flex-1 items-center justify-center p-4">
         <p className="text-sm text-muted-foreground">Loading Tasks…</p>
@@ -319,11 +166,11 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
     );
   }
 
-  if (loadError) {
+  if (tip.loadError) {
     return (
       <div className="flex flex-1 items-center justify-center p-4">
         <p className="text-sm text-destructive" role="alert">
-          {loadError}
+          {tip.loadError}
         </p>
       </div>
     );
@@ -335,7 +182,7 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
       : inspector?.mode === "add"
         ? inspector.draft.id
         : null;
-  const blockerCandidates = tip.tasks.filter((t) => t.id !== editingId);
+  const blockerCandidates = tip.tip.tasks.filter((t) => t.id !== editingId);
 
   function openAssist() {
     setAssistOpen(true);
@@ -348,9 +195,9 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
-      {actionError ? (
+      {tip.actionError ? (
         <p className="text-sm text-destructive" role="alert">
-          {actionError}
+          {tip.actionError}
         </p>
       ) : null}
 
@@ -377,7 +224,7 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
                 variant="outline"
                 size="sm"
                 onClick={openAdd}
-                disabled={mutationsLocked}
+                disabled={tip.mutationsLocked}
               >
                 <IconPlus data-icon="inline-start" />
                 Add task
@@ -386,23 +233,12 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
                 type="button"
                 variant="ghost"
                 size="sm"
-                onClick={() => void undo()}
-                disabled={mutationsLocked || versionCount < 2}
+                onClick={() => void tip.undo()}
+                disabled={tip.mutationsLocked || tip.versionCount < 2}
                 aria-label="Undo"
               >
                 <IconArrowBackUp data-icon="inline-start" />
                 Undo
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => void redo()}
-                disabled={mutationsLocked || redoStack.length === 0}
-                aria-label="Redo"
-              >
-                <IconArrowForwardUp data-icon="inline-start" />
-                Redo
               </Button>
             </div>
           ) : null}
@@ -448,7 +284,7 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
                 ))}
               </ul>
             )
-          ) : tip.tasks.length === 0 ? (
+          ) : tip.tip.tasks.length === 0 ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center">
               <p className="text-muted-foreground">
                 {editable
@@ -458,14 +294,14 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
             </div>
           ) : (
             <ul className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
-              {tip.tasks.map((task, index) => (
+              {tip.tip.tasks.map((task, index) => (
                 <li key={task.id}>
                   <div className="group relative">
                     <button
                       type="button"
                       className={cn(cardTileVariants({ attention: false }), "w-full")}
                       onClick={() => openEdit(task)}
-                      disabled={mutationsLocked}
+                      disabled={tip.mutationsLocked}
                     >
                       <div className="text-sm font-medium">
                         {index + 1}.{" "}
@@ -492,7 +328,7 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
                         size="icon-xs"
                         className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
                         aria-label={`Delete ${task.title || "task"}`}
-                        disabled={mutationsLocked}
+                        disabled={tip.mutationsLocked}
                         onClick={(e) => {
                           e.stopPropagation();
                           void deleteTask(task.id);
@@ -511,10 +347,10 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
             <div className="flex justify-end border-t pt-3">
               <Button
                 type="button"
-                disabled={!canImplement || implementing}
-                onClick={() => void implement()}
+                disabled={!tip.canImplement || tip.implementing}
+                onClick={() => void tip.implement()}
               >
-                {implementing ? (
+                {tip.implementing ? (
                   <IconLoader2 data-icon="inline-start" className="animate-spin" />
                 ) : null}
                 Implement →
@@ -525,74 +361,33 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
 
         {editable ? (
           <TooltipProvider>
-            {assistOpen ? (
-              <button
-                type="button"
-                className="absolute inset-0 z-40 bg-foreground/20 md:hidden"
-                aria-label="Hide Tasks assist"
-                onClick={closeAssist}
-              />
-            ) : (
+            {!assistOpen ? (
               <AssistLauncherFab
+                panelId="tasks-assist-panel"
+                labels={TASKS_ASSIST_LABELS}
                 streaming={streaming}
                 unread={assistUnread}
                 onExpand={openAssist}
               />
-            )}
-            <aside
-              className={cn(
-                "flex min-h-40 shrink-0 flex-col overflow-hidden rounded-md border bg-background",
-                assistOpen
-                  ? "relative z-50 shadow-lg md:static md:z-auto md:w-96 md:shadow-none"
-                  : "hidden",
-              )}
-              aria-label="Tasks assist"
+            ) : null}
+            <DefineAssistSidePanel
+              panelId="tasks-assist-panel"
+              labels={TASKS_ASSIST_LABELS}
+              open={assistOpen}
+              streaming={streaming}
+              onClose={closeAssist}
             >
-              <div className="flex items-center gap-1 border-b px-2 py-1">
-                <span className="min-w-0 flex-1 truncate px-1 text-sm font-medium">
-                  Jeeves
-                </span>
-                {streaming ? (
-                  <IconLoader2
-                    className="size-3.5 shrink-0 animate-spin text-pipeline-ai"
-                    aria-label="Tasks assist is working"
-                  />
-                ) : null}
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-expanded={true}
-                      aria-controls="tasks-assist-panel"
-                      aria-label="Hide Tasks assist"
-                      onClick={closeAssist}
-                    >
-                      <IconX className="md:hidden" />
-                      <IconLayoutSidebarRightCollapse className="hidden md:block" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Hide Tasks assist</TooltipContent>
-                </Tooltip>
-              </div>
-              {/* Keep chat mounted while collapsed so the ACP session stays alive. */}
-              <div
-                id="tasks-assist-panel"
-                className="flex min-h-0 flex-1 flex-col overflow-hidden"
-              >
-                <TasksAssistChat
-                  cardId={card.id}
-                  getCurrentTasksDraftJson={() =>
-                    JSON.stringify({ tasks: tipRef.current.tasks }, null, 2)
-                  }
-                  onTasksRevised={applyRevision}
-                  onStreamingChange={setAssistStreaming}
-                  onDisplaced={() => setDisplaced(true)}
-                  composerLocked={streaming}
-                />
-              </div>
-            </aside>
+              <DefineAssistChat
+                cardId={card.id}
+                stepKey="tasks"
+                labels={TASKS_ASSIST_LABELS}
+                getLiveDraftBody={tip.liveDraftBody}
+                onTasksRevised={applyRevision}
+                onStreamingChange={setAssistStreaming}
+                onDisplaced={() => setDisplaced(true)}
+                composerLocked={streaming}
+              />
+            </DefineAssistSidePanel>
           </TooltipProvider>
         ) : null}
       </div>
@@ -617,7 +412,7 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
                 value={form.title}
                 onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
                 placeholder="Vertical slice title"
-                disabled={!editable || busy || streaming}
+                disabled={!editable || tip.busy || streaming}
                 autoFocus
               />
             </label>
@@ -636,7 +431,7 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
                         type="button"
                         size="sm"
                         variant={selected ? "default" : "outline"}
-                        disabled={!editable || busy || streaming}
+                        disabled={!editable || tip.busy || streaming}
                         onClick={() => toggleDepend(t.id)}
                       >
                         {t.title || "Untitled"}
@@ -657,7 +452,7 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
                 }
                 placeholder="Acceptance criteria and file hints…"
                 rows={6}
-                disabled={!editable || busy || streaming}
+                disabled={!editable || tip.busy || streaming}
               />
             </label>
           </div>
@@ -668,7 +463,7 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
                 type="button"
                 variant="destructive"
                 className="sm:mr-auto"
-                disabled={busy || streaming}
+                disabled={tip.busy || streaming}
                 onClick={() => void deleteTask(inspector.taskId)}
               >
                 <IconTrash data-icon="inline-start" />
@@ -678,7 +473,7 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
             <Button
               type="button"
               variant="outline"
-              disabled={busy}
+              disabled={tip.busy}
               onClick={closeInspector}
             >
               {editable ? "Discard" : "Close"}
@@ -686,7 +481,7 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
             {editable ? (
               <Button
                 type="button"
-                disabled={busy || streaming}
+                disabled={tip.busy || streaming}
                 onClick={() => void saveInspector()}
               >
                 Save
@@ -695,166 +490,6 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
-  );
-}
-
-function AssistLauncherFab({
-  streaming,
-  unread,
-  onExpand,
-}: {
-  streaming: boolean;
-  unread: boolean;
-  onExpand: () => void;
-}) {
-  const statusLabel = streaming
-    ? "Tasks assist is working"
-    : unread
-      ? "New Tasks assist reply"
-      : "Show Tasks assist";
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          variant="launcher"
-          size="icon-launcher"
-          onClick={onExpand}
-          aria-expanded={false}
-          aria-controls="tasks-assist-panel"
-          aria-label={statusLabel}
-          className="absolute right-3 bottom-3 z-30"
-        >
-          <Logo className="size-20" />
-          {streaming ? (
-            <span className="pointer-events-none absolute -top-0.5 -right-0.5 flex size-6 items-center justify-center rounded-full bg-background shadow-sm">
-              <IconLoader2
-                className="size-4 animate-spin text-pipeline-ai"
-                aria-hidden
-              />
-            </span>
-          ) : unread ? (
-            <span
-              className="pointer-events-none absolute top-1 right-1 size-3 rounded-full bg-pipeline-user ring-2 ring-white"
-              aria-hidden
-            />
-          ) : null}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="left">{statusLabel}</TooltipContent>
-    </Tooltip>
-  );
-}
-
-function TasksAssistChat({
-  cardId,
-  getCurrentTasksDraftJson,
-  onTasksRevised,
-  onStreamingChange,
-  onDisplaced,
-  composerLocked,
-}: {
-  cardId: string;
-  getCurrentTasksDraftJson: () => string;
-  onTasksRevised: (draft: TasksDraft) => void;
-  onStreamingChange: (streaming: boolean) => void;
-  onDisplaced: () => void;
-  composerLocked: boolean;
-}) {
-  const chat = useAcpChat({
-    cardId,
-    stepKey: "tasks",
-    round: 0,
-    getCurrentTasksDraftJson,
-    onTasksRevised,
-    onStreamingChange,
-  });
-
-  const displacedNotified = useRef(false);
-  useEffect(() => {
-    if (chat.status === "displaced" && !displacedNotified.current) {
-      displacedNotified.current = true;
-      onDisplaced();
-    }
-  }, [chat.status, onDisplaced]);
-
-  if (chat.status === "error") {
-    return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-2 p-3 text-center">
-        <p className="text-sm text-destructive">Could not start Tasks assist</p>
-        <p className="text-xs text-muted-foreground">{chat.error}</p>
-      </div>
-    );
-  }
-
-  if (chat.status === "connecting") {
-    return <ThreadShell />;
-  }
-
-  if (chat.status === "displaced") {
-    return (
-      <DisplacedTasksAssist
-        cardId={cardId}
-        reason={chat.reason}
-        fallbackMessages={chat.messages}
-      />
-    );
-  }
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {chat.connection === "reconnecting" ? <ReconnectingBanner /> : null}
-      <AcpChatProvider
-        key={chat.epoch}
-        transport={chat.transport}
-        messages={chat.messages}
-      >
-        <GrillTransportContext.Provider value={chat.transport}>
-          <PermissionDataUI />
-          <Thread
-            sessionOpen={chat.sessionOpen && !composerLocked}
-            placeholder="Ask or request a change…"
-            openingPlaceholder={
-              composerLocked
-                ? "Tasks assist is working…"
-                : "Tasks assist starting…"
-            }
-          />
-        </GrillTransportContext.Provider>
-      </AcpChatProvider>
-    </div>
-  );
-}
-
-function DisplacedTasksAssist({
-  cardId,
-  reason,
-  fallbackMessages,
-}: {
-  cardId: string;
-  reason: string;
-  fallbackMessages: UIMessage[];
-}) {
-  const banner =
-    reason === "session continued elsewhere"
-      ? "Session continued elsewhere"
-      : reason;
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <div
-        className="border-b bg-muted px-3 py-2 text-center text-xs text-muted-foreground"
-        role="status"
-      >
-        {banner}
-      </div>
-      <ReadOnlyTranscript
-        cardId={cardId}
-        stepKey="tasks"
-        fallbackMessages={fallbackMessages}
-      />
     </div>
   );
 }

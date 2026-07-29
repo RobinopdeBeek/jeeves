@@ -3,7 +3,7 @@ import { useAISDKRuntime } from "@assistant-ui/react-ai-sdk";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ChatTransport, UIMessage } from "ai";
-import type { TasksDraft } from "@/lib/api";
+import type { TasksDraftTip } from "@/lib/api";
 import {
   AcpChatTransport,
   type ChatConnectionState,
@@ -13,10 +13,10 @@ export interface UseAcpChatOptions {
   cardId: string;
   stepKey: string;
   round?: number;
-  getCurrentSpecMarkdown?: () => string;
+  /** Live editor/tip draft for Define assist steps (opaque body; server frames by profile). */
+  getLiveDraftBody?: () => string;
   onSpecRevised?: (markdown: string) => void;
-  getCurrentTasksDraftJson?: () => string;
-  onTasksRevised?: (draft: TasksDraft) => void;
+  onTasksRevised?: (draft: TasksDraftTip) => void;
   onStreamingChange?: (streaming: boolean) => void;
 }
 
@@ -45,7 +45,7 @@ export type AcpChatState =
   | { status: "error"; error: string };
 
 /**
- * Custom ChatTransport hook: connects Grill / Spec ai-chat steps to AcpBridge.
+ * Custom ChatTransport hook: connects Grill / Spec / Tasks ai-chat steps to AcpBridge.
  *
  * The transport heals its own socket; this hook mirrors that into UI state and
  * re-seeds the runtime from the server transcript after a reconnect.
@@ -54,25 +54,21 @@ export function useAcpChat({
   cardId,
   stepKey,
   round = 0,
-  getCurrentSpecMarkdown,
+  getLiveDraftBody,
   onSpecRevised,
-  getCurrentTasksDraftJson,
   onTasksRevised,
   onStreamingChange,
 }: UseAcpChatOptions): AcpChatState {
   const [state, setState] = useState<AcpChatState>({ status: "connecting" });
-  const getSpecRef = useRef(getCurrentSpecMarkdown);
-  getSpecRef.current = getCurrentSpecMarkdown;
+  const getLiveDraftRef = useRef(getLiveDraftBody);
+  getLiveDraftRef.current = getLiveDraftBody;
   const onRevisedRef = useRef(onSpecRevised);
   onRevisedRef.current = onSpecRevised;
-  const getTasksRef = useRef(getCurrentTasksDraftJson);
-  getTasksRef.current = getCurrentTasksDraftJson;
   const onTasksRevisedRef = useRef(onTasksRevised);
   onTasksRevisedRef.current = onTasksRevised;
   const onStreamingRef = useRef(onStreamingChange);
   onStreamingRef.current = onStreamingChange;
-  const injectSpec = getCurrentSpecMarkdown != null;
-  const injectTasks = getCurrentTasksDraftJson != null;
+  const injectLiveDraft = getLiveDraftBody != null;
 
   useEffect(() => {
     let cancelled = false;
@@ -82,13 +78,10 @@ export function useAcpChat({
       cardId,
       stepKey,
       round,
-      getCurrentSpecMarkdown: injectSpec
-        ? () => getSpecRef.current?.() ?? ""
+      getLiveDraftBody: injectLiveDraft
+        ? () => getLiveDraftRef.current?.() ?? ""
         : undefined,
       onSpecRevised: (markdown) => onRevisedRef.current?.(markdown),
-      getCurrentTasksDraftJson: injectTasks
-        ? () => getTasksRef.current?.() ?? ""
-        : undefined,
       onTasksRevised: (draft) => onTasksRevisedRef.current?.(draft),
       onStreamingChange: (streaming) => onStreamingRef.current?.(streaming),
       onConnectionChange: (connection) => {
@@ -167,7 +160,7 @@ export function useAcpChat({
       // CONNECTING-safe close waits for open before closing (no setTimeout defer).
       transport.close();
     };
-  }, [cardId, stepKey, round, injectSpec, injectTasks]);
+  }, [cardId, stepKey, round, injectLiveDraft]);
 
   return state;
 }

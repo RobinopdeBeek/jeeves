@@ -93,12 +93,22 @@ describe("normalizeTasksDraft", () => {
     expect(tip.tasks[0]!.id).toBeTruthy();
   });
 
-  it("preserves tip ids by index on revise normalize", () => {
+  it("preserves tip ids from exchange id fields on revise", () => {
     const tip = normalizeTasksDraft(
       {
         tasks: [
-          { title: "API (revised)", description: "api", depends_on: [] },
-          { title: "UI", description: "ui", depends_on: [0] },
+          {
+            id: "keep-a",
+            title: "API (revised)",
+            description: "api",
+            depends_on: [],
+          },
+          {
+            id: "keep-b",
+            title: "UI",
+            description: "ui",
+            depends_on: [0],
+          },
           { title: "New", description: "", depends_on: [] },
         ],
       },
@@ -118,6 +128,91 @@ describe("normalizeTasksDraft", () => {
     expect(tip.tasks.map((t) => t.id)).toEqual(["keep-a", "keep-b", "new-0"]);
     expect(tip.tasks[1]!.dependsOn).toEqual(["keep-a"]);
     expect(tip.tasks[0]!.title).toBe("API (revised)");
+  });
+
+  it("preserves ids across insert and reorder when exchange carries ids", () => {
+    const tip = normalizeTasksDraft(
+      {
+        tasks: [
+          {
+            id: "keep-b",
+            title: "UI first",
+            description: "",
+            depends_on: [],
+          },
+          { title: "Inserted", description: "", depends_on: [0] },
+          {
+            id: "keep-a",
+            title: "API last",
+            description: "",
+            depends_on: [],
+          },
+        ],
+      },
+      {
+        previousTip: {
+          tasks: [
+            { id: "keep-a", title: "API", description: "", dependsOn: [] },
+            { id: "keep-b", title: "UI", description: "", dependsOn: ["keep-a"] },
+          ],
+        },
+        assignId: (() => {
+          let n = 0;
+          return () => `new-${n++}`;
+        })(),
+      },
+    );
+    expect(tip.tasks.map((t) => t.id)).toEqual(["keep-b", "new-0", "keep-a"]);
+    expect(tip.tasks[1]!.dependsOn).toEqual(["keep-b"]);
+  });
+
+  it("rejects unknown exchange ids when revising a tip", () => {
+    expect(() =>
+      normalizeTasksDraft(
+        {
+          tasks: [
+            {
+              id: "ghost",
+              title: "Nope",
+              description: "",
+              depends_on: [],
+            },
+          ],
+        },
+        {
+          previousTip: {
+            tasks: [
+              { id: "keep-a", title: "API", description: "", dependsOn: [] },
+            ],
+          },
+        },
+      ),
+    ).toThrow(/unknown task id/i);
+  });
+
+  it("does not reuse prior tip ids by array index alone", () => {
+    const tip = normalizeTasksDraft(
+      {
+        tasks: [
+          { title: "Swapped order A", description: "", depends_on: [] },
+          { title: "Swapped order B", description: "", depends_on: [0] },
+        ],
+      },
+      {
+        previousTip: {
+          tasks: [
+            { id: "keep-a", title: "API", description: "", dependsOn: [] },
+            { id: "keep-b", title: "UI", description: "", dependsOn: ["keep-a"] },
+          ],
+        },
+        assignId: (() => {
+          let n = 0;
+          return () => `new-${n++}`;
+        })(),
+      },
+    );
+    expect(tip.tasks.map((t) => t.id)).toEqual(["new-0", "new-1"]);
+    expect(tip.tasks[1]!.dependsOn).toEqual(["new-0"]);
   });
 });
 

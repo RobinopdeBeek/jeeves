@@ -5,6 +5,14 @@ import { finalizeSpecAssistTurn } from "../chat/finalize-spec-assist.js";
 import { finalizeTasksAssistTurn } from "../chat/finalize-tasks-assist.js";
 import type { StepKey } from "../pipelines.js";
 import { projectStoreExchangePath } from "../project-store.js";
+import {
+  frameSpecAssistUserMessage,
+  stripSpecAssistFrame,
+} from "../../shared/spec-assist-frame.js";
+import {
+  frameTasksAssistUserMessage,
+  stripTasksAssistFrame,
+} from "../../shared/tasks-assist-frame.js";
 import type { InteractivePermissionPolicy } from "./chat.js";
 import { buildGrillOpeningPrompt } from "./grill-prompt.js";
 import { buildSpecAssistOpeningPrompt } from "./spec-assist-prompt.js";
@@ -34,6 +42,13 @@ export type ChatStepProfile = {
     grillSession?: string;
     spec?: string;
   }) => string;
+  /**
+   * Frame a user turn with the live draft body for the agent prompt only.
+   * Transcript keeps the bare user text.
+   */
+  frameUserMessage?: (userText: string, liveDraftBody: string) => string;
+  /** Strip a framed draft from older transcripts so chat stays readable. */
+  stripFrame?: (text: string) => string;
   /** Optional turn-finalizer (e.g. Spec / Tasks assist harvest). */
   onTurnComplete?: (ctx: {
     cardId: string;
@@ -60,6 +75,8 @@ const grillProfile: ChatStepProfile = {
 const specProfile: ChatStepProfile = {
   interactivePermissionPolicy: "cursor-like",
   needsGrillSession: true,
+  frameUserMessage: frameSpecAssistUserMessage,
+  stripFrame: stripSpecAssistFrame,
   resolveOpeningPrompt: ({ card, cwd, promptsRoot, cardId, grillSession }) =>
     buildSpecAssistOpeningPrompt(
       {
@@ -87,6 +104,8 @@ const specProfile: ChatStepProfile = {
 const tasksProfile: ChatStepProfile = {
   interactivePermissionPolicy: "cursor-like",
   needsSpec: true,
+  frameUserMessage: frameTasksAssistUserMessage,
+  stripFrame: stripTasksAssistFrame,
   resolveOpeningPrompt: ({ card, cwd, promptsRoot, cardId, spec }) =>
     buildTasksReviseOpeningPrompt(
       {
@@ -128,4 +147,13 @@ export function chatStepProfile(stepKey: StepKey): ChatStepProfile {
     throw new Error(`no opening prompt for step: ${stepKey}`);
   }
   return profile;
+}
+
+/** Strip any known assist frame (older transcripts may mix Spec/Tasks). */
+export function stripAnyAssistFrame(text: string): string {
+  let out = text;
+  for (const profile of Object.values(PROFILES)) {
+    if (profile?.stripFrame) out = profile.stripFrame(out);
+  }
+  return out;
 }

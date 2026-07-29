@@ -38,12 +38,12 @@ const paths = ensureProjectStore(repoPath);
 const port = Number(process.env.JEEVES_PORT ?? 3939);
 
 const db = openDb(paths.dbPath);
-const store = new CardStore(db);
+const artifacts = new ArtifactStore(db, paths.artifactRoot);
+const store = new CardStore(db, artifacts);
 const project = store.ensureDefaultProject(path.basename(paths.repoPath), paths.repoPath);
 
 const events = new EventBus();
 const runs = new RunStore(db);
-const artifacts = new ArtifactStore(db, paths.artifactRoot);
 const worktrees = new WorktreeManager({
   repoPath: paths.repoPath,
   worktreeRoot: paths.worktreeRoot,

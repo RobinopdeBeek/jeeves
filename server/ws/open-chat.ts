@@ -1,12 +1,10 @@
 import type { UIMessage } from "ai";
-import { stripSpecAssistFrame } from "../../shared/spec-assist-frame.js";
-import { stripTasksAssistFrame } from "../../shared/tasks-assist-frame.js";
 import type { ArtifactStore } from "../artifacts/store.js";
 import type { CardStore } from "../cards/store.js";
 import type { EventBus } from "../execution/events.js";
 import type { StepKey } from "../pipelines.js";
 import type { SpawnAcp } from "./chat.js";
-import { chatStepProfile } from "./chat-step-profile.js";
+import { chatStepProfile, stripAnyAssistFrame } from "./chat-step-profile.js";
 import {
   ChatSessionRegistry,
   type SessionKey,
@@ -78,7 +76,7 @@ export function loadTranscript(
 }
 
 function stripAssistFrame(text: string): string {
-  return stripTasksAssistFrame(stripSpecAssistFrame(text));
+  return stripAnyAssistFrame(text);
 }
 
 function stripFramedUserParts(message: UIMessage): UIMessage {
@@ -175,6 +173,7 @@ export async function openChat(
       deps.artifacts.upsertTranscript(key.cardId, key.stepKey, key.round, messages);
     },
     onTurnComplete: options.onTurnComplete,
+    frameUserMessage: profile.frameUserMessage,
   });
 
   return { history, handle };

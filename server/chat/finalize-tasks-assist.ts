@@ -13,8 +13,8 @@ export type TasksAssistTurnResult =
 
 /**
  * After a Tasks side-chat turn: classify by exchange presence.
- * Missing → Q&A (tip unchanged). Present → harvest (Zod + preserve tip ids),
- * append a new tasks-draft version.
+ * Missing → Q&A (tip unchanged). Present → harvest (Zod + preserve tip ids from
+ * exchange), append a new tasks-draft version.
  */
 export function finalizeTasksAssistTurn(deps: {
   artifacts: ArtifactStore;

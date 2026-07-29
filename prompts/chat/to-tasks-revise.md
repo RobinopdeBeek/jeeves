@@ -29,10 +29,10 @@ Feature Spec for scope. Prefer this over inventing requirements. Keep as silent 
 
 ## Behaviour
 
-Each user message includes the **current tip `tasks-draft` JSON** from the editor. Treat that document as the live draft (stable `id` / `dependsOn` fields are host-owned — your exchange output uses indices).
+Each user message includes the **current tip `tasks-draft` JSON** from the editor. Treat that document as the live draft. Tip `id` / `dependsOn` are host-owned on the durable tip; your exchange still uses `depends_on` indices, but **copy each existing task's `id`** into the exchange so the host can preserve identity across insert/reorder/edit.
 
 1. **Questions / clarification** — answer in chat only. Do **not** write the exchange file.
-2. **Change requests** — write the **full** revised breakdown JSON (not a patch) to the project-store exchange path below, then confirm briefly in chat. The host Zod-validates, preserves tip ids by index, and appends a new tip version.
+2. **Change requests** — write the **full** revised breakdown JSON (not a patch) to the project-store exchange path below, then confirm briefly in chat. The host Zod-validates, preserves tip ids from exchange `id` fields, and appends a new tip version.
 
 Use the same vertical-slice discipline as `/to-draft-tasks`: tracer bullets, independently demoable slices, expand–contract for wide refactors.
 
@@ -52,6 +52,7 @@ Schema:
 {
   "tasks": [
     {
+      "id": "tip-id-from-current-json",
       "title": "string",
       "description": "markdown with acceptance criteria + file hints inline",
       "depends_on": [0]
@@ -60,7 +61,9 @@ Schema:
 }
 ```
 
-- `depends_on` holds **0-based indices** of other tasks in the same `tasks` array.
+- Copy `id` from the current tip JSON for every task you keep or edit. Omit `id` only for brand-new tasks (the host assigns a fresh id).
+- Never invent or reuse an `id` that is not in the current tip.
+- `depends_on` holds **0-based indices** of other tasks in the same `tasks` array (not tip ids).
 - Use an empty array when a task has no blockers.
-- Keep existing tasks in the same order when revising them so the host can preserve stable ids; append new tasks at the end.
+- You may reorder or insert freely — identity comes from `id`, not array position.
 - Titles and descriptions must use the project's domain vocabulary.

@@ -13,6 +13,7 @@ import {
   initialAssistOpen,
   TASKS_ASSIST_LABELS,
 } from "@/components/assist/DefineAssistPanel";
+import { CardTile } from "@/components/CardTile";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -25,10 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cardTileVariants } from "@/components/ui/pipeline-status";
 import {
-  Tooltip,
-  TooltipContent,
   TooltipProvider,
-  TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useTasksTipSession } from "@/hooks/useTasksTipSession";
 import type { TasksDraftTask, TasksDraftTip } from "@/lib/api";
@@ -291,16 +289,9 @@ export function StepTasks({
           ) : null}
 
           {awaiting && progress ? (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <p className="text-sm text-muted-foreground">
-                    Implementing Task {progress.current} of {progress.total}
-                  </p>
-                </TooltipTrigger>
-                <TooltipContent>awaiting child tasks</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <p className="text-sm text-muted-foreground">
+              Implementing Task {progress.current} of {progress.total}
+            </p>
           ) : null}
 
           {awaiting ? (
@@ -309,24 +300,10 @@ export function StepTasks({
                 <p className="text-muted-foreground">No child tasks.</p>
               </div>
             ) : (
-              <ul className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
-                {children.map((child, index) => (
-                  <li key={child.id}>
-                    <div className={cn(cardTileVariants({ attention: false }), "w-full")}>
-                      <div className="text-sm font-medium">
-                        {index + 1}. {child.title || (
-                          <em className="text-muted-foreground">Untitled</em>
-                        )}
-                      </div>
-                      {child.blockedBy.length > 0 ? (
-                        <div className="mt-1 text-xs text-muted-foreground">
-                          Blocked by{" "}
-                          {child.blockedBy
-                            .map((b) => b.title || "Untitled")
-                            .join(", ")}
-                        </div>
-                      ) : null}
-                    </div>
+              <ul className="grid min-h-0 flex-1 grid-cols-[repeat(auto-fill,minmax(min(100%,16rem),1fr))] content-start gap-2 overflow-y-auto">
+                {children.map((child) => (
+                  <li key={child.id} className="min-w-0 [&>*]:h-full">
+                    <CardTile card={child} />
                   </li>
                 ))}
               </ul>

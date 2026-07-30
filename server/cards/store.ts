@@ -48,13 +48,20 @@ export class CardStoreError extends Error {
 
 export type BlockedByRef = { id: string; title: string };
 
+/** Child task payload rich enough to render the same board `CardTile`. */
 export type CardChildSummary = {
   id: string;
   title: string;
+  description: string;
+  kind: Card["kind"];
   status: Card["status"];
   column: Card["column"];
   position: number;
+  steps: EnrichedStep[];
   blockedBy: BlockedByRef[];
+  creatingSpec: boolean;
+  creatingTasks: boolean;
+  implementProgress: ImplementProgress | null;
 };
 
 export type ImplementProgress = {
@@ -694,13 +701,24 @@ export class CardStore {
       .where(eq(cards.parentCardId, parentId))
       .orderBy(asc(cards.position))
       .all();
-    return kids.map((kid) => ({
-      id: kid.id,
-      title: kid.title,
-      status: kid.status,
-      column: kid.column,
-      position: kid.position,
-      blockedBy: this.loadBlockedBy(kid.id),
-    }));
+    // Task children have no further descendants, so attachSteps → loadChildren
+    // bottoms out immediately.
+    return kids.map((kid) => {
+      const full = this.attachSteps(kid);
+      return {
+        id: full.id,
+        title: full.title,
+        description: full.description,
+        kind: full.kind,
+        status: full.status,
+        column: full.column,
+        position: full.position,
+        steps: full.steps,
+        blockedBy: full.blockedBy,
+        creatingSpec: full.creatingSpec,
+        creatingTasks: full.creatingTasks,
+        implementProgress: full.implementProgress,
+      };
+    });
   }
 }

@@ -20,13 +20,20 @@ export interface CardStep {
 
 export type BlockedByRef = { id: string; title: string };
 
+/** Child task payload rich enough to render the same board `CardTile`. */
 export type CardChildSummary = {
   id: string;
   title: string;
+  description: string;
+  kind: Card["kind"];
   status: Card["status"];
   column: ColumnId | null;
   position: number;
+  steps: CardStep[];
   blockedBy: BlockedByRef[];
+  creatingSpec: boolean;
+  creatingTasks: boolean;
+  implementProgress: ImplementProgress | null;
 };
 
 export type ImplementProgress = {

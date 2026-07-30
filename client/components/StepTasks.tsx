@@ -10,6 +10,7 @@ import {
   AssistLauncherFab,
   DefineAssistChat,
   DefineAssistSidePanel,
+  initialAssistOpen,
   TASKS_ASSIST_LABELS,
 } from "@/components/assist/DefineAssistPanel";
 import { Button } from "@/components/ui/button";
@@ -49,6 +50,10 @@ export function StepTasks({
   registerTasksFooter,
 }: StepPanelProps) {
   const tasksStep = card.steps.find((s) => s.key === "tasks");
+  // Match Spec: keep assist mounted while the step is ai-working (turn in
+  // flight). Gating on needs-user alone unmounts the panel on every send.
+  const shaping =
+    tasksStep?.status === "needs-user" || tasksStep?.status === "ai-working";
   const editable = tasksStep?.status === "needs-user";
   const awaiting = tasksStep?.status === "awaiting";
   const children = card.children ?? [];
@@ -56,7 +61,7 @@ export function StepTasks({
 
   const [streaming, setStreaming] = useState(false);
   const [displaced, setDisplaced] = useState(false);
-  const [assistOpen, setAssistOpen] = useState(true);
+  const [assistOpen, setAssistOpen] = useState(initialAssistOpen);
   const [assistUnread, setAssistUnread] = useState(false);
   const [inspector, setInspector] = useState<InspectorState>(null);
   const [form, setForm] = useState({
@@ -81,7 +86,7 @@ export function StepTasks({
 
   useEffect(() => {
     if (!registerTasksFooter) return;
-    if (!editable) {
+    if (!shaping) {
       registerTasksFooter(null);
       return;
     }
@@ -95,7 +100,7 @@ export function StepTasks({
     });
   }, [
     registerTasksFooter,
-    editable,
+    shaping,
     tip.canImplement,
     tip.implementing,
     tip.actionError,
@@ -236,7 +241,7 @@ export function StepTasks({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
-      {tip.actionError && !editable ? (
+      {tip.actionError && !shaping ? (
         <p className="text-sm text-destructive" role="alert">
           {tip.actionError}
         </p>
@@ -253,12 +258,13 @@ export function StepTasks({
 
       <div
         className={cn(
-          "relative flex min-h-0 flex-1 flex-col gap-4",
-          assistOpen && editable && "md:flex-row",
+          "relative flex min-h-0 flex-1 flex-col",
+          // Keep the row while the panel exit-animates; panel is always mounted.
+          shaping && "md:flex-row md:gap-4",
         )}
       >
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-          {editable ? (
+          {shaping ? (
             <div className="flex flex-wrap items-center gap-2">
               <Button
                 type="button"
@@ -361,7 +367,7 @@ export function StepTasks({
                         </div>
                       ) : null}
                     </button>
-                    {editable ? (
+                    {shaping ? (
                       <Button
                         type="button"
                         variant="ghost"
@@ -384,7 +390,7 @@ export function StepTasks({
           )}
         </div>
 
-        {editable ? (
+        {shaping ? (
           <TooltipProvider>
             {!assistOpen ? (
               <AssistLauncherFab
@@ -423,14 +429,17 @@ export function StepTasks({
           if (!open) closeInspector();
         }}
       >
-        <DialogContent className="sm:max-w-lg" showCloseButton={false}>
-          <DialogHeader>
+        <DialogContent
+          className="flex max-h-[calc(100dvh-2rem)] flex-col gap-4 overflow-hidden sm:max-w-lg"
+          showCloseButton={false}
+        >
+          <DialogHeader className="shrink-0">
             <DialogTitle>
               {inspector?.mode === "add" ? "New task" : "Edit task"}
             </DialogTitle>
           </DialogHeader>
 
-          <div className="flex flex-col gap-3">
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
             <label className="flex flex-col gap-1.5 text-sm">
               <span className="font-medium">Title</span>
               <Input
@@ -482,7 +491,7 @@ export function StepTasks({
             </label>
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="shrink-0">
             {editable && inspector?.mode === "edit" ? (
               <Button
                 type="button"

@@ -3,6 +3,7 @@ import {
   AssistLauncherFab,
   DefineAssistChat,
   DefineAssistSidePanel,
+  initialAssistOpen,
   SPEC_ASSIST_LABELS,
 } from "@/components/assist/DefineAssistPanel";
 import {
@@ -52,7 +53,7 @@ function LiveSpec({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(false);
-  const [assistOpen, setAssistOpen] = useState(true);
+  const [assistOpen, setAssistOpen] = useState(initialAssistOpen);
   const [assistUnread, setAssistUnread] = useState(false);
   /** Remount MDXEditor when the Spec artifact is replaced (AI harvest / reload). */
   const [editorContentKey, setEditorContentKey] = useState(0);
@@ -222,7 +223,8 @@ function LiveSpec({
       <div
         className={cn(
           "relative flex min-h-0 flex-1 flex-col",
-          assistOpen && "md:flex-row md:gap-4",
+          // Keep the row while the panel exit-animates; panel is always mounted.
+          "md:flex-row md:gap-4",
         )}
       >
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">

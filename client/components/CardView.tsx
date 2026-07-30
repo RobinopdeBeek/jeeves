@@ -160,9 +160,12 @@ export function CardView() {
   const createTasksDisabled =
     synthesizingTasks || !card.canCreateTasks || synthesizingSpec;
   const tasksStep = card.steps.find((s) => s.key === "tasks");
+  // Stay mounted during ai-working (like Create Spec on Grill) so the footer
+  // does not jump when a Tasks assist turn flips the step status.
   const showImplement =
     activeKey === "tasks" &&
-    tasksStep?.status === "needs-user" &&
+    (tasksStep?.status === "needs-user" ||
+      tasksStep?.status === "ai-working") &&
     tasksFooter !== null;
   const wideLayout = activeKey === "spec" || activeKey === "tasks";
 

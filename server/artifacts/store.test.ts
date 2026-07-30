@@ -290,7 +290,7 @@ describe("ArtifactStore", () => {
       kind: "tasks-draft",
     });
     expect(first.path).toMatch(
-      new RegExp(`^cards/${cardId}/0/tasks-draft/.+\\.json$`),
+      new RegExp(`^cards/${cardId}/0/tasks/drafts/.+\\.json$`),
     );
     const raw = artifacts.readContent(first);
     expect(raw.startsWith("---")).toBe(false);

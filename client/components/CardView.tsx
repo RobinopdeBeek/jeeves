@@ -1,4 +1,4 @@
-import { IconArrowLeft, IconTrash } from "@tabler/icons-react";
+import { IconArrowLeft, IconLoader2, IconTrash } from "@tabler/icons-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, type Card, type KindPath } from "@/lib/api";
@@ -19,6 +19,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Logo } from "./Logo";
 import { STEP_PANELS } from "./step-panels";
+import type { TasksFooterActions } from "./step-panel-types";
 
 export function CardView() {
   const { id } = useParams<{ id: string }>();
@@ -33,10 +34,15 @@ export function CardView() {
   const [createTasksError, setCreateTasksError] = useState<string | null>(null);
   /** Pessimistic until LiveGrill reports ACP handshake finished. */
   const [grillStarting, setGrillStarting] = useState(true);
+  const [tasksFooter, setTasksFooter] = useState<TasksFooterActions | null>(null);
   const flushSpecRef = useRef<(() => Promise<void>) | null>(null);
 
   const registerSpecFlush = useCallback((flush: (() => Promise<void>) | null) => {
     flushSpecRef.current = flush;
+  }, []);
+
+  const registerTasksFooter = useCallback((actions: TasksFooterActions | null) => {
+    setTasksFooter(actions);
   }, []);
 
   const onGrillStartingChange = useCallback((starting: boolean) => {
@@ -47,6 +53,7 @@ export function CardView() {
     if (!id) return;
     setTabOverride(null);
     setGrillStarting(true);
+    setTasksFooter(null);
     api
       .getCard(id)
       .then(setCard)
@@ -152,6 +159,11 @@ export function CardView() {
     activeKey === "spec" && specStep !== undefined && specStep.status !== "done";
   const createTasksDisabled =
     synthesizingTasks || !card.canCreateTasks || synthesizingSpec;
+  const tasksStep = card.steps.find((s) => s.key === "tasks");
+  const showImplement =
+    activeKey === "tasks" &&
+    tasksStep?.status === "needs-user" &&
+    tasksFooter !== null;
   const wideLayout = activeKey === "spec" || activeKey === "tasks";
 
   return (
@@ -193,6 +205,7 @@ export function CardView() {
             stepKey={activeKey}
             onCardChange={setCard}
             registerSpecFlush={registerSpecFlush}
+            registerTasksFooter={registerTasksFooter}
             synthesizingSpec={synthesizingSpec}
             synthesizingTasks={synthesizingTasks}
             onGrillStartingChange={onGrillStartingChange}
@@ -275,6 +288,27 @@ export function CardView() {
             </Button>
           </>
         )}
+
+        {showImplement && tasksFooter ? (
+          <>
+            <div className="flex min-w-0 flex-1 flex-col items-end gap-1">
+              {tasksFooter.error ? (
+                <p className="max-w-md text-right text-sm text-destructive" role="alert">
+                  {tasksFooter.error}
+                </p>
+              ) : null}
+            </div>
+            <Button
+              disabled={!tasksFooter.canImplement || tasksFooter.implementing}
+              onClick={tasksFooter.implement}
+            >
+              {tasksFooter.implementing ? (
+                <IconLoader2 data-icon="inline-start" className="animate-spin" />
+              ) : null}
+              Implement →
+            </Button>
+          </>
+        ) : null}
       </footer>
 
       <p className="pointer-events-none fixed bottom-1 left-1/2 -translate-x-1/2 text-xs text-muted-foreground">

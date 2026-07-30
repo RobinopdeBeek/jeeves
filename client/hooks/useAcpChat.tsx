@@ -23,25 +23,25 @@ export interface UseAcpChatOptions {
 export type AcpChatState =
   | { status: "connecting" }
   | {
-      status: "ready";
-      transport: AcpChatTransport;
-      messages: UIMessage[];
-      /** ACP handshake done — composer send is allowed. */
-      sessionOpen: boolean;
-      /** Socket health; "reconnecting" drives the recovery hint. */
-      connection: ChatConnectionState;
-      /**
-       * Bumped when a reconnect delivers a fresh transcript. Callers key the
-       * chat runtime on it so recovery re-seeds history (like remounting).
-       */
-      epoch: number;
-    }
+    status: "ready";
+    transport: AcpChatTransport;
+    messages: UIMessage[];
+    /** ACP handshake done — composer send is allowed. */
+    sessionOpen: boolean;
+    /** Socket health; "reconnecting" drives the recovery hint. */
+    connection: ChatConnectionState;
+    /**
+     * Bumped when a reconnect delivers a fresh transcript. Callers key the
+     * chat runtime on it so recovery re-seeds history (like remounting).
+     */
+    epoch: number;
+  }
   | {
-      status: "displaced";
-      reason: string;
-      /** Last messages seen on the live socket before displacement (may be stale). */
-      messages: UIMessage[];
-    }
+    status: "displaced";
+    reason: string;
+    /** Last messages seen on the live socket before displacement (may be stale). */
+    messages: UIMessage[];
+  }
   | { status: "error"; error: string };
 
 /**

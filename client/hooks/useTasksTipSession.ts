@@ -77,7 +77,7 @@ export function useTasksTipSession(opts: {
             t.title === current.tasks[i]?.title &&
             t.description === current.tasks[i]?.description &&
             JSON.stringify(t.dependsOn) ===
-              JSON.stringify(current.tasks[i]?.dependsOn),
+            JSON.stringify(current.tasks[i]?.dependsOn),
         );
       if (same) {
         setVersionCount(latest.versionCount);

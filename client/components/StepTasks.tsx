@@ -1,12 +1,11 @@
 import {
   IconArrowBackUp,
-  IconLoader2,
   IconPlus,
   IconTrash,
   IconX,
 } from "@tabler/icons-react";
 import { nanoid } from "nanoid";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AssistLauncherFab,
   DefineAssistChat,
@@ -44,7 +43,11 @@ type InspectorState =
  * Tasks shaping surface: tip `tasks-draft` tiles + inspector + AI side-chat
  * (ADR 0014). Tip protocol lives in useTasksTipSession; assist chrome is shared.
  */
-export function StepTasks({ card, onCardChange }: StepPanelProps) {
+export function StepTasks({
+  card,
+  onCardChange,
+  registerTasksFooter,
+}: StepPanelProps) {
   const tasksStep = card.steps.find((s) => s.key === "tasks");
   const editable = tasksStep?.status === "needs-user";
   const awaiting = tasksStep?.status === "awaiting";
@@ -73,6 +76,34 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
   const assistOpenRef = useRef(assistOpen);
   assistOpenRef.current = assistOpen;
   const wasStreamingRef = useRef(false);
+  const implementRef = useRef(tip.implement);
+  implementRef.current = tip.implement;
+
+  useEffect(() => {
+    if (!registerTasksFooter) return;
+    if (!editable) {
+      registerTasksFooter(null);
+      return;
+    }
+    registerTasksFooter({
+      canImplement: tip.canImplement,
+      implementing: tip.implementing,
+      error: tip.actionError,
+      implement: () => {
+        void implementRef.current();
+      },
+    });
+  }, [
+    registerTasksFooter,
+    editable,
+    tip.canImplement,
+    tip.implementing,
+    tip.actionError,
+  ]);
+
+  useEffect(() => {
+    return () => registerTasksFooter?.(null);
+  }, [registerTasksFooter]);
 
   function applyRevision(draft: TasksDraftTip) {
     tip.applyRevision(draft);
@@ -145,8 +176,16 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
     }
   }
 
-  function titleById(id: string): string {
-    return tip.tip.tasks.find((t) => t.id === id)?.title || id;
+  /** Compact cue for draft tiles: "Blocked by 1 and 2". */
+  function formatBlockedByNumbers(dependsOn: string[]): string {
+    const nums = dependsOn
+      .map((id) => tip.tip.tasks.findIndex((t) => t.id === id))
+      .filter((i) => i >= 0)
+      .map((i) => String(i + 1));
+    if (nums.length === 0) return "";
+    if (nums.length === 1) return `Blocked by ${nums[0]}`;
+    if (nums.length === 2) return `Blocked by ${nums[0]} and ${nums[1]}`;
+    return `Blocked by ${nums.slice(0, -1).join(", ")}, and ${nums[nums.length - 1]}`;
   }
 
   function toggleDepend(id: string) {
@@ -182,7 +221,9 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
       : inspector?.mode === "add"
         ? inspector.draft.id
         : null;
-  const blockerCandidates = tip.tip.tasks.filter((t) => t.id !== editingId);
+  const blockerCandidates = tip.tip.tasks
+    .map((t, index) => ({ task: t, index }))
+    .filter(({ task }) => task.id !== editingId);
 
   function openAssist() {
     setAssistOpen(true);
@@ -195,7 +236,7 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
-      {tip.actionError ? (
+      {tip.actionError && !editable ? (
         <p className="text-sm text-destructive" role="alert">
           {tip.actionError}
         </p>
@@ -310,13 +351,12 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
                         )}
                       </div>
                       {task.dependsOn.length > 0 ? (
-                        <div className="mt-1 text-xs text-muted-foreground">
-                          Blocked by{" "}
-                          {task.dependsOn.map(titleById).join(", ")}
+                        <div className="mt-1 truncate text-xs font-medium text-foreground/60">
+                          {formatBlockedByNumbers(task.dependsOn)}
                         </div>
                       ) : null}
                       {task.description ? (
-                        <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                        <div className="mt-1 truncate text-xs text-muted-foreground">
                           {task.description}
                         </div>
                       ) : null}
@@ -342,21 +382,6 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
               ))}
             </ul>
           )}
-
-          {editable ? (
-            <div className="flex justify-end border-t pt-3">
-              <Button
-                type="button"
-                disabled={!tip.canImplement || tip.implementing}
-                onClick={() => void tip.implement()}
-              >
-                {tip.implementing ? (
-                  <IconLoader2 data-icon="inline-start" className="animate-spin" />
-                ) : null}
-                Implement →
-              </Button>
-            </div>
-          ) : null}
         </div>
 
         {editable ? (
@@ -423,7 +448,7 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
                 <p className="text-xs text-muted-foreground">No other drafts yet.</p>
               ) : (
                 <div className="flex flex-wrap gap-1.5">
-                  {blockerCandidates.map((t) => {
+                  {blockerCandidates.map(({ task: t, index }) => {
                     const selected = form.dependsOn.includes(t.id);
                     return (
                       <Button
@@ -434,7 +459,7 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
                         disabled={!editable || tip.busy || streaming}
                         onClick={() => toggleDepend(t.id)}
                       >
-                        {t.title || "Untitled"}
+                        {index + 1}. {t.title || "Untitled"}
                         {selected ? <IconX data-icon="inline-end" /> : null}
                       </Button>
                     );
@@ -461,7 +486,7 @@ export function StepTasks({ card, onCardChange }: StepPanelProps) {
             {editable && inspector?.mode === "edit" ? (
               <Button
                 type="button"
-                variant="destructive"
+                variant="ghost"
                 className="sm:mr-auto"
                 disabled={tip.busy || streaming}
                 onClick={() => void deleteTask(inspector.taskId)}

@@ -232,13 +232,15 @@ export function DefineAssistChat({
         <GrillTransportContext.Provider value={chat.transport}>
           <PermissionDataUI />
           <Thread
-            sessionOpen={chat.sessionOpen && !composerLocked}
-            placeholder="Ask or request a change…"
-            openingPlaceholder={
+            // Keep sessionOpen true while streaming — flipping it false swaps the
+            // composer for a "Starting session" spinner and feels like the panel hid.
+            sessionOpen={chat.sessionOpen}
+            placeholder={
               composerLocked
                 ? labels.workingPlaceholder
-                : labels.openingPlaceholder
+                : "Ask or request a change…"
             }
+            openingPlaceholder={labels.openingPlaceholder}
           />
         </GrillTransportContext.Provider>
       </AcpChatProvider>

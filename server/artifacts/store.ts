@@ -592,7 +592,13 @@ export class ArtifactStore {
               kind === "tasks-breakdown"
             ? "json"
             : "md";
-    return path.posix.join("cards", cardId, String(round), kind, `${id}.${ext}`);
+    // Nest tip versions under the Tasks step folder: tasks/drafts/<id>.json
+    // (kind stays `tasks-draft` in SQLite / ADR 0014).
+    const dir =
+      kind === "tasks-draft"
+        ? path.posix.join("tasks", "drafts")
+        : kind;
+    return path.posix.join("cards", cardId, String(round), dir, `${id}.${ext}`);
   }
 
   private assertUnderRoot(relativePath: string): string {

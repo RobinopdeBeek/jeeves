@@ -5,6 +5,7 @@ export type StepStatus =
   | "queued"
   | "ai-working"
   | "needs-user"
+  | "awaiting"
   | "done";
 
 export type StepKind = "human" | "ai-chat" | "ai-execution";
@@ -17,23 +18,53 @@ export interface CardStep {
   column: ColumnId;
 }
 
+export type BlockedByRef = { id: string; title: string };
+
+/** Child task payload rich enough to render the same board `CardTile`. */
+export type CardChildSummary = {
+  id: string;
+  title: string;
+  description: string;
+  kind: Card["kind"];
+  status: Card["status"];
+  column: ColumnId | null;
+  position: number;
+  steps: CardStep[];
+  blockedBy: BlockedByRef[];
+  creatingSpec: boolean;
+  creatingTasks: boolean;
+  implementProgress: ImplementProgress | null;
+};
+
+export type ImplementProgress = {
+  current: number;
+  total: number;
+};
+
 export interface Card {
   id: string;
   projectId: string;
+  parentCardId: string | null;
   kind: "feature" | "task" | null;
-  status: "draft" | "active" | "merged" | "done";
+  status: "active" | "merged" | "done";
   column: ColumnId | null;
   title: string;
   description: string;
+  branch: string | null;
   position: number;
   createdAt: string;
   steps: CardStep[];
+  blockedBy: BlockedByRef[];
+  children: CardChildSummary[];
+  implementProgress: ImplementProgress | null;
   /** Server-derived: grill→spec hand-off is allowed (Create Spec). */
   canCreateSpec: boolean;
   /** Server-derived: spec→tasks hand-off is allowed (Create Tasks). */
   canCreateTasks: boolean;
   /** True while create-spec synthesis is in flight (survives remounts). */
   creatingSpec: boolean;
+  /** True while create-tasks synthesis is in flight (survives remounts). */
+  creatingTasks: boolean;
 }
 
 export interface Project {
@@ -76,6 +107,22 @@ export interface ArtifactContent {
   content: string;
 }
 
+export interface TasksDraftTask {
+  id: string;
+  title: string;
+  description: string;
+  dependsOn: string[];
+}
+
+export interface TasksDraft {
+  tasks: TasksDraftTask[];
+}
+
+/** Tip document as returned by tip CRUD routes (includes append-only version count). */
+export type TasksDraftTip = TasksDraft & {
+  versionCount: number;
+};
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     headers: { "Content-Type": "application/json" },
@@ -113,11 +160,25 @@ export const api = {
     request<Card>(`/api/cards/${id}/create-spec`, { method: "POST" }),
   createTasks: (id: string) =>
     request<Card>(`/api/cards/${id}/create-tasks`, { method: "POST" }),
+  implement: (id: string) =>
+    request<Card>(`/api/cards/${id}/implement`, { method: "POST" }),
   putSpec: (id: string, content: string) =>
     request<ArtifactContent>(`/api/cards/${id}/spec`, {
       method: "PUT",
       body: JSON.stringify({ content }),
     }),
+  getTasksDraft: (id: string) => request<TasksDraftTip>(`/api/cards/${id}/tasks`),
+  putTasksDraft: (id: string, draft: TasksDraft) =>
+    request<TasksDraftTip>(`/api/cards/${id}/tasks`, {
+      method: "PUT",
+      body: JSON.stringify(draft),
+    }),
+  deleteTasksDraftTask: (id: string, taskId: string) =>
+    request<TasksDraftTip>(`/api/cards/${id}/tasks/${taskId}`, {
+      method: "DELETE",
+    }),
+  undoTasksDraft: (id: string) =>
+    request<TasksDraftTip>(`/api/cards/${id}/tasks/undo`, { method: "POST" }),
   deleteCard: (id: string) =>
     request<{ ok: boolean }>(`/api/cards/${id}`, { method: "DELETE" }),
   listRuns: (cardId: string) => request<Run[]>(`/api/cards/${cardId}/runs`),

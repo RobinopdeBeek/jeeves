@@ -16,4 +16,4 @@ Once done, use /code-review to review the work.
 
 Commit your work to the current branch.
 
-Write a concise QA Checklist, so the user can quickly start testing.
+Remind the user to run `/qa-checklist` when the PR is ready for manual QA.

@@ -32,4 +32,35 @@ describe("ChatConnection liveness", () => {
 
     expect(sent).toEqual([]);
   });
+
+  it("forwards cancel mid-turn even while sending is latched", async () => {
+    const cancelCalls: number[] = [];
+    const { conn } = harness();
+    // Inject a handle the way start() would after openChat.
+    (
+      conn as unknown as {
+        handle: {
+          cancelTurn: () => void;
+          sendMessage: () => Promise<void>;
+          respondToPermission: () => void;
+          attach: () => void;
+          detach: () => void;
+          getPendingPermissionIds: () => string[];
+        };
+        sending: boolean;
+      }
+    ).handle = {
+      cancelTurn: () => cancelCalls.push(1),
+      sendMessage: async () => {},
+      respondToPermission: () => {},
+      attach: () => {},
+      detach: () => {},
+      getPendingPermissionIds: () => [],
+    };
+    (conn as unknown as { sending: boolean }).sending = true;
+
+    await conn.onClientMessage(JSON.stringify({ type: "cancel" }));
+
+    expect(cancelCalls).toEqual([1]);
+  });
 });

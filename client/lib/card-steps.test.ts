@@ -14,7 +14,7 @@ const featureAfterDecide: CardStep[] = [
   { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
   { key: "grill", status: "needs-user", label: "Grill", stepKind: "ai-chat", column: "define" },
   { key: "spec", status: "pending", label: "Spec", stepKind: "ai-chat", column: "define" },
-  { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-execution", column: "define" },
+  { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-chat", column: "define" },
 ];
 
 const standaloneAfterDecide: CardStep[] = [
@@ -53,6 +53,18 @@ describe("card-steps", () => {
     ];
     expect(activeStep(steps)?.key).toBe("plan");
     expect(activeTabKey(steps)).toBe("plan");
+  });
+
+  it("keeps Tasks focused while awaiting child tasks", () => {
+    const steps: CardStep[] = [
+      { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
+      { key: "grill", status: "done", label: "Grill", stepKind: "ai-chat", column: "define" },
+      { key: "spec", status: "done", label: "Spec", stepKind: "ai-chat", column: "define" },
+      { key: "tasks", status: "awaiting", label: "Tasks", stepKind: "ai-chat", column: "define" },
+    ];
+    expect(activeStep(steps)?.key).toBe("tasks");
+    expect(activeTabKey(steps)).toBe("tasks");
+    expect(isTabVisible(steps[3]!)).toBe(true);
   });
 
   it("opens the last visible tab when later steps are still pending", () => {
@@ -96,7 +108,7 @@ describe("card-steps", () => {
         { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
         { key: "grill", status: "done", label: "Grill", stepKind: "ai-chat", column: "define" },
         { key: "spec", status: "ai-working", label: "Spec", stepKind: "ai-chat", column: "define" },
-        { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-execution", column: "define" },
+        { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-chat", column: "define" },
       ];
       expect(needsUserAttention({ column: "define", steps: idleDefine })).toBe(false);
 

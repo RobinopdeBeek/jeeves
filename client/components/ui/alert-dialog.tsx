@@ -42,9 +42,15 @@ function AlertDialogOverlay({
   )
 }
 
+function isSonnerEventTarget(target: EventTarget | null) {
+  return target instanceof Element && !!target.closest("[data-sonner-toaster]")
+}
+
 function AlertDialogContent({
   className,
   size = "default",
+  onPointerDownOutside,
+  onInteractOutside,
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Content> & {
   size?: "default" | "sm"
@@ -60,6 +66,14 @@ function AlertDialogContent({
           className
         )}
         {...props}
+        onPointerDownOutside={(event) => {
+          if (isSonnerEventTarget(event.target)) event.preventDefault()
+          onPointerDownOutside?.(event)
+        }}
+        onInteractOutside={(event) => {
+          if (isSonnerEventTarget(event.target)) event.preventDefault()
+          onInteractOutside?.(event)
+        }}
       />
     </AlertDialogPortal>
   )

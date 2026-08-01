@@ -25,6 +25,7 @@ const stepStatusIconVariants = cva(
       status: {
         done: "size-4 rounded-full bg-pipeline-done text-white",
         "ai-working": "size-4 text-pipeline-ai",
+        awaiting: "size-4 text-pipeline-ai",
         "needs-user":
           "size-3.5 rounded-full border-2 border-pipeline-user bg-transparent",
         queued:
@@ -53,9 +54,16 @@ export function StepStatusIcon({
       </span>
     );
   }
-  if (status === "ai-working") {
+  if (status === "ai-working" || status === "awaiting") {
     return (
-      <span className={cn(stepStatusIconVariants({ status: "ai-working" }), className)}>
+      <span
+        className={cn(
+          stepStatusIconVariants({
+            status: status === "awaiting" ? "awaiting" : "ai-working",
+          }),
+          className,
+        )}
+      >
         <IconLoader2 className="size-3.5 animate-spin" />
       </span>
     );
@@ -73,6 +81,7 @@ const segmentVariants = cva("h-1 flex-1 rounded-sm", {
     status: {
       done: "bg-pipeline-done",
       "ai-working": "bg-pipeline-ai",
+      awaiting: "bg-pipeline-ai",
       "needs-user": "bg-pipeline-user",
       queued: "bg-secondary ring-1 ring-inset ring-pipeline-ai/55",
       pending: "bg-secondary",

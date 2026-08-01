@@ -48,14 +48,14 @@ A typed alert (critical / warning / info) raised by a pipeline skill during exec
 _Avoid_: Attention flag, flag
 
 **Status** (card lifecycle):
-Where a card is in its life: **draft** (shaping material in a feature's Tasks step, not on the board — only tasks), **active** (on the board, in its pipeline), **merged** (terminal for child tasks: branch merged into the feature branch), **done** (terminal for features and standalone tasks: Finalize completed). Drafts that are discarded are hard-deleted, not tombstoned.
+Where a card is in its life: **active** (on the board, in its pipeline), **merged** (terminal for child tasks: branch merged into the feature branch), **done** (terminal for features and standalone tasks: Finalize completed).
 
-**Draft**:
-A task card with draft status — inspectable, editable, deletable in the feature's Tasks step before fan-out activates it.
-_Avoid_: Draft task as a separate entity from Card
+**Draft** (Tasks shaping):
+A proposed vertical slice in a feature's Tasks tip — an entry in the versioned `tasks-draft` JSON artifact ([ADR 0014](docs/adr/0014-tasks-drafts-are-versioned-artifacts.md)), not a `cards` row. Editable in the Tasks inspector before **Implement →** fans out real child cards.
+_Avoid_: Draft card; `status = 'draft'` card rows
 
 **Step**:
-A typed unit of work inside a column — human, AI chat, or AI execution — with status pending / queued / ai-working / needs-user / done. The database stores current step state only; history lives in runs and artifacts.
+A typed unit of work inside a column — human, AI chat, or AI execution — with status pending / queued / ai-working / needs-user / awaiting / done. **awaiting** means the step is watching child work (e.g. feature Tasks after **Implement →**); it must not be auto-reset like orphaned `ai-working` on restart. The database stores current step state only; history lives in runs and artifacts.
 
 **Round**:
 One pass of a card's rework loop, counted from 0. A partition key on record tables (artifacts, runs, change requests, decisions, notifications), never an entity of its own. A changes-requested decision at round N begets round N+1.
@@ -95,7 +95,7 @@ A short-lived file an agent writes for the host to harvest into a durable artifa
 Copying an **exchange file** into the project store's artifact folder (and notifications into the database), then removing the exchange file. Happens before worktree teardown for execution runs, and after a completed ACP turn or headless synthesis for AI Chat document writes.
 
 **Fan-out**:
-Activating a feature's draft tasks into child cards on the board.
+Host materialization of a feature's tip `tasks-draft` into active child task cards on the board (**Implement →**).
 
 **QA gate**:
 The Approve-button gating driven by the evaluation's QA checklist. Checkbox state is ephemeral in the parent board's browser-local storage and synchronized with the sandboxed evaluation by validated messages; only the decision's QA-complete snapshot persists.

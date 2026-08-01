@@ -285,7 +285,7 @@ describe("AcpChatTransport", () => {
     const transport = new AcpChatTransport({
       cardId: "c1",
       stepKey: "spec",
-      getCurrentSpecMarkdown: () => "# Spec\n\nDraft body\n",
+      getLiveDraftBody: () => "# Spec\n\nDraft body\n",
     });
 
     const connectP = transport.connect();
@@ -309,12 +309,12 @@ describe("AcpChatTransport", () => {
         JSON.parse(s) as {
           type: string;
           text?: string;
-          currentSpecMarkdown?: string;
+          liveDraftBody?: string;
         },
     );
     const userMsg = sent.find((m) => m.type === "user-message");
     expect(userMsg?.text).toBe("Tighten acceptance criteria");
-    expect(userMsg?.currentSpecMarkdown).toContain("Draft body");
+    expect(userMsg?.liveDraftBody).toContain("Draft body");
     expect(userMsg?.text).not.toContain("Current Spec markdown");
   });
 
@@ -435,6 +435,43 @@ describe("AcpChatTransport", () => {
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
+  it("sends cancel and unlocks streaming when the abort signal fires (Stop)", async () => {
+    const streaming: boolean[] = [];
+    const transport = new AcpChatTransport({
+      cardId: "c1",
+      stepKey: "tasks",
+      onStreamingChange: (s) => streaming.push(s),
+    });
+
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({
+      type: "ready",
+      messages: [
+        { id: "a0", role: "assistant", parts: [{ type: "text", text: "Ready" }] },
+      ],
+      streaming: false,
+    });
+    await connectP;
+    ws.deliver({ type: "session", status: "open", streaming: false });
+
+    const abort = new AbortController();
+    const stream = await transport.sendMessages({
+      messages: [userMessage("Rename the first task")],
+      abortSignal: abort.signal,
+    } as Parameters<AcpChatTransport["sendMessages"]>[0]);
+    const readP = readAll(stream);
+
+    expect(streaming.at(-1)).toBe(true);
+
+    abort.abort();
+    await readP;
+
+    const sent = ws.sent.map((s) => JSON.parse(s) as { type: string });
+    expect(sent).toContainEqual({ type: "cancel" });
+    expect(streaming.at(-1)).toBe(false);
+  });
+
   it("notifies onSpecRevised when the server harvests a Spec revision", async () => {
     const revisions: string[] = [];
     const transport = new AcpChatTransport({
@@ -455,5 +492,76 @@ describe("AcpChatTransport", () => {
     });
 
     expect(revisions).toEqual(["# Spec\n\nRevised by assist\n"]);
+  });
+
+  it("sends Tasks tip JSON as background context, not in the visible user text", async () => {
+    const transport = new AcpChatTransport({
+      cardId: "c1",
+      stepKey: "tasks",
+      getLiveDraftBody: () => '{\n  "tasks": []\n}',
+    });
+
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({
+      type: "ready",
+      messages: [
+        { id: "a0", role: "assistant", parts: [{ type: "text", text: "Ready" }] },
+      ],
+      streaming: false,
+    });
+    await connectP;
+    ws.deliver({ type: "session", status: "open", streaming: false });
+
+    const stream = await transport.sendMessages({
+      messages: [userMessage("Split the API task")],
+      abortSignal: undefined as unknown as AbortSignal,
+    } as Parameters<AcpChatTransport["sendMessages"]>[0]);
+    void readAll(stream);
+
+    const sent = ws.sent.map(
+      (s) =>
+        JSON.parse(s) as {
+          type: string;
+          text?: string;
+          liveDraftBody?: string;
+        },
+    );
+    const userMsg = sent.find((m) => m.type === "user-message");
+    expect(userMsg?.text).toBe("Split the API task");
+    expect(userMsg?.liveDraftBody).toContain('"tasks": []');
+    expect(userMsg?.text).not.toContain("tasks-draft tip JSON");
+  });
+
+  it("notifies onTasksRevised when the server harvests a Tasks revision", async () => {
+    const revisions: Array<{ tasks: Array<{ id: string }> }> = [];
+    const transport = new AcpChatTransport({
+      cardId: "c1",
+      stepKey: "tasks",
+      onTasksRevised: (draft) => revisions.push(draft),
+    });
+
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({ type: "ready", messages: [], streaming: false });
+    await connectP;
+    ws.deliver({ type: "session", status: "open", streaming: false });
+
+    ws.deliver({
+      type: "tasks-revised",
+      draft: {
+        tasks: [
+          { id: "a", title: "API", description: "", dependsOn: [] },
+        ],
+      },
+      versionCount: 2,
+    });
+
+    expect(revisions).toEqual([
+      {
+        tasks: [{ id: "a", title: "API", description: "", dependsOn: [] }],
+        versionCount: 2,
+      },
+    ]);
   });
 });

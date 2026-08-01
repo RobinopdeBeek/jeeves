@@ -142,6 +142,12 @@ export class ChatConnection {
       return;
     }
 
+    // Stop must work mid-turn — do not wait for `sending` to clear.
+    if (msg.type === "cancel") {
+      this.handle.cancelTurn();
+      return;
+    }
+
     if (this.sending) return;
     if (msg.type !== "user-message" || typeof msg.text !== "string" || !msg.text.trim()) {
       this.send({ type: "error", error: "unsupported message" });
@@ -150,11 +156,9 @@ export class ChatConnection {
 
     this.sending = true;
     try {
-      const currentSpecMarkdown =
-        typeof msg.currentSpecMarkdown === "string"
-          ? msg.currentSpecMarkdown
-          : undefined;
-      await this.handle.sendMessage(msg.text.trim(), { currentSpecMarkdown });
+      const liveDraftBody =
+        typeof msg.liveDraftBody === "string" ? msg.liveDraftBody : undefined;
+      await this.handle.sendMessage(msg.text.trim(), { liveDraftBody });
     } catch (err) {
       this.send({
         type: "error",

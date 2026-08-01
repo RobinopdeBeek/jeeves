@@ -41,7 +41,7 @@ standalone task  Backlog → Implement Task → Human Review → Finalize   (no 
 | Column | Steps (type) |
 |---|---|
 | Backlog | Info · human (title + description) |
-| Define Feature | Grill · ai-chat → Spec · ai-chat → Tasks · ai-execution |
+| Define Feature | Grill · ai-chat → Spec · ai-chat → Tasks · ai-chat |
 | Implement Task | Plan · ai-execution → Implement · ai-execution → AI Review · ai-execution |
 | Human Review | Review · human |
 | Finalize | Document · ai-execution → Deploy · ai-execution |
@@ -63,13 +63,12 @@ Three steps, human-collaborative rather than fully autonomous:
 2. **Spec** (`ai-chat`) — a WYSIWYG markdown editor for the spec **with an AI side-chat** to draft
    and refine acceptance criteria. The spec's acceptance-criteria checklist authored here is the
    exact list that reappears in the feature-level QA gate later. Hands off to Tasks.
-3. **Tasks** (`ai-execution` + human editing, with an AI side-chat) — the feature is broken into
-   **end-to-end vertical slices**. Each slice is a real card in **draft status**: inspectable and
-   editable (title, description with acceptance criteria and file hints inline, and **"blocked
-   by"** relationships between tasks). You add, delete, and re-order before committing; the
-   side-chat lets you ask the AI to revise the breakdown (e.g. "make the API slice cover the DST
-   edge case too"). Clicking **"Implement →"** fans out: each draft flips to active and appears
-   on the board as a child task.
+3. **Tasks** (`ai-chat` + human editing) — the feature is broken into **end-to-end vertical
+   slices** stored as a versioned `tasks-draft` JSON tip ([ADR 0014](../adr/0014-tasks-drafts-are-versioned-artifacts.md)):
+   inspectable and editable tiles (title, description with acceptance criteria and file hints,
+   **"blocked by"** edges). You add, delete, and revise before committing; the side-chat (later)
+   can rewrite the tip by harvesting exchange JSON. Clicking **"Implement →"** fans out: the host
+   materializes **active** child task cards from the tip.
 
 While children run, the feature's Tasks step shows **"Implementing Task X of Y"** and displays the
 live child cards inline. When all children are merged, the feature auto-advances to **Human

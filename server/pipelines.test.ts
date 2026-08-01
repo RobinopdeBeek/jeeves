@@ -141,4 +141,43 @@ describe("advance", () => {
       sideEffects: [],
     });
   });
+
+  it("tasks-to-implement sets Tasks awaiting and closes chat (no enqueue)", () => {
+    const plan = advance(
+      {
+        kind: "feature",
+        steps: [
+          { key: "spec", status: "done" },
+          { key: "tasks", status: "needs-user" },
+        ],
+      },
+      { type: "tasks-to-implement" },
+    );
+    expect(plan).toEqual({
+      ok: true,
+      stepPatches: [{ key: "tasks", status: "awaiting" }],
+      sideEffects: [
+        {
+          type: "close-chat",
+          stepKey: "tasks",
+          round: 0,
+          reason: "tasks handed off to implement",
+        },
+      ],
+    });
+  });
+
+  it("tasks-to-implement rejects when Tasks is not needs-user", () => {
+    const plan = advance(
+      {
+        kind: "feature",
+        steps: [
+          { key: "spec", status: "done" },
+          { key: "tasks", status: "awaiting" },
+        ],
+      },
+      { type: "tasks-to-implement" },
+    );
+    expect(plan.ok).toBe(false);
+  });
 });

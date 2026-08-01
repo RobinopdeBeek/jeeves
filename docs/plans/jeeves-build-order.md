@@ -76,12 +76,13 @@ blocker relationship can be built in parallel or reordered.
 6. **Spec step.** MDXEditor + AI side-chat reusing the chat stack from slice 5; spec artifact
    with the acceptance-criteria checklist; Spec consumes the Grill session (not the
    transcript). *Demo: author a spec collaboratively from the tablet.* (Blocked by 5.)
-7. **Fan-out.** `/to-tasks` writes a structured JSON exchange file in the worktree (vertical
-   slices + blocked-by); the runner harvests it and validates with a Zod schema before creating
-   draft cards (retry loop on parse failure). Draft cards (real `cards` rows, `status =
-   'draft'`) with add/delete/edit and blocker edges; "Implement →" flips drafts to `active`;
-   feature shows "Implementing Task X of Y". *Demo: a feature becomes child cards on the
-   board.* (Blocked by 6.)
+7. **Fan-out.** Tasks is an `ai-chat` step: tip drafts live as append-only versioned
+   `tasks-draft` JSON artifacts (stable ids + `dependsOn`), not draft card rows ([ADR 0014](../adr/0014-tasks-drafts-are-versioned-artifacts.md)).
+   Create Tasks → synthesizes via headless `/to-draft-tasks` (later sub-slice); the human Tasks
+   editor (tiles + inspector, explicit Save/Delete/undo) ships first. Side-chat revises by
+   harvesting exchange JSON into a new tip version. **Implement →** is host `fanOut`: freeze tip
+   as `tasks-breakdown`, create **active** children with blocker edges, Tasks → `awaiting`.
+   *Demo: a feature becomes child cards on the board.* (Blocked by 6.)
 8. **Full task pipeline.** Plan → Implement → AI Review sequencing inside `ExecutionEngine`;
    each run gets a fresh worktree on the same durable card branch and receives prior artifacts
    explicitly; blocker-aware queue rebuilt from `card_steps` on restart; orphaned `running` runs

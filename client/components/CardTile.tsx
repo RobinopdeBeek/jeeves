@@ -12,25 +12,47 @@ import {
   TileSegmentBar,
   cardTileVariants,
 } from "@/components/ui/pipeline-status";
+import { cn } from "@/lib/utils";
 
-export function CardTile({ card }: { card: Card }) {
+/** Board tile and Feature Tasks child list share this shape. */
+export type CardTileModel = Pick<
+  Card,
+  | "id"
+  | "title"
+  | "description"
+  | "kind"
+  | "column"
+  | "steps"
+  | "creatingSpec"
+  | "creatingTasks"
+  | "implementProgress"
+>;
+
+export function CardTile({ card }: { card: CardTileModel }) {
   const navigate = useNavigate();
   const pipeline = showsPipelineChrome(card);
-  const attention = pipeline && needsUserAttention(card);
+  const attention =
+    pipeline &&
+    needsUserAttention({
+      column: card.column,
+      steps: card.steps,
+    });
   const segments =
     pipeline && card.column
       ? columnWorkSteps(card.steps, card.column)
       : [];
   const current = pipeline ? activeStep(card.steps) : undefined;
+  const tasksAwaiting = current?.key === "tasks" && current.status === "awaiting";
+  const progress = card.implementProgress;
 
   return (
     <button
       type="button"
       onClick={() => navigate(`/cards/${card.id}`)}
-      className={cardTileVariants({ attention })}
+      className={cn(cardTileVariants({ attention }), "w-full")}
     >
       <div className="flex items-start gap-2">
-        <div className="min-w-0 flex-1 text-sm font-medium">
+        <div className="min-w-0 flex-1 line-clamp-2 text-sm font-medium">
           {card.title || <em className="text-muted-foreground">Untitled</em>}
         </div>
         {card.kind === "feature" && (
@@ -48,6 +70,18 @@ export function CardTile({ card }: { card: Card }) {
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <StepStatusIcon status="ai-working" />
               <span>Creating Spec…</span>
+            </div>
+          ) : card.creatingTasks ? (
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <StepStatusIcon status="ai-working" />
+              <span>Creating Tasks…</span>
+            </div>
+          ) : tasksAwaiting && progress ? (
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <StepStatusIcon status="awaiting" />
+              <span>
+                Implementing Task {progress.current} of {progress.total}
+              </span>
             </div>
           ) : current ? (
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">

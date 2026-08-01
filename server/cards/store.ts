@@ -1,7 +1,17 @@
 import { and, asc, eq, max } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import {
+  ArtifactStoreError,
+  type ArtifactStore,
+} from "../artifacts/store.js";
+import {
+  parseTasksDraft,
+  TasksDraftError,
+  type TasksDraft,
+} from "../artifacts/tasks-draft.js";
 import type { Db } from "../db/index.js";
 import {
+  cardBlockers,
   cardSteps,
   cards,
   projects,
@@ -36,6 +46,32 @@ export class CardStoreError extends Error {
   }
 }
 
+export type BlockedByRef = { id: string; title: string };
+
+/** Child task payload rich enough to render the same board `CardTile`. */
+export type CardChildSummary = {
+  id: string;
+  title: string;
+  description: string;
+  kind: Card["kind"];
+  status: Card["status"];
+  column: Card["column"];
+  position: number;
+  steps: EnrichedStep[];
+  blockedBy: BlockedByRef[];
+  creatingSpec: boolean;
+  creatingTasks: boolean;
+  implementProgress: ImplementProgress | null;
+};
+
+export type ImplementProgress = {
+  current: number;
+  total: number;
+};
+
+/** Tip document returned by tip CRUD — includes append-only version count. */
+export type TasksDraftTipView = TasksDraft & { versionCount: number };
+
 export type CardWithSteps = Card & {
   steps: EnrichedStep[];
   /** Same predicate as grill→spec hand-off (board Create Spec). */
@@ -47,17 +83,37 @@ export type CardWithSteps = Card & {
    * Survives board↔card navigation so the Grill tab stays on the synthesizing UI.
    */
   creatingSpec: boolean;
+  /**
+   * True while POST create-tasks is in flight for this card (in-memory).
+   * Survives board↔card navigation so the Spec tab stays on the synthesizing UI.
+   */
+  creatingTasks: boolean;
+  /** Cards this card is blocked by (from `card_blockers`). */
+  blockedBy: BlockedByRef[];
+  /** Child task summaries when this card is a feature parent. */
+  children: CardChildSummary[];
+  /**
+   * Derived “Implementing Task X of Y” for a feature with fanned-out children.
+   * `current` stays 0 until later slices track child completion.
+   */
+  implementProgress: ImplementProgress | null;
 };
 
 /**
  * CardStore — the slice-1 seam over SQLite. Hides the unified card model and
  * every derivation rule; routes and the client are thin adapters over this.
+ * Tip Draft CRUD / fan-out use the optional ArtifactStore adapter (ADR 0014).
  */
 export class CardStore {
   /** In-process: create-spec host op running for these card ids. */
   private readonly creatingSpecIds = new Set<string>();
+  /** In-process: create-tasks host op running for these card ids. */
+  private readonly creatingTasksIds = new Set<string>();
 
-  constructor(private readonly db: Db) {}
+  constructor(
+    private readonly db: Db,
+    private readonly artifacts: ArtifactStore | null = null,
+  ) {}
 
   /** Mark/clear create-spec in flight so GET/SSE cards stay truthful across remounts. */
   setCreatingSpec(cardId: string, creating: boolean): void {
@@ -67,6 +123,16 @@ export class CardStore {
 
   isCreatingSpec(cardId: string): boolean {
     return this.creatingSpecIds.has(cardId);
+  }
+
+  /** Mark/clear create-tasks in flight so GET/SSE cards stay truthful across remounts. */
+  setCreatingTasks(cardId: string, creating: boolean): void {
+    if (creating) this.creatingTasksIds.add(cardId);
+    else this.creatingTasksIds.delete(cardId);
+  }
+
+  isCreatingTasks(cardId: string): boolean {
+    return this.creatingTasksIds.has(cardId);
   }
 
   /** Idempotently seed the single default project (slice 1: no picker). */
@@ -96,11 +162,13 @@ export class CardStore {
     const card: Card = {
       id: nanoid(10),
       projectId,
+      parentCardId: null,
       kind: null,
       status: "active",
       column: "backlog",
       title: "",
       description: "",
+      branch: null,
       position: (maxPosition ?? -1) + 1,
       createdAt: new Date(),
     };
@@ -189,6 +257,14 @@ export class CardStore {
     if (!card) throw new CardStoreError(404, "card not found");
     const step = card.steps.find((s) => s.key === stepKey);
     if (!step) throw new CardStoreError(404, `unknown step: ${stepKey}`);
+    // Grill/Spec freeze on `done`. Tasks freezes when it leaves needs-user
+    // (fan-out → awaiting) so the side-chat transcript stops upserting.
+    if (stepKey === "tasks") {
+      if (step.status !== "needs-user" && step.status !== "ai-working") {
+        throw new CardStoreError(409, "transcript is frozen");
+      }
+      return;
+    }
     if (step.status === "done") {
       throw new CardStoreError(409, "transcript is frozen");
     }
@@ -203,6 +279,66 @@ export class CardStore {
     if (step.status === "done") {
       throw new CardStoreError(409, "spec is frozen");
     }
+  }
+
+  /** Tasks-draft writes are forbidden once the Tasks step leaves needs-user. */
+  assertTasksDraftMutable(cardId: string): void {
+    const card = this.getCard(cardId);
+    if (!card) throw new CardStoreError(404, "card not found");
+    const step = card.steps.find((s) => s.key === "tasks");
+    if (!step) throw new CardStoreError(404, "unknown step: tasks");
+    if (step.status !== "needs-user") {
+      throw new CardStoreError(409, "tasks draft is frozen");
+    }
+  }
+
+  /** Read tip + versionCount (empty tip when no versions). */
+  readTasksTip(cardId: string, round = 0): TasksDraftTipView {
+    const card = this.getCard(cardId);
+    if (!card) throw new CardStoreError(404, "card not found");
+    return this.tasksTipView(cardId, round);
+  }
+
+  /** Assert mutable, parse body, append tip version, return tip view. */
+  saveTasksTip(cardId: string, raw: unknown, round = 0): TasksDraftTipView {
+    this.assertTasksDraftMutable(cardId);
+    let draft: TasksDraft;
+    try {
+      draft = parseTasksDraft(raw);
+    } catch (err) {
+      throw new CardStoreError(
+        400,
+        err instanceof TasksDraftError ? err.message : String(err),
+      );
+    }
+    this.requireArtifacts().appendTasksDraft(cardId, round, draft, "human");
+    return this.tasksTipView(cardId, round);
+  }
+
+  /** Assert mutable, delete task from tip, append version, return tip view. */
+  deleteTaskFromTasksTip(
+    cardId: string,
+    taskId: string,
+    round = 0,
+  ): TasksDraftTipView {
+    this.assertTasksDraftMutable(cardId);
+    try {
+      this.requireArtifacts().deleteTaskFromTasksDraft(cardId, round, taskId);
+    } catch (err) {
+      this.rethrowTipError(err);
+    }
+    return this.tasksTipView(cardId, round);
+  }
+
+  /** Assert mutable, undo tip (append previous), return tip view. */
+  undoTasksTip(cardId: string, round = 0): TasksDraftTipView {
+    this.assertTasksDraftMutable(cardId);
+    try {
+      this.requireArtifacts().undoTasksDraft(cardId, round);
+    } catch (err) {
+      this.rethrowTipError(err);
+    }
+    return this.tasksTipView(cardId, round);
   }
 
   /**
@@ -239,19 +375,112 @@ export class CardStore {
   assertSpecToTasksHandOff(cardId: string): AdvancePlan & { ok: true } {
     const card = this.getCard(cardId);
     if (!card) throw new CardStoreError(404, "card not found");
+    if (this.creatingTasksIds.has(cardId)) {
+      throw new CardStoreError(409, "tasks synthesis already in progress");
+    }
     return this.requireAdvance(card, { type: "spec-to-tasks" });
   }
 
   /**
    * Spec → Tasks hand-off: freeze Spec as done and open Tasks for the user.
+   * Does not check creatingTasks — create-tasks holds that lock until after hand-off.
    */
   handOffSpecToTasks(cardId: string): {
     card: CardWithSteps;
     sideEffects: AdvanceSideEffect[];
   } {
-    const plan = this.assertSpecToTasksHandOff(cardId);
+    const card = this.getCard(cardId);
+    if (!card) throw new CardStoreError(404, "card not found");
+    const plan = this.requireAdvance(card, { type: "spec-to-tasks" });
     this.applyAdvancePlan(cardId, plan);
     return { card: this.getCard(cardId)!, sideEffects: plan.sideEffects };
+  }
+
+  /**
+   * Implement → fan-out: freeze tip, materialize child task cards + blockers,
+   * set Tasks to awaiting. No child Plan enqueue. Second call → 409.
+   */
+  fanOut(
+    cardId: string,
+    round = 0,
+  ): {
+    card: CardWithSteps;
+    children: CardWithSteps[];
+    sideEffects: AdvanceSideEffect[];
+  } {
+    const artifacts = this.requireArtifacts();
+    const parent = this.getCard(cardId);
+    if (!parent) throw new CardStoreError(404, "card not found");
+    if (parent.kind !== "feature") {
+      throw new CardStoreError(409, "fan-out requires a feature card");
+    }
+
+    const plan = this.requireAdvance(parent, { type: "tasks-to-implement" });
+
+    let tip: TasksDraft;
+    try {
+      tip = parseTasksDraft(artifacts.readTasksDraftTip(cardId, round));
+    } catch (err) {
+      throw new CardStoreError(
+        400,
+        err instanceof TasksDraftError ? err.message : String(err),
+      );
+    }
+    if (tip.tasks.length < 1) {
+      throw new CardStoreError(400, "fan-out requires at least one task");
+    }
+    if (tip.tasks.some((t) => !t.title.trim())) {
+      throw new CardStoreError(400, "all task titles must be non-empty");
+    }
+
+    const childIds: string[] = [];
+    const draftIdToCardId = new Map<string, string>();
+
+    this.db.transaction(() => {
+      artifacts.freezeTasksBreakdown(cardId, round);
+
+      for (const [index, task] of tip.tasks.entries()) {
+        const childId = nanoid(10);
+        draftIdToCardId.set(task.id, childId);
+        childIds.push(childId);
+        this.db.insert(cards).values({
+          id: childId,
+          projectId: parent.projectId,
+          parentCardId: cardId,
+          kind: "task",
+          status: "active",
+          column: "implement",
+          title: task.title.trim(),
+          description: task.description,
+          branch: null,
+          position: index,
+          createdAt: new Date(),
+        }).run();
+        this.insertStep(childId, "plan", "pending");
+        this.insertStep(childId, "impl", "pending");
+        this.insertStep(childId, "airev", "pending");
+      }
+
+      for (const task of tip.tasks) {
+        const childId = draftIdToCardId.get(task.id)!;
+        for (const depDraftId of task.dependsOn) {
+          const blocksOn = draftIdToCardId.get(depDraftId);
+          if (!blocksOn) continue;
+          this.db
+            .insert(cardBlockers)
+            .values({ cardId: childId, blocksOnCardId: blocksOn })
+            .run();
+        }
+      }
+
+      this.applyAdvancePlan(cardId, plan);
+    });
+
+    return {
+      card: this.getCard(cardId)!,
+      children: childIds.map((id) => this.getCard(id)!),
+      sideEffects: plan.sideEffects,
+    };
   }
 
   /**
@@ -358,6 +587,34 @@ export class CardStore {
     return result.changes > 0;
   }
 
+  private requireArtifacts(): ArtifactStore {
+    if (!this.artifacts) {
+      throw new CardStoreError(500, "ArtifactStore not configured on CardStore");
+    }
+    return this.artifacts;
+  }
+
+  private tasksTipView(cardId: string, round: number): TasksDraftTipView {
+    const artifacts = this.requireArtifacts();
+    return {
+      ...artifacts.readTasksDraftTip(cardId, round),
+      versionCount: artifacts.tasksDraftVersionCount(cardId, round),
+    };
+  }
+
+  private rethrowTipError(err: unknown): never {
+    if (err instanceof TasksDraftError) {
+      throw new CardStoreError(400, err.message);
+    }
+    if (err instanceof ArtifactStoreError) {
+      throw new CardStoreError(
+        err.message === "nothing to undo" ? 409 : 400,
+        err.message,
+      );
+    }
+    throw err;
+  }
+
   private insertStep(
     cardId: string,
     stepKey: StepKey,
@@ -390,29 +647,78 @@ export class CardStore {
       stepKey: r.stepKey as StepKey,
       status: r.status as StepStatus,
     }));
+    const hasParent = card.parentCardId != null;
 
     const steps =
       card.kind === null || card.column === null
         ? backlogEnrichedSteps(stepRows)
-        : orderEnrichedSteps(
-            card.kind,
-            card.column,
-            false, // parent_card_id arrives in slice 7
-            stepRows,
-          );
+        : orderEnrichedSteps(card.kind, card.column, hasParent, stepRows);
+
+    const blockedBy = this.loadBlockedBy(card.id);
+    const children = this.loadChildren(card.id);
+    const implementProgress =
+      children.length > 0
+        ? { current: 0, total: children.length }
+        : null;
 
     return {
       ...card,
       steps,
+      blockedBy,
+      children,
+      implementProgress,
       creatingSpec: this.creatingSpecIds.has(card.id),
+      creatingTasks: this.creatingTasksIds.has(card.id),
       canCreateSpec:
         !this.creatingSpecIds.has(card.id) &&
         canCreateSpec(
           steps.map((s) => ({ key: s.key, status: s.status })),
         ),
-      canCreateTasks: canCreateTasks(
-        steps.map((s) => ({ key: s.key, status: s.status })),
-      ),
+      canCreateTasks:
+        !this.creatingTasksIds.has(card.id) &&
+        canCreateTasks(
+          steps.map((s) => ({ key: s.key, status: s.status })),
+        ),
     };
+  }
+
+  private loadBlockedBy(cardId: string): BlockedByRef[] {
+    return this.db
+      .select({
+        id: cards.id,
+        title: cards.title,
+      })
+      .from(cardBlockers)
+      .innerJoin(cards, eq(cardBlockers.blocksOnCardId, cards.id))
+      .where(eq(cardBlockers.cardId, cardId))
+      .all();
+  }
+
+  private loadChildren(parentId: string): CardChildSummary[] {
+    const kids = this.db
+      .select()
+      .from(cards)
+      .where(eq(cards.parentCardId, parentId))
+      .orderBy(asc(cards.position))
+      .all();
+    // Task children have no further descendants, so attachSteps → loadChildren
+    // bottoms out immediately.
+    return kids.map((kid) => {
+      const full = this.attachSteps(kid);
+      return {
+        id: full.id,
+        title: full.title,
+        description: full.description,
+        kind: full.kind,
+        status: full.status,
+        column: full.column,
+        position: full.position,
+        steps: full.steps,
+        blockedBy: full.blockedBy,
+        creatingSpec: full.creatingSpec,
+        creatingTasks: full.creatingTasks,
+        implementProgress: full.implementProgress,
+      };
+    });
   }
 }

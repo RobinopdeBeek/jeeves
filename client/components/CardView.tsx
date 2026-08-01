@@ -1,4 +1,4 @@
-import { IconArrowLeft, IconTrash } from "@tabler/icons-react";
+import { IconArrowLeft, IconLoader2, IconTrash } from "@tabler/icons-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, type Card, type KindPath } from "@/lib/api";
@@ -16,9 +16,11 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { toastError } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
 import { Logo } from "./Logo";
 import { STEP_PANELS } from "./step-panels";
+import type { TasksFooterActions } from "./step-panel-types";
 
 export function CardView() {
   const { id } = useParams<{ id: string }>();
@@ -33,10 +35,15 @@ export function CardView() {
   const [createTasksError, setCreateTasksError] = useState<string | null>(null);
   /** Pessimistic until LiveGrill reports ACP handshake finished. */
   const [grillStarting, setGrillStarting] = useState(true);
+  const [tasksFooter, setTasksFooter] = useState<TasksFooterActions | null>(null);
   const flushSpecRef = useRef<(() => Promise<void>) | null>(null);
 
   const registerSpecFlush = useCallback((flush: (() => Promise<void>) | null) => {
     flushSpecRef.current = flush;
+  }, []);
+
+  const registerTasksFooter = useCallback((actions: TasksFooterActions | null) => {
+    setTasksFooter(actions);
   }, []);
 
   const onGrillStartingChange = useCallback((starting: boolean) => {
@@ -47,6 +54,7 @@ export function CardView() {
     if (!id) return;
     setTabOverride(null);
     setGrillStarting(true);
+    setTasksFooter(null);
     api
       .getCard(id)
       .then(setCard)
@@ -95,7 +103,9 @@ export function CardView() {
       setCard(updated);
       setTabOverride(null); // activeTabKey prefers Spec once needs-user
     } catch (err) {
-      setCreateSpecError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setCreateSpecError(message);
+      toastError(message);
     } finally {
       setCreatingSpec(false);
     }
@@ -105,17 +115,24 @@ export function CardView() {
     if (!card || !card.canCreateTasks) return;
     setCreatingTasks(true);
     setCreateTasksError(null);
+    setTabOverride("spec"); // stay on Spec while synthesis runs
     try {
       await flushSpecRef.current?.();
       const updated = await api.createTasks(card.id);
       setCard(updated);
       setTabOverride(null); // activeTabKey prefers Tasks once needs-user
     } catch (err) {
-      setCreateTasksError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setCreateTasksError(message);
+      toastError(message);
     } finally {
       setCreatingTasks(false);
     }
   }
+
+  useEffect(() => {
+    if (tasksFooter?.error) toastError(tasksFooter.error);
+  }, [tasksFooter?.error]);
 
   if (missing) {
     return (
@@ -142,13 +159,23 @@ export function CardView() {
   const specStep = card.steps.find((s) => s.key === "spec");
   // Local flag for instant UI; card.creatingSpec survives board remounts (SSE/GET).
   const synthesizingSpec = creatingSpec || card.creatingSpec;
+  const synthesizingTasks = creatingTasks || card.creatingTasks;
   const showCreateSpec =
     activeKey === "grill" && grillStep !== undefined && grillStep.status !== "done";
   const createSpecDisabled =
     synthesizingSpec || !card.canCreateSpec || grillStarting;
   const showCreateTasks =
     activeKey === "spec" && specStep !== undefined && specStep.status !== "done";
-  const createTasksDisabled = creatingTasks || !card.canCreateTasks;
+  const createTasksDisabled =
+    synthesizingTasks || !card.canCreateTasks || synthesizingSpec;
+  const tasksStep = card.steps.find((s) => s.key === "tasks");
+  // Stay mounted during ai-working (like Create Spec on Grill) so the footer
+  // does not jump when a Tasks assist turn flips the step status.
+  const showImplement =
+    activeKey === "tasks" &&
+    (tasksStep?.status === "needs-user" ||
+      tasksStep?.status === "ai-working") &&
+    tasksFooter !== null;
   const wideLayout = activeKey === "spec" || activeKey === "tasks";
 
   return (
@@ -190,7 +217,9 @@ export function CardView() {
             stepKey={activeKey}
             onCardChange={setCard}
             registerSpecFlush={registerSpecFlush}
+            registerTasksFooter={registerTasksFooter}
             synthesizingSpec={synthesizingSpec}
+            synthesizingTasks={synthesizingTasks}
             onGrillStartingChange={onGrillStartingChange}
           />
         ) : null}
@@ -236,13 +265,7 @@ export function CardView() {
 
         {showCreateSpec && (
           <>
-            <div className="flex min-w-0 flex-1 flex-col items-end gap-1">
-              {createSpecError ? (
-                <p className="max-w-md text-right text-sm text-destructive" role="alert">
-                  {createSpecError}
-                </p>
-              ) : null}
-            </div>
+            <div className="flex-1" />
             <Button disabled={createSpecDisabled} onClick={createSpec}>
               {synthesizingSpec
                 ? "Creating Spec…"
@@ -255,18 +278,31 @@ export function CardView() {
 
         {showCreateTasks && (
           <>
-            <div className="flex min-w-0 flex-1 flex-col items-end gap-1">
-              {createTasksError ? (
-                <p className="max-w-md text-right text-sm text-destructive" role="alert">
-                  {createTasksError}
-                </p>
-              ) : null}
-            </div>
+            <div className="flex-1" />
             <Button disabled={createTasksDisabled} onClick={() => void createTasks()}>
-              {creatingTasks ? "Creating Tasks…" : "Create Tasks →"}
+              {synthesizingTasks
+                ? "Creating Tasks…"
+                : createTasksError
+                  ? "Retry"
+                  : "Create Tasks →"}
             </Button>
           </>
         )}
+
+        {showImplement && tasksFooter ? (
+          <>
+            <div className="flex-1" />
+            <Button
+              disabled={!tasksFooter.canImplement || tasksFooter.implementing}
+              onClick={tasksFooter.implement}
+            >
+              {tasksFooter.implementing ? (
+                <IconLoader2 data-icon="inline-start" className="animate-spin" />
+              ) : null}
+              Implement →
+            </Button>
+          </>
+        ) : null}
       </footer>
 
       <p className="pointer-events-none fixed bottom-1 left-1/2 -translate-x-1/2 text-xs text-muted-foreground">

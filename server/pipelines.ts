@@ -27,6 +27,7 @@ export type StepStatus =
   | "queued"
   | "ai-working"
   | "needs-user"
+  | "awaiting"
   | "done";
 
 export type StepKind = "human" | "ai-chat" | "ai-execution";
@@ -70,7 +71,7 @@ const STEP_DEFS: Record<StepKey, StepDef> = {
   info: { label: "Info", stepKind: "human", column: "backlog" },
   grill: { label: "Grill", stepKind: "ai-chat", column: "define" },
   spec: { label: "Spec", stepKind: "ai-chat", column: "define" },
-  tasks: { label: "Tasks", stepKind: "ai-execution", column: "define" },
+  tasks: { label: "Tasks", stepKind: "ai-chat", column: "define" },
   plan: { label: "Plan", stepKind: "ai-execution", column: "implement" },
   impl: { label: "Implement", stepKind: "ai-execution", column: "implement" },
   airev: { label: "AI Review", stepKind: "ai-execution", column: "implement" },
@@ -239,11 +240,34 @@ export function canCreateTasks(
   return specToTasksTransition(steps).ok;
 }
 
+/**
+ * Tasks → Implement fan-out: tasks must be needs-user.
+ * Sets Tasks to awaiting (watching children — not auto-reset like ai-working).
+ */
+export function tasksToImplementTransition(
+  steps: Array<{ key: StepKey; status: StepStatus }>,
+):
+  | { ok: true; patches: Array<{ key: StepKey; status: StepStatus }> }
+  | { ok: false; reason: string } {
+  const tasks = steps.find((s) => s.key === "tasks");
+  if (!tasks) {
+    return { ok: false, reason: "fan-out requires a tasks step" };
+  }
+  if (tasks.status !== "needs-user") {
+    return { ok: false, reason: "tasks must be needs-user to fan out" };
+  }
+  return {
+    ok: true,
+    patches: [{ key: "tasks", status: "awaiting" }],
+  };
+}
+
 /** What triggered a pipeline advance (routes / engine are thin adapters). */
 export type AdvanceTrigger =
   | { type: "kind-decision"; path: KindPath }
   | { type: "grill-to-spec" }
   | { type: "spec-to-tasks" }
+  | { type: "tasks-to-implement" }
   | {
       type: "step-finished";
       stepKey: StepKey;
@@ -331,6 +355,23 @@ export function advance(
           stepKey: "spec",
           round: 0,
           reason: "spec handed off to tasks",
+        },
+      ],
+    };
+  }
+
+  if (trigger.type === "tasks-to-implement") {
+    const transition = tasksToImplementTransition(card.steps);
+    if (!transition.ok) return transition;
+    return {
+      ok: true,
+      stepPatches: transition.patches,
+      sideEffects: [
+        {
+          type: "close-chat",
+          stepKey: "tasks",
+          round: 0,
+          reason: "tasks handed off to implement",
         },
       ],
     };

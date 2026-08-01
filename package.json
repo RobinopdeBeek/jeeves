@@ -38,6 +38,7 @@
     "hono": "^4.12.27",
     "lexical": "^0.48.0",
     "lucide-react": "^1.27.0",
+    "motion": "^12.43.0",
     "nanoid": "^5.1.16",
     "radix-ui": "^1.6.1",
     "react": "^19.2.7",
@@ -45,9 +46,11 @@
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.18.1",
     "remark-gfm": "^4.0.1",
+    "sonner": "^2.0.7",
     "tailwind-merge": "^3.6.0",
     "tw-shimmer": "^0.4.12",
-    "ws": "^8.21.1"
+    "ws": "^8.21.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.2",

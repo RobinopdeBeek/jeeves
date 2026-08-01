@@ -11,7 +11,7 @@ there are four classes, and storage follows from the class:
 | Class | Examples | Primary consumer | Wants to be… |
 |---|---|---|---|
 | **Human/AI prose** | Grill session (read-only), Spec, Plan | Humans + next AI step | Diffable, greppable markdown |
-| **Structured state** | Draft cards + blockers, change requests, rework round, decisions, session meta (tokens/cost) | The UI and the queue | Queryable SQLite rows |
+| **Structured state** | Tip `tasks-draft` (ArtifactStore), blockers after fan-out, change requests, rework round, decisions, session meta (tokens/cost) | The UI and the queue | Files + queryable SQLite rows |
 | **Composite review doc** | Task Evaluation, Feature Evaluation | Human review; linked from other evaluations | Self-contained HTML pinned to a commit SHA |
 | **Media / raw** | Screenshots/GIFs, run logs, chat transcripts (`UIMessage[]`) | Occasional human, gallery | Plain files, possibly large |
 
@@ -51,7 +51,7 @@ repository holds only server, client, and prompts — no per-project board state
 |---|---|---|
 | **Project store** | `<repo>/.jeeves/` on the host | Durable |
 | **Worktrees** | `<repo>/.jeeves/worktrees/<cardId>/` | Ephemeral per run |
-| **Exchange files** | `<worktree>/.jeeves/plan.md`, `.jeeves/to-tasks.json`, … | One run; harvested then removed |
+| **Exchange files** | `<worktree>/.jeeves/plan.md`, project-store `exchange/<cardId>/tasks-draft.json`, … | One run; harvested then removed |
 
 **SQLite (Drizzle) — the index + orchestration state.**
 
@@ -94,7 +94,7 @@ the target repo including `.jeeves/` (or back up that folder separately).
   artifact with step, round, kind, path, git_sha. Agents read the manifest first instead
   of globbing; the agent worktree needs no DB access.
 - **The runner injects inputs — the AI never hunts.** Each skill invocation gets the resolved
-  paths/contents of its inputs explicitly (e.g. Spec / `/to-tasks` receive the Grill session), resolved
+  paths/contents of its inputs explicitly (e.g. Spec / `/to-draft-tasks` receive the Grill session), resolved
   from the lineage graph by the runner. Discoverability for humans = manifest + frontmatter;
   discoverability for the pipeline = injection.
 
@@ -111,7 +111,7 @@ Two production contexts, two flows:
   inside the agent's worktree via `@cursor/sdk` local. `AgentRunner` invokes an `ExecutionEngine`
   finalization callback before cleanup; it harvests declared exchange files from the host
   worktree path (e.g. `<worktree>/.jeeves/plan.md`, `.jeeves/eval.html`, `.jeeves/screenshots/`,
-  `.jeeves/notifications.json`, `.jeeves/to-tasks.json`), validates them, copies into
+  `.jeeves/notifications.json`, exchange `tasks-draft.json`), validates them, copies into
   `<repo>/.jeeves/data/`, records metadata, and removes exchange files. A missing required
   artifact fails the run and preserves diagnostics. Structured exchange files are Zod-validated before
   DB mutations.

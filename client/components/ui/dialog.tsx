@@ -45,10 +45,16 @@ function DialogOverlay({
   )
 }
 
+function isSonnerEventTarget(target: EventTarget | null) {
+  return target instanceof Element && !!target.closest("[data-sonner-toaster]")
+}
+
 function DialogContent({
   className,
   children,
   showCloseButton = true,
+  onPointerDownOutside,
+  onInteractOutside,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
@@ -63,6 +69,14 @@ function DialogContent({
           className
         )}
         {...props}
+        onPointerDownOutside={(event) => {
+          if (isSonnerEventTarget(event.target)) event.preventDefault()
+          onPointerDownOutside?.(event)
+        }}
+        onInteractOutside={(event) => {
+          if (isSonnerEventTarget(event.target)) event.preventDefault()
+          onInteractOutside?.(event)
+        }}
       >
         {children}
         {showCloseButton && (

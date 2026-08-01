@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, real, unique } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, unique, type AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 
 // Drizzle schema — column source of truth. Slice 2 adds card_steps;
 // later slices add runs, artifacts, ... via migrations.
@@ -15,19 +15,38 @@ export const cards = sqliteTable("cards", {
   projectId: text("project_id")
     .notNull()
     .references(() => projects.id),
+  /** Set = child task of that feature; null task = standalone (ADR 0004). */
+  parentCardId: text("parent_card_id").references((): AnySQLiteColumn => cards.id),
   // null while the card sits in Backlog with its kind undecided
   kind: text("kind", { enum: ["feature", "task"] }),
+  // No shaping `draft` — Tasks tip is a versioned artifact (ADR 0014).
   status: text("status", {
-    enum: ["draft", "active", "merged", "done"],
+    enum: ["active", "merged", "done"],
   }).notNull(),
   column: text("column", {
     enum: ["backlog", "define", "implement", "review", "finalize"],
   }),
   title: text("title").notNull(),
   description: text("description").notNull().default(""),
+  /** Feature/task git branch — nullable until slice 8 creates them. */
+  branch: text("branch"),
   position: integer("position").notNull(),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 });
+
+/** Blocked-by edges between active cards (after fan-out). */
+export const cardBlockers = sqliteTable(
+  "card_blockers",
+  {
+    cardId: text("card_id")
+      .notNull()
+      .references(() => cards.id, { onDelete: "cascade" }),
+    blocksOnCardId: text("blocks_on_card_id")
+      .notNull()
+      .references(() => cards.id, { onDelete: "cascade" }),
+  },
+  (t) => [unique().on(t.cardId, t.blocksOnCardId)],
+);
 
 export const cardSteps = sqliteTable(
   "card_steps",
@@ -51,7 +70,14 @@ export const cardSteps = sqliteTable(
       ],
     }).notNull(),
     status: text("status", {
-      enum: ["pending", "queued", "ai-working", "needs-user", "done"],
+      enum: [
+        "pending",
+        "queued",
+        "ai-working",
+        "needs-user",
+        "awaiting",
+        "done",
+      ],
     }).notNull(),
     startedAt: integer("started_at", { mode: "timestamp_ms" }),
     completedAt: integer("completed_at", { mode: "timestamp_ms" }),
@@ -87,6 +113,7 @@ export const runs = sqliteTable("runs", {
 export const artifactKinds = [
   "grill",
   "spec",
+  "tasks-draft",
   "tasks-breakdown",
   "plan",
   "eval",
@@ -113,6 +140,7 @@ export const artifacts = sqliteTable("artifacts", {
 export type Project = typeof projects.$inferSelect;
 export type Card = typeof cards.$inferSelect;
 export type CardStep = typeof cardSteps.$inferSelect;
+export type CardBlocker = typeof cardBlockers.$inferSelect;
 export type Run = typeof runs.$inferSelect;
 export type Artifact = typeof artifacts.$inferSelect;
 export type ArtifactKind = (typeof artifactKinds)[number];

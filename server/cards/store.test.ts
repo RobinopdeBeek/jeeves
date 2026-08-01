@@ -1,5 +1,9 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
+import { ArtifactStore } from "../artifacts/store.js";
 import { openDb, type Db } from "../db/index.js";
 import { cardSteps } from "../db/schema.js";
 import { CardStore } from "./store.js";
@@ -112,7 +116,7 @@ describe("CardStore", () => {
         { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
         { key: "grill", status: "needs-user", label: "Grill", stepKind: "ai-chat", column: "define" },
         { key: "spec", status: "pending", label: "Spec", stepKind: "ai-chat", column: "define" },
-        { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-execution", column: "define" },
+        { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-chat", column: "define" },
       ]);
     });
 
@@ -173,7 +177,7 @@ describe("CardStore", () => {
       { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
       { key: "grill", status: "needs-user", label: "Grill", stepKind: "ai-chat", column: "define" },
       { key: "spec", status: "pending", label: "Spec", stepKind: "ai-chat", column: "define" },
-      { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-execution", column: "define" },
+      { key: "tasks", status: "pending", label: "Tasks", stepKind: "ai-chat", column: "define" },
     ]);
   });
 
@@ -279,6 +283,121 @@ describe("CardStore", () => {
       store.updateCard(card.id, { title: "Still grilling" });
       const id = store.decideKind(card.id, "feature").card.id;
       expect(() => store.handOffSpecToTasks(id)).toThrow(
+        expect.objectContaining({ status: 409 }),
+      );
+    });
+  });
+
+  describe("fanOut", () => {
+    let artifactRoot: string;
+    let artifacts: ArtifactStore;
+    let fanStore: CardStore;
+
+    beforeEach(() => {
+      artifactRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-fanout-"));
+      artifacts = new ArtifactStore(db, artifactRoot);
+      fanStore = new CardStore(db, artifacts);
+    });
+
+    afterEach(() => {
+      fs.rmSync(artifactRoot, { recursive: true, force: true });
+    });
+
+    function featureWithTip(tip: {
+      tasks: Array<{
+        id: string;
+        title: string;
+        description: string;
+        dependsOn: string[];
+      }>;
+    }): string {
+      const card = fanStore.createCard(projectId);
+      fanStore.updateCard(card.id, { title: "Workout streaks" });
+      const id = fanStore.decideKind(card.id, "feature").card.id;
+      fanStore.handOffGrillToSpec(id);
+      fanStore.handOffSpecToTasks(id);
+      artifacts.appendTasksDraft(id, 0, tip);
+      return id;
+    }
+
+    it("creates children with blockers, Tasks awaiting, and no enqueue", () => {
+      const id = featureWithTip({
+        tasks: [
+          { id: "a", title: "API", description: "endpoints", dependsOn: [] },
+          { id: "b", title: "UI", description: "screen", dependsOn: ["a"] },
+        ],
+      });
+
+      const { card, children, sideEffects } = fanStore.fanOut(id);
+
+      expect(card.column).toBe("define");
+      expect(card.steps.find((s) => s.key === "tasks")?.status).toBe("awaiting");
+      expect(card.implementProgress).toEqual({ current: 0, total: 2 });
+      expect(children).toHaveLength(2);
+      expect(children[0]).toMatchObject({
+        kind: "task",
+        status: "active",
+        column: "implement",
+        parentCardId: id,
+        title: "API",
+        description: "endpoints",
+        position: 0,
+        branch: null,
+      });
+      expect(children[1]).toMatchObject({
+        title: "UI",
+        parentCardId: id,
+        position: 1,
+      });
+      expect(children[0]!.steps.map((s) => ({ key: s.key, status: s.status }))).toEqual([
+        { key: "plan", status: "pending" },
+        { key: "impl", status: "pending" },
+        { key: "airev", status: "pending" },
+      ]);
+      expect(children[1]!.blockedBy).toEqual([
+        { id: children[0]!.id, title: "API" },
+      ]);
+      expect(children[0]!.blockedBy).toEqual([]);
+      expect(sideEffects).toEqual([
+        {
+          type: "close-chat",
+          stepKey: "tasks",
+          round: 0,
+          reason: "tasks handed off to implement",
+        },
+      ]);
+      expect(sideEffects.some((e) => e.type === "enqueue")).toBe(false);
+
+      const listed = fanStore.listCards(projectId);
+      expect(listed.filter((c) => c.parentCardId === id)).toHaveLength(2);
+
+      const drafts = artifacts
+        .list(id)
+        .filter((a) => a.kind === "tasks-draft");
+      expect(drafts).toHaveLength(1);
+      expect(
+        artifacts.list(id).some((a) => a.kind === "tasks-breakdown"),
+      ).toBe(true);
+    });
+
+    it("rejects empty tip, blank titles, and second fan-out", () => {
+      const emptyId = featureWithTip({ tasks: [] });
+      expect(() => fanStore.fanOut(emptyId)).toThrow(
+        expect.objectContaining({ status: 400 }),
+      );
+
+      const blankId = featureWithTip({
+        tasks: [{ id: "a", title: "   ", description: "", dependsOn: [] }],
+      });
+      expect(() => fanStore.fanOut(blankId)).toThrow(
+        expect.objectContaining({ status: 400 }),
+      );
+
+      const okId = featureWithTip({
+        tasks: [{ id: "a", title: "One", description: "", dependsOn: [] }],
+      });
+      fanStore.fanOut(okId);
+      expect(() => fanStore.fanOut(okId)).toThrow(
         expect.objectContaining({ status: 409 }),
       );
     });

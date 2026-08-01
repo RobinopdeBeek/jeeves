@@ -81,7 +81,7 @@ jeeves/                             # repo root — also the app root
 │   │   ├── StepInfo.tsx            # Backlog Info tab + Grill-me / Implement-now decision
 │   │   ├── StepGrill.tsx           # assistant-ui chat (useChat + AcpBridge transport)
 │   │   ├── StepSpec.tsx             # Spec markdown editor + AI side-chat (reuses chat stack)
-│   │   ├── StepTasks.tsx           # draft cards list, blocked-by, fan-out, Round N history
+│   │   ├── StepTasks.tsx           # tasks-draft tiles, inspector, blocked-by, fan-out UI
 │   │   ├── StepExecution.tsx       # live RunLog + mini eval pipeline progress (Plan/Impl/AIReview)
 │   │   ├── ReviewTask.tsx          # Task Evaluation + Request-changes panel + QA gate
 │   │   ├── ReviewFeature.tsx       # Feature Evaluation + Refactor opportunities + QA gate

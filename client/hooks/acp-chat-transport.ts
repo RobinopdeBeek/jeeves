@@ -1,5 +1,6 @@
 import type { ChatTransport, UIMessage, UIMessageChunk } from "ai";
 import type { WsClientMessage, WsServerMessage } from "@shared/chat-ws";
+import type { TasksDraft } from "@/lib/api";
 
 export type { PermissionOptionPart, PermissionRequestData } from "@shared/chat-ws";
 
@@ -15,10 +16,12 @@ export interface AcpChatTransportOptions {
   stepKey: string;
   round?: number;
   onDisplaced?: (reason: string) => void;
-  /** Spec side-chat: inject live editor draft into the agent prompt (not the UI). */
-  getCurrentSpecMarkdown?: () => string;
+  /** Live editor/tip draft body for Define assist (framed server-side by step profile). */
+  getLiveDraftBody?: () => string;
   /** Spec side-chat: host harvested a revision — replace editor content. */
   onSpecRevised?: (markdown: string) => void;
+  /** Tasks side-chat: host harvested a revision — refresh tip tiles. */
+  onTasksRevised?: (draft: TasksDraft & { versionCount: number }) => void;
   /** Notify when a turn starts/ends streaming (editor/composer lock). */
   onStreamingChange?: (streaming: boolean) => void;
   /** Socket health changed (reconnect banner, composer gating). */
@@ -194,12 +197,12 @@ export class AcpChatTransport {
 
     this.beginTurn();
     const stream = this.openChunkStream(abortSignal);
-    const currentSpecMarkdown = this.options.getCurrentSpecMarkdown?.();
+    const liveDraftBody = this.options.getLiveDraftBody?.();
     try {
       this.sendClient({
         type: "user-message",
         text,
-        ...(currentSpecMarkdown != null ? { currentSpecMarkdown } : {}),
+        ...(liveDraftBody != null ? { liveDraftBody } : {}),
       });
     } catch (err) {
       this.abandonTurn();
@@ -219,6 +222,18 @@ export class AcpChatTransport {
       // permission from the warm bridge.
       this.reconnectNow();
     }
+  }
+
+  /** Abort the in-flight ACP turn (composer Stop). */
+  cancelTurn(): void {
+    if (this.displaced || this.turnDone) return;
+    try {
+      this.sendClient({ type: "cancel" });
+    } catch {
+      // Socket died — still unlock the UI locally; reconnect will resync.
+      this.reconnectNow();
+    }
+    this.abandonTurn();
   }
 
   /**
@@ -526,11 +541,12 @@ export class AcpChatTransport {
 
   /** End a turn that can no longer complete, so the UI stops waiting. */
   private abandonTurn(): void {
-    const hadStream = this.streamController != null;
-    this.closeActiveStream();
-    if (!hadStream && this.turnDone) return;
+    if (this.turnDone && this.streamController == null) return;
+    // Mark done before closing so the stream `cancel` callback does not clear
+    // `resumeConsumed` (that would re-open a dead turn on reconnect).
     this.turnDone = true;
     this.clearLivenessTimer();
+    this.closeActiveStream();
     this.options.onStreamingChange?.(false);
   }
 
@@ -552,7 +568,8 @@ export class AcpChatTransport {
         attached = controller;
         this.streamController = controller;
         abortSignal?.addEventListener("abort", () => {
-          this.releaseStreamController(controller, { close: true });
+          // Composer Stop: cancel ACP on the server, then unlock the UI.
+          this.cancelTurn();
         });
       },
       // AI SDK / assistant-ui may cancel the resume stream on send,
@@ -724,6 +741,12 @@ export class AcpChatTransport {
       }
       case "spec-revised":
         this.options.onSpecRevised?.(msg.markdown);
+        break;
+      case "tasks-revised":
+        this.options.onTasksRevised?.({
+          ...msg.draft,
+          versionCount: msg.versionCount,
+        });
         break;
     }
   }

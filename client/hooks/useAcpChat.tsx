@@ -3,6 +3,7 @@ import { useAISDKRuntime } from "@assistant-ui/react-ai-sdk";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ChatTransport, UIMessage } from "ai";
+import type { TasksDraftTip } from "@/lib/api";
 import {
   AcpChatTransport,
   type ChatConnectionState,
@@ -12,37 +13,39 @@ export interface UseAcpChatOptions {
   cardId: string;
   stepKey: string;
   round?: number;
-  getCurrentSpecMarkdown?: () => string;
+  /** Live editor/tip draft for Define assist steps (opaque body; server frames by profile). */
+  getLiveDraftBody?: () => string;
   onSpecRevised?: (markdown: string) => void;
+  onTasksRevised?: (draft: TasksDraftTip) => void;
   onStreamingChange?: (streaming: boolean) => void;
 }
 
 export type AcpChatState =
   | { status: "connecting" }
   | {
-      status: "ready";
-      transport: AcpChatTransport;
-      messages: UIMessage[];
-      /** ACP handshake done — composer send is allowed. */
-      sessionOpen: boolean;
-      /** Socket health; "reconnecting" drives the recovery hint. */
-      connection: ChatConnectionState;
-      /**
-       * Bumped when a reconnect delivers a fresh transcript. Callers key the
-       * chat runtime on it so recovery re-seeds history (like remounting).
-       */
-      epoch: number;
-    }
+    status: "ready";
+    transport: AcpChatTransport;
+    messages: UIMessage[];
+    /** ACP handshake done — composer send is allowed. */
+    sessionOpen: boolean;
+    /** Socket health; "reconnecting" drives the recovery hint. */
+    connection: ChatConnectionState;
+    /**
+     * Bumped when a reconnect delivers a fresh transcript. Callers key the
+     * chat runtime on it so recovery re-seeds history (like remounting).
+     */
+    epoch: number;
+  }
   | {
-      status: "displaced";
-      reason: string;
-      /** Last messages seen on the live socket before displacement (may be stale). */
-      messages: UIMessage[];
-    }
+    status: "displaced";
+    reason: string;
+    /** Last messages seen on the live socket before displacement (may be stale). */
+    messages: UIMessage[];
+  }
   | { status: "error"; error: string };
 
 /**
- * Custom ChatTransport hook: connects Grill / Spec ai-chat steps to AcpBridge.
+ * Custom ChatTransport hook: connects Grill / Spec / Tasks ai-chat steps to AcpBridge.
  *
  * The transport heals its own socket; this hook mirrors that into UI state and
  * re-seeds the runtime from the server transcript after a reconnect.
@@ -51,18 +54,21 @@ export function useAcpChat({
   cardId,
   stepKey,
   round = 0,
-  getCurrentSpecMarkdown,
+  getLiveDraftBody,
   onSpecRevised,
+  onTasksRevised,
   onStreamingChange,
 }: UseAcpChatOptions): AcpChatState {
   const [state, setState] = useState<AcpChatState>({ status: "connecting" });
-  const getSpecRef = useRef(getCurrentSpecMarkdown);
-  getSpecRef.current = getCurrentSpecMarkdown;
+  const getLiveDraftRef = useRef(getLiveDraftBody);
+  getLiveDraftRef.current = getLiveDraftBody;
   const onRevisedRef = useRef(onSpecRevised);
   onRevisedRef.current = onSpecRevised;
+  const onTasksRevisedRef = useRef(onTasksRevised);
+  onTasksRevisedRef.current = onTasksRevised;
   const onStreamingRef = useRef(onStreamingChange);
   onStreamingRef.current = onStreamingChange;
-  const injectSpec = getCurrentSpecMarkdown != null;
+  const injectLiveDraft = getLiveDraftBody != null;
 
   useEffect(() => {
     let cancelled = false;
@@ -72,18 +78,26 @@ export function useAcpChat({
       cardId,
       stepKey,
       round,
-      getCurrentSpecMarkdown: injectSpec
-        ? () => getSpecRef.current?.() ?? ""
+      getLiveDraftBody: injectLiveDraft
+        ? () => getLiveDraftRef.current?.() ?? ""
         : undefined,
       onSpecRevised: (markdown) => onRevisedRef.current?.(markdown),
+      onTasksRevised: (draft) => onTasksRevisedRef.current?.(draft),
       onStreamingChange: (streaming) => onStreamingRef.current?.(streaming),
       onConnectionChange: (connection) => {
         if (cancelled) return;
-        setState((prev) =>
-          prev.status === "ready"
-            ? { ...prev, connection, sessionOpen: connection === "open" }
-            : prev,
-        );
+        setState((prev) => {
+          if (prev.status !== "ready") return prev;
+          // Keep sessionOpen across reconnect so Stop stays visible mid-turn.
+          // Only a hard close hides Send/Cancel (spinner).
+          const sessionOpen =
+            connection === "closed"
+              ? false
+              : connection === "open"
+                ? true
+                : prev.sessionOpen;
+          return { ...prev, connection, sessionOpen };
+        });
       },
       onReconnected: (history) => {
         if (cancelled) return;
@@ -153,7 +167,7 @@ export function useAcpChat({
       // CONNECTING-safe close waits for open before closing (no setTimeout defer).
       transport.close();
     };
-  }, [cardId, stepKey, round, injectSpec]);
+  }, [cardId, stepKey, round, injectLiveDraft]);
 
   return state;
 }

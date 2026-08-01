@@ -15,7 +15,7 @@ export function ReadOnlyTranscript({
   fallbackMessages,
 }: {
   cardId: string;
-  stepKey?: "grill" | "spec";
+  stepKey?: "grill" | "spec" | "tasks";
   fallbackMessages: UIMessage[];
 }) {
   const [messages, setMessages] = useState<UIMessage[]>(fallbackMessages);

@@ -46,6 +46,25 @@ describe("resolveOpeningPrompt", () => {
     expect(prompt).toContain("Do **not** recap the Grill session");
   });
 
+  it("builds a tasks-assist opener with Spec and exchange path", () => {
+    const prompt = resolveOpeningPrompt(
+      "tasks",
+      { title: "Pantry", description: "Track expiry" },
+      "C:/repo",
+      promptsRoot,
+      {
+        spec: "# Spec\n\nFridge only.",
+        cardId: "card1",
+      },
+    );
+    expect(prompt).toContain("Pantry");
+    expect(prompt).toContain("Track expiry");
+    expect(prompt).toContain("Fridge only.");
+    expect(prompt).toContain("exchange/card1/tasks-draft.json");
+    expect(prompt).toContain("Here for you if you need me.");
+    expect(prompt).toContain("Do **not** recap the Spec");
+  });
+
   it("rejects unknown step keys", () => {
     expect(() =>
       resolveOpeningPrompt(

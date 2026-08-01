@@ -272,6 +272,210 @@ describe("ArtifactStore", () => {
     expect(() => store.assertSpecMutable(cardId)).toThrow(/frozen/i);
   });
 
+  function cardWithTasksStep(): void {
+    cardWithSpecStep();
+    artifacts.upsertSpec(cardId, 0, "# Spec\n\nBody.\n");
+    store.handOffSpecToTasks(cardId);
+  }
+
+  it("appends versioned tasks-draft JSON tips without frontmatter", () => {
+    cardWithTasksStep();
+    const first = artifacts.appendTasksDraft(cardId, 0, {
+      tasks: [{ id: "a", title: "API", description: "d", dependsOn: [] }],
+    });
+    expect(first).toMatchObject({
+      cardId,
+      stepKey: "tasks",
+      round: 0,
+      kind: "tasks-draft",
+    });
+    expect(first.path).toMatch(
+      new RegExp(`^cards/${cardId}/0/tasks/drafts/.+\\.json$`),
+    );
+    const raw = artifacts.readContent(first);
+    expect(raw.startsWith("---")).toBe(false);
+    expect(JSON.parse(raw)).toEqual({
+      tasks: [{ id: "a", title: "API", description: "d", dependsOn: [] }],
+    });
+
+    const second = artifacts.appendTasksDraft(cardId, 0, {
+      tasks: [
+        { id: "a", title: "API", description: "d", dependsOn: [] },
+        { id: "b", title: "UI", description: "", dependsOn: ["a"] },
+      ],
+    });
+    expect(second.id).not.toBe(first.id);
+    expect(artifacts.list(cardId).filter((a) => a.kind === "tasks-draft")).toHaveLength(
+      2,
+    );
+    expect(artifacts.latest(cardId, { stepKey: "tasks", round: 0, kind: "tasks-draft" })!.id).toBe(
+      second.id,
+    );
+    expect(artifacts.readTasksDraftTip(cardId, 0).tasks).toHaveLength(2);
+  });
+
+  it("rejects invalid tasks-draft graphs on append", () => {
+    cardWithTasksStep();
+    expect(() =>
+      artifacts.appendTasksDraft(cardId, 0, {
+        tasks: [{ id: "a", title: "", description: "", dependsOn: [] }],
+      }),
+    ).toThrow(ArtifactStoreError);
+  });
+
+  it("returns previous tip for undo", () => {
+    cardWithTasksStep();
+    const v1 = {
+      tasks: [{ id: "a", title: "A", description: "", dependsOn: [] }],
+    };
+    const v2 = {
+      tasks: [
+        { id: "a", title: "A", description: "", dependsOn: [] },
+        { id: "b", title: "B", description: "", dependsOn: [] },
+      ],
+    };
+    artifacts.appendTasksDraft(cardId, 0, v1);
+    artifacts.appendTasksDraft(cardId, 0, v2);
+    const previous = artifacts.previousTasksDraft(cardId, 0);
+    expect(previous?.draft).toEqual(v1);
+
+    const undone = artifacts.appendTasksDraft(cardId, 0, previous!.draft, "undo");
+    expect(artifacts.readTasksDraftTip(cardId, 0)).toEqual(v1);
+    expect(artifacts.list(cardId).filter((a) => a.kind === "tasks-draft")).toHaveLength(3);
+    expect(undone.id).not.toBe(previous!.artifact.id);
+  });
+
+  it("freezes tip as tasks-breakdown and prunes older draft versions", () => {
+    cardWithTasksStep();
+    const v1 = {
+      tasks: [{ id: "a", title: "A", description: "", dependsOn: [] }],
+    };
+    const tip = {
+      tasks: [
+        { id: "a", title: "A", description: "api", dependsOn: [] },
+        { id: "b", title: "B", description: "ui", dependsOn: ["a"] },
+      ],
+    };
+    const first = artifacts.appendTasksDraft(cardId, 0, v1);
+    const second = artifacts.appendTasksDraft(cardId, 0, tip);
+
+    const breakdown = artifacts.freezeTasksBreakdown(cardId, 0);
+    expect(breakdown).toMatchObject({
+      cardId,
+      stepKey: "tasks",
+      round: 0,
+      kind: "tasks-breakdown",
+    });
+    expect(JSON.parse(artifacts.readContent(breakdown))).toEqual(tip);
+
+    const drafts = artifacts.list(cardId).filter((a) => a.kind === "tasks-draft");
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]!.id).toBe(second.id);
+    expect(fs.existsSync(path.join(artifactRoot, first.path))).toBe(false);
+    expect(fs.existsSync(path.join(artifactRoot, second.path))).toBe(true);
+    expect(artifacts.readTasksDraftTip(cardId, 0)).toEqual(tip);
+  });
+
+  it("harvests tasks-draft exchange with index→id normalize as a new version", () => {
+    cardWithTasksStep();
+    const storeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-ps-"));
+    const exchangeRel = `exchange/${cardId}/tasks-draft.json`;
+    const exchangeAbs = path.join(storeRoot, exchangeRel);
+    fs.mkdirSync(path.dirname(exchangeAbs), { recursive: true });
+    fs.writeFileSync(
+      exchangeAbs,
+      JSON.stringify({
+        tasks: [
+          { title: "API", description: "a", depends_on: [] },
+          { title: "UI", description: "u", depends_on: [0] },
+        ],
+      }),
+    );
+
+    const harvested = artifacts.harvest(
+      storeRoot,
+      [{ exchangePath: exchangeRel, kind: "tasks-draft", stepKey: "tasks" }],
+      { cardId, round: 0, sourceSkill: "to-draft-tasks" },
+    );
+
+    expect(harvested).toHaveLength(1);
+    expect(harvested[0].kind).toBe("tasks-draft");
+    const tip = artifacts.readTasksDraftTip(cardId, 0);
+    expect(tip.tasks).toHaveLength(2);
+    expect(tip.tasks[0]!.title).toBe("API");
+    expect(tip.tasks[1]!.dependsOn).toEqual([tip.tasks[0]!.id]);
+    expect(fs.existsSync(exchangeAbs)).toBe(false);
+
+    fs.mkdirSync(path.dirname(exchangeAbs), { recursive: true });
+    fs.writeFileSync(
+      exchangeAbs,
+      JSON.stringify({
+        tasks: [{ title: "Only", description: "", depends_on: [] }],
+      }),
+    );
+    artifacts.harvest(
+      storeRoot,
+      [{ exchangePath: exchangeRel, kind: "tasks-draft", stepKey: "tasks" }],
+      { cardId, round: 0, sourceSkill: "to-draft-tasks" },
+    );
+    expect(artifacts.list(cardId).filter((a) => a.kind === "tasks-draft")).toHaveLength(2);
+    expect(artifacts.readTasksDraftTip(cardId, 0).tasks).toHaveLength(1);
+
+    fs.rmSync(storeRoot, { recursive: true, force: true });
+  });
+
+  it("harvests tasks-draft revise preserving tip ids from exchange", () => {
+    cardWithTasksStep();
+    artifacts.appendTasksDraft(
+      cardId,
+      0,
+      {
+        tasks: [
+          { id: "keep-a", title: "API", description: "", dependsOn: [] },
+          { id: "keep-b", title: "UI", description: "", dependsOn: ["keep-a"] },
+        ],
+      },
+      "to-draft-tasks",
+    );
+
+    const storeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-ps-"));
+    const exchangeRel = `exchange/${cardId}/tasks-draft.json`;
+    const exchangeAbs = path.join(storeRoot, exchangeRel);
+    fs.mkdirSync(path.dirname(exchangeAbs), { recursive: true });
+    fs.writeFileSync(
+      exchangeAbs,
+      JSON.stringify({
+        tasks: [
+          {
+            id: "keep-a",
+            title: "API revised",
+            description: "a",
+            depends_on: [],
+          },
+          { id: "keep-b", title: "UI", description: "u", depends_on: [0] },
+        ],
+      }),
+    );
+
+    artifacts.harvest(
+      storeRoot,
+      [{ exchangePath: exchangeRel, kind: "tasks-draft", stepKey: "tasks" }],
+      {
+        cardId,
+        round: 0,
+        sourceSkill: "tasks-assist",
+        preserveTasksDraftIds: true,
+      },
+    );
+
+    const tip = artifacts.readTasksDraftTip(cardId, 0);
+    expect(tip.tasks.map((t) => t.id)).toEqual(["keep-a", "keep-b"]);
+    expect(tip.tasks[0]!.title).toBe("API revised");
+    expect(artifacts.tasksDraftVersionCount(cardId, 0)).toBe(2);
+
+    fs.rmSync(storeRoot, { recursive: true, force: true });
+  });
+
   it("harvests a project-store spec exchange file into an indexed durable artifact", () => {
     cardWithSpecStep();
     const storeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-ps-"));

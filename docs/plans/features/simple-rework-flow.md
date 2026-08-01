@@ -1,0 +1,7 @@
+# Simple rework flow
+
+We keep our current Change Requests side panel. When we click implement we don't go through the entire Implement phase again, instead the card stays in the Human Review column, showing "[loading spinner] Reworking...". The Review tab then hides the normal UI (eval and side panel), instead it shows a simple todo list in the middle with every requested change and goes through them one by one. Similar to how Cursor's in-chat todo list works, showing the status of each item. Once finished, it updates the eval where needed and then simply goes back to the main Review UI, and the Request Changes is empty again. 
+
+## Reasoning
+
+Usually after having implemented a bigger features I test everything out following the QA checklist and I find lots of smaller things that need to be changed (rarely big things). I write these out in bullited chunks. I want this flow to feel very quick and iterative. Going back to the Implement phase, where it spins up a new worktree for plan, implement and review, seems overkill for smaller iteration stuff. Instead, during review we should simply keep the worktree for the Feature while it is in the Review column. It is needed for running the test server anyway, and that way every Change Request list iteration is one commit on that worktree. Seems more like I'm working currently anyway. 

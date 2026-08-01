@@ -85,7 +85,7 @@ command" — no code changes.
 | Server | Hono + Node.js | Thin adapter over a long-lived orchestrator process ([ADR 0013](./docs/adr/0013-one-long-lived-process-owns-orchestration-state.md)) |
 | Database | SQLite via Drizzle (better-sqlite3) | Single-user, zero setup; one `jeeves.db` per project under `<repo>/.jeeves/` |
 | UI | React + Tailwind | Responsive web covers laptop, tablet, and phone |
-| Within-column reorder | `@dnd-kit` | Cards move between columns via pipeline logic, not drag — DnD is only for reordering inside a column (Backlog, draft tasks in Define, etc.) |
+| Within-column reorder | `@dnd-kit` | Cards move between columns via pipeline logic, not drag — DnD is only for reordering inside a column (Backlog, etc.) |
 | Base components | shadcn/ui | Card, Badge, Button, Dialog, Sheet, Progress |
 | Icons | Tabler Icons (`@tabler/icons-react`) | Project standard; shadcn `iconLibrary` is `tabler` |
 | Markdown editor | MDXEditor | True WYSIWYG that outputs clean markdown |
@@ -155,7 +155,7 @@ them. Everything else (routes, React components) is a thin adapter.
 | Module | Lives in | Interface (the seam) | What it hides |
 |---|---|---|---|
 | `PipelineEngine` | `server/pipelines.ts` | pipeline lookup by `(kind, hasParent)`; real `advance(card, trigger)` → patches + side-effects (`enqueue`, `close-chat`) | all column/step transition rules, auto-advance, board predicates (`canCreateSpec`), "workflow is code" |
-| `CardStore` | `server/db/` + card logic | CRUD, kind decision, fan-out, blocker edges, derived queries ("X of Y", queue candidates, Round N history); persists `advance` patches | SQLite/Drizzle, the unified draft/active/merged model, every derivation rule |
+| `CardStore` | `server/db/` + card logic | CRUD, kind decision, fan-out, blocker edges, derived queries ("X of Y", queue candidates, Round N history); persists `advance` patches | SQLite/Drizzle, active/merged/done cards + tip drafts in ArtifactStore, every derivation rule |
 | `ArtifactStore` | `server/artifacts/store.ts` + routes | `save`, `harvest(worktree, declarations)`, `list(card)`, serve-path resolution; transcript upsert is file/index only | atomic/versioned files, metadata, root containment, manifest regeneration, lineage, rounds, supersession |
 | `ExecutionEngine` | `server/execution/` (`engine.ts`, `runner.ts`, `worktree-manager.ts`, `cursor-sdk-runner.ts`, `run-store.ts`, `events.ts`) | `enqueue(card, step)` + run events; `startPreview(card, gitSha)` / `stopPreview()`; dispatches `advance` side-effects on finish | `AgentRunner`, per-run worktrees/finalization, branch strategy, host-process preview lifecycle, sequential queue, blockers, restart recovery, eval sequencing |
 | `AcpBridge` | `server/ws/chat.ts` (+ `open-chat.ts`, `session-registry.ts`) | push-only `openSession` / `sendMessage` + `attach`/`onChunk`; headless `runToCompletion`; warm registry acquire/reattach; `openChat` for adapters | spawning `agent acp`, ACP→`UIMessage` projection, permission responses (incl. headless cursor-like policy), JSON-RPC piping, warm cap/eviction, seed-once history, disconnect/hand-off close |
@@ -174,11 +174,12 @@ Entity definitions live in [`CONTEXT.md`](./CONTEXT.md); columns live in
   `<repo>/.jeeves/` (SQLite + artifact tree + worktrees — created on first use), its explicit
   local default branch, and validated preview configuration; reviewed branches cannot alter
   launch policy.
-- A **card** is the one entity for features, tasks, *and* drafts. A card with a
-  `parent_card_id` is a child task of that feature; blocked-by relationships are
+- A **card** is the one entity for features and tasks on the board. Tasks shaping drafts
+  are versioned `tasks-draft` artifacts until fan-out ([ADR 0014](docs/adr/0014-tasks-drafts-are-versioned-artifacts.md)).
+  A card with a `parent_card_id` is a child task of that feature; blocked-by relationships are
   card-to-card edges (`card_blockers`).
-- A card's lifecycle is its `status`: `draft` → (fan-out) → `active` → `merged` (child
-  tasks) or `done` (features and standalone tasks). Discarded drafts are hard-deleted.
+- A card's lifecycle is its `status`: `active` → `merged` (child
+  tasks) or `done` (features and standalone tasks).
 - Each card has **card steps** — one mutable row per step holding *current* state only.
 - Everything historical hangs off the card as immutable, round-scoped records:
   **artifacts**, **runs**, **change requests**, **decisions**, and **notifications**. A
@@ -201,8 +202,8 @@ Column-level only; step mechanics live in `server/pipelines.ts` and the skill pr
 1. A card is captured in **Backlog**; the user picks **"Grill me →"**, making it a feature.
 2. **Define Feature**: a grill chat session whose hand-off is a **Grill session** Q&A
    artifact ([ADR 0012](./docs/adr/0012-grill-session-qa-handoff.md)), then collaborative
-   spec authoring, then the feature is broken into draft tasks with blocked-by edges.
-3. **Fan-out**: the drafts activate as child task cards on the board.
+   spec authoring, then the feature is broken into tip `tasks-draft` slices with blocked-by edges.
+3. **Fan-out**: the host materializes active child task cards from the tip.
 4. Each child task runs **Implement Task** (Plan → Implement → AI Review) autonomously,
    then waits in **Human Review** with its Task Evaluation. Blocked tasks wait for blocker
    merge; independent tasks may wait concurrently. Approval validates a temporary merge and

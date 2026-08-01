@@ -49,20 +49,19 @@ active project via `JEEVES_REPO_PATH` + `ensureDefaultProject`; a future repo
 switcher lists known `repo_path` values and rebinds the server — no global
 mega-database or `store_path` / `db_path` columns on `projects`.
 
-cards                        -- one entity for features, tasks, AND drafts
+cards                        -- features and tasks (board cards); Tasks shaping is file-shaped
   id            pk
   project_id    fk → projects
   parent_card_id fk → cards, nullable   -- set = child task; null task = standalone
   kind          'feature' | 'task' | null   -- null while undecided in Backlog
-  status        'draft' | 'active' | 'merged' | 'done'
+  status        'active' | 'merged' | 'done'   -- no shaping `draft` (ADR 0014)
   column        'backlog' | 'define' | 'implement' | 'review' | 'finalize' | null
-                                        -- null while status = 'draft' (not on the board)
   title         text
   description   text        -- markdown; acceptance criteria & file hints live inline
   branch        text, nullable
   rework_round  int, default 0          -- the card's current round counter
   round         int, default 0          -- for child tasks: the round that created them
-  position      int         -- ordering among sibling tasks / drafts
+  position      int         -- ordering among sibling tasks
   created_at
 
 card_steps                   -- CURRENT state only; one row per (card, step), mutated in place
@@ -70,11 +69,12 @@ card_steps                   -- CURRENT state only; one row per (card, step), mu
   card_id       fk → cards
   step_key      'info' | 'grill' | 'spec' | 'tasks' | 'plan' | 'impl' | 'airev'
                 | 'review' | 'document' | 'deploy'
-  status        'pending' | 'queued' | 'ai-working' | 'needs-user' | 'done'
+  status        'pending' | 'queued' | 'ai-working' | 'needs-user' | 'awaiting' | 'done'
   started_at, completed_at   -- overwritten on rework; per-round timing lives in runs
                              -- rows created lazily as the card reaches each column
+                             -- awaiting = watching child tasks (never auto-reset like orphaned ai-working)
 
-card_blockers                -- blocked-by edges between cards (drafts and active tasks)
+card_blockers                -- blocked-by edges between cards (active tasks after fan-out)
   card_id           fk → cards (cascade delete)
   blocks_on_card_id fk → cards (cascade delete)
 
@@ -108,10 +108,10 @@ artifacts                    -- metadata + pointer, never content
   card_id       fk → cards
   step_key      text
   round         int
-  kind          'transcript' | 'grill' | 'spec' | 'tasks-breakdown' | 'plan' | 'eval'
+  kind          'transcript' | 'grill' | 'spec' | 'tasks-draft' | 'tasks-breakdown' | 'plan' | 'eval'
                 | 'screenshot' | 'runlog' | 'attachment'
                 -- transcript = mutable UIMessage[] chat log; grill = Grill session Q&A
-                -- (ADR 0012)
+                -- (ADR 0012); tasks-draft = append-only tip versions (ADR 0014)
   path          text         -- root-relative; unique immutable destination per version
   git_sha       text, nullable  -- mandatory for evals: the only link to the reviewed diff
   schema_version int
@@ -138,20 +138,28 @@ notifications                -- inserted at harvest from eval-assemble's exchang
   read_at       timestamp, nullable   -- null = unread → drives the tile dot
 ```
 
-### The unified card model
+### Tasks tip (not draft card rows)
 
-Draft tasks are **not** a separate entity: the moment `/to-tasks` (or the rework breakdown
-skill) produces a harvested, Zod-validated JSON exchange file and the runner creates card rows,
-a real `cards` row exists with `status = 'draft'`. Fan-out is a status flip to `active`, not
-a copy. What falls out:
+While Tasks is `needs-user`, proposed slices live only in append-only `tasks-draft` JSON
+artifacts ([ADR 0014](../adr/0014-tasks-drafts-are-versioned-artifacts.md)). The tip shape after host
+normalize:
 
-- The Tasks tab renders one list of child cards in three states — draft (editable), active
-  (live board cards inline), merged (read-only, grouped by `round`). The prototype's
-  `draftTasks` / `archivedTasks` / "display copy after fan-out" machinery all disappear.
-- "Archived Round N tasks" is a query: children `WHERE status = 'merged' AND round < parent.rework_round`.
-- Board queries filter `status = 'active'`; drafts and merged children never appear.
-- Discarding a draft is a hard delete (cascades its blocker edges). Deleting an active card
-  is the destructive confirm-dialog path.
+```json
+{
+  "tasks": [
+    {
+      "id": "stable-id",
+      "title": "string",
+      "description": "markdown…",
+      "dependsOn": ["other-stable-id"]
+    }
+  ]
+}
+```
+
+Skill / exchange files may emit `depends_on` as 0-based indices; the host maps those to stable
+ids before appending a tip. **Implement →** materializes active child `cards` +
+`card_blockers` from the tip — there is no `status = 'draft'` shaping row.
 
 Child vs standalone task is **derived from `parent_card_id`**, never stored — a stored
 discriminator could contradict the link. The pipeline constant is looked up by `(kind, hasParent)`.
@@ -173,7 +181,7 @@ discriminator could contradict the link. The pipeline constant is looked up by `
 
 Change requests are consumed **as a set**: the open requests at "Implement changes →" are
 injected into the rework implement prompt (task), or handed as one input document to the
-rework breakdown skill (feature), which may merge or split them into draft tasks — so there
+rework breakdown skill (feature), which may merge or split them into a new `tasks-draft` tip — so there
 is deliberately **no** request→task FK. Round-level lineage (these requests → that round's
 tasks) is the granularity that matters, and file-level provenance is covered by
 `artifact_lineage` on the breakdown artifact.

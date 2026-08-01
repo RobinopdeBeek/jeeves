@@ -32,7 +32,7 @@ describe("tasks-draft schema", () => {
     ).toThrow(TasksDraftError);
   });
 
-  it("rejects cycles in the blocker graph", () => {
+  it("rejects cycles in the blocker graph with task numbers", () => {
     expect(() =>
       parseTasksDraft({
         tasks: [
@@ -40,7 +40,20 @@ describe("tasks-draft schema", () => {
           { id: "b", title: "B", description: "", dependsOn: ["a"] },
         ],
       }),
-    ).toThrow(/DAG|cycle/i);
+    ).toThrow("Circular dependency between Tasks 1 and 2");
+  });
+
+  it("names only the first cycle when reporting circular dependencies", () => {
+    expect(() =>
+      parseTasksDraft({
+        tasks: [
+          { id: "a", title: "A", description: "", dependsOn: [] },
+          { id: "b", title: "B", description: "", dependsOn: ["c"] },
+          { id: "c", title: "C", description: "", dependsOn: ["d"] },
+          { id: "d", title: "D", description: "", dependsOn: ["b"] },
+        ],
+      }),
+    ).toThrow("Circular dependency between Tasks 2, 3, and 4");
   });
 
   it("rejects unknown dependsOn ids", () => {

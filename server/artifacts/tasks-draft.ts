@@ -55,10 +55,11 @@ export const TasksDraftSchema = z
         }
       }
     }
-    if (hasCycle(draft.tasks)) {
+    const cycle = findCycle(draft.tasks);
+    if (cycle) {
       ctx.addIssue({
         code: "custom",
-        message: "blocker graph must be a DAG (cycle detected)",
+        message: formatCircularDependency(cycle, draft.tasks),
         path: ["tasks"],
       });
     }
@@ -180,30 +181,56 @@ export function validateAndNormalizeExchange(
   return normalizeTasksDraft(parseTasksDraftExchange(parsed), opts);
 }
 
-function hasCycle(tasks: TasksDraftTask[]): boolean {
+/** First cycle as task ids (no closing repeat), or null if the graph is a DAG. */
+function findCycle(tasks: TasksDraftTask[]): string[] | null {
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const visiting = new Set<string>();
   const visited = new Set<string>();
+  const stack: string[] = [];
 
-  function dfs(id: string): boolean {
-    if (visiting.has(id)) return true;
-    if (visited.has(id)) return false;
+  function dfs(id: string): string[] | null {
+    if (visiting.has(id)) {
+      const start = stack.indexOf(id);
+      return start >= 0 ? stack.slice(start) : [id];
+    }
+    if (visited.has(id)) return null;
     visiting.add(id);
+    stack.push(id);
     const task = byId.get(id);
     if (task) {
       for (const dep of task.dependsOn) {
-        if (dfs(dep)) return true;
+        const cycle = dfs(dep);
+        if (cycle) return cycle;
       }
     }
+    stack.pop();
     visiting.delete(id);
     visited.add(id);
-    return false;
+    return null;
   }
 
   for (const task of tasks) {
-    if (dfs(task.id)) return true;
+    const cycle = dfs(task.id);
+    if (cycle) return cycle;
   }
-  return false;
+  return null;
+}
+
+/** 1-based tile numbers, matching the Tasks UI ("1. Title"). */
+function formatCircularDependency(
+  cycleIds: string[],
+  tasks: TasksDraftTask[],
+): string {
+  const nums = cycleIds
+    .map((id) => tasks.findIndex((t) => t.id === id))
+    .filter((i) => i >= 0)
+    .map((i) => String(i + 1));
+  if (nums.length === 0) return "Circular dependency between tasks";
+  if (nums.length === 1) return `Circular dependency on Task ${nums[0]}`;
+  if (nums.length === 2) {
+    return `Circular dependency between Tasks ${nums[0]} and ${nums[1]}`;
+  }
+  return `Circular dependency between Tasks ${nums.slice(0, -1).join(", ")}, and ${nums[nums.length - 1]}`;
 }
 
 function formatZodError(error: z.ZodError): string {

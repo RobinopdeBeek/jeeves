@@ -435,6 +435,43 @@ describe("AcpChatTransport", () => {
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
+  it("sends cancel and unlocks streaming when the abort signal fires (Stop)", async () => {
+    const streaming: boolean[] = [];
+    const transport = new AcpChatTransport({
+      cardId: "c1",
+      stepKey: "tasks",
+      onStreamingChange: (s) => streaming.push(s),
+    });
+
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({
+      type: "ready",
+      messages: [
+        { id: "a0", role: "assistant", parts: [{ type: "text", text: "Ready" }] },
+      ],
+      streaming: false,
+    });
+    await connectP;
+    ws.deliver({ type: "session", status: "open", streaming: false });
+
+    const abort = new AbortController();
+    const stream = await transport.sendMessages({
+      messages: [userMessage("Rename the first task")],
+      abortSignal: abort.signal,
+    } as Parameters<AcpChatTransport["sendMessages"]>[0]);
+    const readP = readAll(stream);
+
+    expect(streaming.at(-1)).toBe(true);
+
+    abort.abort();
+    await readP;
+
+    const sent = ws.sent.map((s) => JSON.parse(s) as { type: string });
+    expect(sent).toContainEqual({ type: "cancel" });
+    expect(streaming.at(-1)).toBe(false);
+  });
+
   it("notifies onSpecRevised when the server harvests a Spec revision", async () => {
     const revisions: string[] = [];
     const transport = new AcpChatTransport({

@@ -32,11 +32,13 @@ Prefer this for clarifications the Spec assumes. Do not re-derive answers from a
 
 ## Output (required)
 
-Write **only** JSON to this project-store exchange path (relative to `<repo>/.jeeves/`):
+Write **only** JSON to this project-store exchange path (relative to `<repo>/.jeeves/`) using a **Write/Edit file** tool (not shell):
 
 `{{exchangePath}}`
 
 Create parent directories if needed. Do not write the durable artifact under `data/` — the host harvests the exchange file.
+
+Do **not** use shell to create, inspect, or verify the exchange (`Format-Hex`, `Get-Content`, `Write-Host`, `dir`, etc.). Write the file once and stop — the host Zod-validates after you exit.
 
 Schema:
 

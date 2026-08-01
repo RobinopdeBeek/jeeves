@@ -4,6 +4,7 @@ import { BrowserRouter, Outlet, Route, Routes } from "react-router-dom";
 import { Board } from "./components/Board";
 import { CardView } from "./components/CardView";
 import { ServerConnectionBanner } from "./components/ServerConnectionBanner";
+import { Toaster } from "./components/ui/sonner";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { ServerConnectionProvider } from "./lib/server-connection";
 import "./globals.css";
@@ -28,6 +29,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           </Route>
         </Routes>
       </BrowserRouter>
+      <Toaster position="top-right" />
     </TooltipProvider>
   </React.StrictMode>,
 );

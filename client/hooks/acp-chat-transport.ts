@@ -224,6 +224,18 @@ export class AcpChatTransport {
     }
   }
 
+  /** Abort the in-flight ACP turn (composer Stop). */
+  cancelTurn(): void {
+    if (this.displaced || this.turnDone) return;
+    try {
+      this.sendClient({ type: "cancel" });
+    } catch {
+      // Socket died — still unlock the UI locally; reconnect will resync.
+      this.reconnectNow();
+    }
+    this.abandonTurn();
+  }
+
   /**
    * Delivers the buffered (or still-streaming) opening/warm turn when useChat
    * mounts with `resume: true`.
@@ -529,11 +541,12 @@ export class AcpChatTransport {
 
   /** End a turn that can no longer complete, so the UI stops waiting. */
   private abandonTurn(): void {
-    const hadStream = this.streamController != null;
-    this.closeActiveStream();
-    if (!hadStream && this.turnDone) return;
+    if (this.turnDone && this.streamController == null) return;
+    // Mark done before closing so the stream `cancel` callback does not clear
+    // `resumeConsumed` (that would re-open a dead turn on reconnect).
     this.turnDone = true;
     this.clearLivenessTimer();
+    this.closeActiveStream();
     this.options.onStreamingChange?.(false);
   }
 
@@ -555,7 +568,8 @@ export class AcpChatTransport {
         attached = controller;
         this.streamController = controller;
         abortSignal?.addEventListener("abort", () => {
-          this.releaseStreamController(controller, { close: true });
+          // Composer Stop: cancel ACP on the server, then unlock the UI.
+          this.cancelTurn();
         });
       },
       // AI SDK / assistant-ui may cancel the resume stream on send,

@@ -39,8 +39,8 @@ export interface OpenSessionOptions {
   openingPrompt: string;
   history?: UIMessage[];
   /**
-   * Live chat: auto-approve reads/routine + exchange writes; prompt only for
-   * crucial actions (shell / non-exchange writes).
+   * Live chat: auto-approve reads/shell/exchange writes; prompt only for
+   * non-exchange file writes.
    */
   interactivePermissionPolicy?: InteractivePermissionPolicy;
 }
@@ -137,7 +137,7 @@ export class AcpBridge {
   /** When set, permission requests are resolved without a subscriber. */
   private headlessPolicy: HeadlessPermissionPolicy | null = null;
   private headlessFail: ((err: Error) => void) | null = null;
-  /** Live Cursor-like auto-approve for routine tools; prompt for crucial. */
+  /** Live Cursor-like auto-approve; prompt for non-exchange file writes. */
   private interactivePolicy: InteractivePermissionPolicy | null = null;
 
   constructor(
@@ -209,6 +209,34 @@ export class AcpBridge {
       };
       this.pushChunk(permissionChunk(requestId, part.data));
     }
+  }
+
+  /**
+   * Abort the in-flight prompt turn (Stop). Cancels pending permissions and
+   * sends ACP `session/cancel`; the prompt RPC resolves with `cancelled`.
+   */
+  cancelTurn(): void {
+    if (this.activity !== "ai-working" || !this.sessionId || !this.process) {
+      return;
+    }
+
+    for (const [requestId, rpcId] of [...this.pendingPermissions]) {
+      this.pendingPermissions.delete(requestId);
+      this.respond(rpcId, { outcome: { outcome: "cancelled" } });
+      const part = this.findPermissionPart(requestId);
+      if (part) {
+        part.data = { ...part.data, status: "resolved" };
+        this.pushChunk(permissionChunk(requestId, part.data));
+      }
+    }
+
+    this.process.write(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "session/cancel",
+        params: { sessionId: this.sessionId },
+      }) + "\n",
+    );
   }
 
   /**
@@ -412,10 +440,11 @@ export class AcpBridge {
     }
 
     try {
-      await this.rpc("session/prompt", {
+      const result = (await this.rpc("session/prompt", {
         sessionId: this.sessionId,
         prompt: [{ type: "text", text: promptText }],
-      });
+      })) as { stopReason?: string } | undefined;
+      const cancelled = result?.stopReason === "cancelled";
       if (this.currentTextId) {
         this.pushChunk({ type: "text-end", id: this.currentTextId });
       }
@@ -427,7 +456,10 @@ export class AcpBridge {
       this.live.onTranscript(this.messages);
       // Harvest before `finish` so `spec-revised` arrives while the client still
       // treats the turn as streaming (finish/markTurnDone unlocks the editor).
-      this.live.onTurnComplete?.();
+      // Skip harvest on cancel — a partial exchange write is not a committed tip.
+      if (!cancelled) {
+        this.live.onTurnComplete?.();
+      }
       this.pushChunk({ type: "finish", finishReason: "stop" });
       this.endTurn({ turnCompleteAlreadyRun: true });
     } catch (err) {

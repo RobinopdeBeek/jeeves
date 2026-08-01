@@ -4,6 +4,7 @@ import { frameSpecAssistUserMessage } from "../../shared/spec-assist-frame.js";
 import { frameTasksAssistUserMessage } from "../../shared/tasks-assist-frame.js";
 import {
   AcpBridge,
+  decideHeadlessPermission,
   decideInteractivePermission,
   type ChunkSubscriber,
 } from "./chat.js";
@@ -941,7 +942,7 @@ describe("AcpBridge", () => {
     await bridge.whenIdle();
   });
 
-  it("interactive cursor-like still prompts for shell / crucial writes", async () => {
+  it("interactive cursor-like auto-approves shell without a permission UI chunk", async () => {
     const process = new MockAcpProcess();
     process.autoHandshake("sess-live-shell");
 
@@ -963,7 +964,7 @@ describe("AcpBridge", () => {
       method: "session/request_permission",
       params: {
         sessionId: "sess-live-shell",
-        toolCall: { toolCallId: "call_s", title: "Shell: rm -rf /" },
+        toolCall: { toolCallId: "call_s", title: "Shell: dir" },
         options: [
           { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
           { optionId: "reject-once", name: "Reject", kind: "reject_once" },
@@ -971,13 +972,121 @@ describe("AcpBridge", () => {
       },
     });
 
-    await viWaitFor(() => bridge.getPendingPermissionIds().includes("88"));
+    await viWaitFor(() =>
+      process.written.some(
+        (m) =>
+          (m as { id?: number; result?: unknown }).id === 88 &&
+          (m as { result?: unknown }).result !== undefined,
+      ),
+    );
+
+    expect(bridge.getPendingPermissionIds()).toEqual([]);
+    expect(
+      sub.chunks.some((c) => (c as { type?: string }).type === "data-permission"),
+    ).toBe(false);
+  });
+
+  it("interactive cursor-like still prompts for non-exchange file writes", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-live-write");
+
+    const bridge = new AcpBridge({ spawn: () => process });
+    const sub = collectingSubscriber();
+    bridge.attach(sub);
+
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: "Assist with the spec",
+      history: [],
+      interactivePermissionPolicy: "cursor-like",
+    });
+    await viWaitFor(() => process.prompts().length === 1);
+
+    process.emit({
+      jsonrpc: "2.0",
+      id: 89,
+      method: "session/request_permission",
+      params: {
+        sessionId: "sess-live-write",
+        toolCall: { toolCallId: "call_w", title: "Write file src/app.ts" },
+        options: [
+          { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+          { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+        ],
+      },
+    });
+
+    await viWaitFor(() => bridge.getPendingPermissionIds().includes("89"));
     expect(
       sub.chunks.some((c) => (c as { type?: string }).type === "data-permission"),
     ).toBe(true);
 
-    bridge.respondToPermission("88", "reject-once");
+    bridge.respondToPermission("89", "reject-once");
     expect(bridge.getPendingPermissionIds()).toEqual([]);
+  });
+
+  it("cancelTurn sends session/cancel and cancels pending permissions", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-cancel");
+
+    const bridge = new AcpBridge({ spawn: () => process });
+    const sub = collectingSubscriber();
+    bridge.attach(sub);
+
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: "Assist",
+      history: [],
+      interactivePermissionPolicy: "cursor-like",
+    });
+    await viWaitFor(() => process.prompts().length === 1);
+    const promptReq = process.promptRequest();
+
+    process.emit({
+      jsonrpc: "2.0",
+      id: 90,
+      method: "session/request_permission",
+      params: {
+        sessionId: "sess-cancel",
+        toolCall: { toolCallId: "call_w", title: "Write file src/app.ts" },
+        options: [
+          { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+          { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+        ],
+      },
+    });
+    await viWaitFor(() => bridge.getPendingPermissionIds().includes("90"));
+
+    bridge.cancelTurn();
+
+    expect(bridge.getPendingPermissionIds()).toEqual([]);
+    expect(
+      process.written.some(
+        (m) =>
+          (m as { method?: string }).method === "session/cancel" &&
+          (m as { params?: { sessionId?: string } }).params?.sessionId ===
+            "sess-cancel",
+      ),
+    ).toBe(true);
+    expect(
+      process.written.some(
+        (m) =>
+          (m as { id?: number; result?: { outcome?: { outcome?: string } } })
+            .id === 90 &&
+          (m as { result?: { outcome?: { outcome?: string } } }).result
+            ?.outcome?.outcome === "cancelled",
+      ),
+    ).toBe(true);
+
+    process.emit({
+      jsonrpc: "2.0",
+      id: promptReq.id,
+      result: { stopReason: "cancelled" },
+    });
+    await bridge.whenIdle();
+    expect(
+      sub.chunks.some((c) => (c as { type?: string }).type === "finish"),
+    ).toBe(true);
   });
 });
 
@@ -987,9 +1096,12 @@ describe("decideInteractivePermission", () => {
     { optionId: "reject-once", name: "Reject", kind: "reject_once" },
   ];
 
-  it("allows reads and exchange writes", () => {
+  it("allows reads, shell, and exchange writes", () => {
     expect(
       decideInteractivePermission({ title: "Read file CONTEXT.md", options }),
+    ).toEqual({ action: "allow", optionId: "allow-once" });
+    expect(
+      decideInteractivePermission({ title: "Shell: npm test", options }),
     ).toEqual({ action: "allow", optionId: "allow-once" });
     expect(
       decideInteractivePermission({
@@ -999,12 +1111,42 @@ describe("decideInteractivePermission", () => {
     ).toEqual({ action: "allow", optionId: "allow-once" });
   });
 
-  it("prompts for shell and non-exchange writes", () => {
+  it("auto-approves raw shell titles even when the command text contains Write", () => {
     expect(
-      decideInteractivePermission({ title: "Shell: npm test", options }),
-    ).toEqual({ action: "prompt" });
+      decideInteractivePermission({
+        title:
+          'rg -n "Streaming lock|revised exchange|Smoke QA|Write|tasks-draft|exchange" "C:\\Users\\robin\\.cursor\\projects\\foo\\agent-transcripts\\x.jsonl" | Select-Object -First 40',
+        options,
+      }),
+    ).toEqual({ action: "allow", optionId: "allow-once" });
+  });
+
+  it("prompts for non-exchange file writes", () => {
     expect(
       decideInteractivePermission({ title: "Write file src/app.ts", options }),
     ).toEqual({ action: "prompt" });
+  });
+});
+
+describe("decideHeadlessPermission", () => {
+  const options = [
+    { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+    { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+  ];
+
+  it("allows shell that inspects the exchange path", () => {
+    expect(
+      decideHeadlessPermission({
+        title:
+          '`Format-Hex -Path "C:\\repo\\.jeeves\\exchange\\c1\\tasks-draft.json" -Count 64; Write-Host "---"; Get-Content "C:\\repo\\.jeeves\\exchange\\c1\\tasks-draft.json" -Raw`',
+        options,
+      }),
+    ).toEqual({ action: "allow", optionId: "allow-once" });
+  });
+
+  it("denies shell outside the exchange path", () => {
+    expect(
+      decideHeadlessPermission({ title: "Shell: ls", options }).action,
+    ).toBe("deny");
   });
 });

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export interface TasksRevisePromptInput {
+export interface TasksAssistPromptInput {
   title: string;
   description: string;
   /** Absolute or repo-relative path to CONTEXT.md in the target project. */
@@ -12,12 +12,12 @@ export interface TasksRevisePromptInput {
   exchangePath: string;
 }
 
-/** Load the to-tasks-revise opener and fill Spec / exchange placeholders. */
-export function buildTasksReviseOpeningPrompt(
-  input: TasksRevisePromptInput,
+/** Load the tasks-assist opener and fill Spec / exchange placeholders. */
+export function buildTasksAssistOpeningPrompt(
+  input: TasksAssistPromptInput,
   promptsRoot: string,
 ): string {
-  const templatePath = path.join(promptsRoot, "chat", "to-tasks-revise.md");
+  const templatePath = path.join(promptsRoot, "chat", "tasks-assist.md");
   const template = fs.readFileSync(templatePath, "utf8");
   return template
     .replaceAll("{{title}}", input.title || "(untitled)")

@@ -52,6 +52,8 @@ export interface WarmSessionHandle {
     opts?: { liveDraftBody?: string },
   ): Promise<void>;
   respondToPermission(requestId: string, optionId: string): void;
+  /** Abort the in-flight ACP prompt turn. */
+  cancelTurn(): void;
   getPendingPermissionIds(): string[];
 }
 
@@ -158,6 +160,7 @@ export class ChatSessionRegistry {
       sendMessage: (text, opts) => bridge.sendMessage(text, opts),
       respondToPermission: (requestId, optionId) =>
         bridge.respondToPermission(requestId, optionId),
+      cancelTurn: () => bridge.cancelTurn(),
       getPendingPermissionIds: () => bridge.getPendingPermissionIds(),
     };
   }

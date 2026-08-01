@@ -463,7 +463,7 @@ describe("ArtifactStore", () => {
       {
         cardId,
         round: 0,
-        sourceSkill: "to-tasks-revise",
+        sourceSkill: "tasks-assist",
         preserveTasksDraftIds: true,
       },
     );

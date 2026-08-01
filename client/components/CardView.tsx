@@ -16,6 +16,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { toastError } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
 import { Logo } from "./Logo";
 import { STEP_PANELS } from "./step-panels";
@@ -102,7 +103,9 @@ export function CardView() {
       setCard(updated);
       setTabOverride(null); // activeTabKey prefers Spec once needs-user
     } catch (err) {
-      setCreateSpecError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setCreateSpecError(message);
+      toastError(message);
     } finally {
       setCreatingSpec(false);
     }
@@ -119,11 +122,17 @@ export function CardView() {
       setCard(updated);
       setTabOverride(null); // activeTabKey prefers Tasks once needs-user
     } catch (err) {
-      setCreateTasksError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setCreateTasksError(message);
+      toastError(message);
     } finally {
       setCreatingTasks(false);
     }
   }
+
+  useEffect(() => {
+    if (tasksFooter?.error) toastError(tasksFooter.error);
+  }, [tasksFooter?.error]);
 
   if (missing) {
     return (
@@ -256,13 +265,7 @@ export function CardView() {
 
         {showCreateSpec && (
           <>
-            <div className="flex min-w-0 flex-1 flex-col items-end gap-1">
-              {createSpecError ? (
-                <p className="max-w-md text-right text-sm text-destructive" role="alert">
-                  {createSpecError}
-                </p>
-              ) : null}
-            </div>
+            <div className="flex-1" />
             <Button disabled={createSpecDisabled} onClick={createSpec}>
               {synthesizingSpec
                 ? "Creating Spec…"
@@ -275,13 +278,7 @@ export function CardView() {
 
         {showCreateTasks && (
           <>
-            <div className="flex min-w-0 flex-1 flex-col items-end gap-1">
-              {createTasksError ? (
-                <p className="max-w-md text-right text-sm text-destructive" role="alert">
-                  {createTasksError}
-                </p>
-              ) : null}
-            </div>
+            <div className="flex-1" />
             <Button disabled={createTasksDisabled} onClick={() => void createTasks()}>
               {synthesizingTasks
                 ? "Creating Tasks…"
@@ -294,13 +291,7 @@ export function CardView() {
 
         {showImplement && tasksFooter ? (
           <>
-            <div className="flex min-w-0 flex-1 flex-col items-end gap-1">
-              {tasksFooter.error ? (
-                <p className="max-w-md text-right text-sm text-destructive" role="alert">
-                  {tasksFooter.error}
-                </p>
-              ) : null}
-            </div>
+            <div className="flex-1" />
             <Button
               disabled={!tasksFooter.canImplement || tasksFooter.implementing}
               onClick={tasksFooter.implement}

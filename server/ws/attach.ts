@@ -142,6 +142,12 @@ export class ChatConnection {
       return;
     }
 
+    // Stop must work mid-turn — do not wait for `sending` to clear.
+    if (msg.type === "cancel") {
+      this.handle.cancelTurn();
+      return;
+    }
+
     if (this.sending) return;
     if (msg.type !== "user-message" || typeof msg.text !== "string" || !msg.text.trim()) {
       this.send({ type: "error", error: "unsupported message" });

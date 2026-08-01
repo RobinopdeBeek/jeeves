@@ -30,6 +30,8 @@ export type WsClientMessage =
       liveDraftBody?: string;
     }
   | { type: "permission-response"; requestId: string; optionId: string }
+  /** Abort the in-flight ACP prompt turn (Stop). */
+  | { type: "cancel" }
   /** Liveness probe; answered with `pong`. Never touches the ACP session. */
   | { type: "ping"; id: string };
 

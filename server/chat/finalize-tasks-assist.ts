@@ -36,7 +36,7 @@ export function finalizeTasksAssistTurn(deps: {
       {
         cardId: deps.cardId,
         round,
-        sourceSkill: "to-tasks-revise",
+        sourceSkill: "tasks-assist",
         preserveTasksDraftIds: true,
       },
     );

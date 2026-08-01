@@ -16,7 +16,7 @@ import {
 import type { InteractivePermissionPolicy } from "./chat.js";
 import { buildGrillOpeningPrompt } from "./grill-prompt.js";
 import { buildSpecAssistOpeningPrompt } from "./spec-assist-prompt.js";
-import { buildTasksReviseOpeningPrompt } from "./to-tasks-revise.js";
+import { buildTasksAssistOpeningPrompt } from "./tasks-assist-prompt.js";
 
 export type OpeningPromptCard = { title: string; description: string };
 
@@ -107,7 +107,7 @@ const tasksProfile: ChatStepProfile = {
   frameUserMessage: frameTasksAssistUserMessage,
   stripFrame: stripTasksAssistFrame,
   resolveOpeningPrompt: ({ card, cwd, promptsRoot, cardId, spec }) =>
-    buildTasksReviseOpeningPrompt(
+    buildTasksAssistOpeningPrompt(
       {
         title: card.title,
         description: card.description,

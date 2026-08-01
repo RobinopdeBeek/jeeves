@@ -86,11 +86,18 @@ export function useAcpChat({
       onStreamingChange: (streaming) => onStreamingRef.current?.(streaming),
       onConnectionChange: (connection) => {
         if (cancelled) return;
-        setState((prev) =>
-          prev.status === "ready"
-            ? { ...prev, connection, sessionOpen: connection === "open" }
-            : prev,
-        );
+        setState((prev) => {
+          if (prev.status !== "ready") return prev;
+          // Keep sessionOpen across reconnect so Stop stays visible mid-turn.
+          // Only a hard close hides Send/Cancel (spinner).
+          const sessionOpen =
+            connection === "closed"
+              ? false
+              : connection === "open"
+                ? true
+                : prev.sessionOpen;
+          return { ...prev, connection, sessionOpen };
+        });
       },
       onReconnected: (history) => {
         if (cancelled) return;

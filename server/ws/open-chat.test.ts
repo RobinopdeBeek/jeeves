@@ -46,7 +46,7 @@ describe("resolveOpeningPrompt", () => {
     expect(prompt).toContain("Do **not** recap the Grill session");
   });
 
-  it("builds a tasks-revise opener with Spec and exchange path", () => {
+  it("builds a tasks-assist opener with Spec and exchange path", () => {
     const prompt = resolveOpeningPrompt(
       "tasks",
       { title: "Pantry", description: "Track expiry" },

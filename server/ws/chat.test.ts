@@ -189,6 +189,29 @@ describe("AcpBridge", () => {
     ]);
   });
 
+  it("warms ACP without an auto turn when openingPrompt is null and history is empty", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-null-opener");
+    const statuses: Array<"ai-working" | "needs-user"> = [];
+
+    const bridge = new AcpBridge({
+      spawn: () => process,
+      onStatus: (status) => statuses.push(status),
+      onTranscript: () => {},
+    });
+
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(process.prompts()).toHaveLength(0);
+    expect(statuses).toEqual([]);
+    expect(process.killed).toBe(false);
+  });
+
   it("streams a user turn into assistant UIMessage parts and seeds prior transcript once", async () => {
     const process = new MockAcpProcess();
     process.autoHandshake("sess-2");

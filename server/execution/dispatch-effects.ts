@@ -1,4 +1,5 @@
 import type { AdvanceSideEffect } from "../pipelines.js";
+import { stepChatSessionId } from "../ws/chat-session.js";
 import type { ChatSessionRegistry } from "../ws/session-registry.js";
 import type { StepKey } from "../pipelines.js";
 
@@ -18,7 +19,7 @@ export function dispatchAdvanceEffects(
       deps.enqueue(cardId, effect.stepKey);
     } else if (effect.type === "close-chat") {
       deps.sessions.close(
-        { cardId, stepKey: effect.stepKey, round: effect.round },
+        stepChatSessionId(cardId, effect.stepKey, effect.round),
         effect.reason,
       );
     }

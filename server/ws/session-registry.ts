@@ -1,5 +1,4 @@
 import type { UIMessage } from "ai";
-import type { StepKey } from "../pipelines.js";
 import {
   AcpBridge,
   type AcpLiveCallbacks,
@@ -7,14 +6,9 @@ import {
   type InteractivePermissionPolicy,
   type SpawnAcp,
 } from "./chat.js";
+import type { ChatSessionId } from "./chat-session.js";
 
 export type { ChunkSubscriber };
-
-export interface SessionKey {
-  cardId: string;
-  stepKey: StepKey;
-  round: number;
-}
 
 /** Minimal seam for last-connection-wins — ChatConnection implements this. */
 export interface DisplaceableConnection {
@@ -24,7 +18,8 @@ export interface DisplaceableConnection {
 export interface ColdAcquireParams {
   spawn: SpawnAcp;
   cwd: string;
-  openingPrompt: string;
+  /** Null skips the auto opening turn when history is empty. */
+  openingPrompt: string | null;
   history: UIMessage[];
   onStatus: AcpLiveCallbacks["onStatus"];
   onTranscript: AcpLiveCallbacks["onTranscript"];
@@ -34,12 +29,8 @@ export interface ColdAcquireParams {
   interactivePermissionPolicy?: InteractivePermissionPolicy;
 }
 
-/** Cap on live ACP bridges across all chat steps (issue #24). */
+/** Cap on live ACP bridges across all chat sessions (issue #24). */
 export const MAX_LIVE_SESSIONS = 5;
-
-export function sessionKeyString(key: SessionKey): string {
-  return `${key.cardId}:${key.stepKey}:${key.round}`;
-}
 
 export interface WarmSessionHandle {
   reused: boolean;
@@ -59,6 +50,7 @@ export interface WarmSessionHandle {
 
 /**
  * Writer slot + warm AcpBridge map (cap + eviction).
+ * Keys are opaque server-built ChatSession ids (`card:…` / later `thread:…`).
  * WebSocket connections subscribe; close detaches without killing the bridge.
  */
 export class ChatSessionRegistry {
@@ -66,20 +58,19 @@ export class ChatSessionRegistry {
   private readonly warm = new Map<string, AcpBridge>();
   private admitChain: Promise<void> = Promise.resolve();
 
-  get(key: SessionKey): DisplaceableConnection | undefined {
-    return this.active.get(sessionKeyString(key));
+  get(id: ChatSessionId): DisplaceableConnection | undefined {
+    return this.active.get(id);
   }
 
-  hasWarm(key: SessionKey): boolean {
-    return this.warm.has(sessionKeyString(key));
+  hasWarm(id: ChatSessionId): boolean {
+    return this.warm.has(id);
   }
 
-  isAiWorking(key: SessionKey): boolean {
-    return this.warm.get(sessionKeyString(key))?.isAiWorking() ?? false;
+  isAiWorking(id: ChatSessionId): boolean {
+    return this.warm.get(id)?.isAiWorking() ?? false;
   }
 
-  claim(key: SessionKey, connection: DisplaceableConnection): void {
-    const id = sessionKeyString(key);
+  claim(id: ChatSessionId, connection: DisplaceableConnection): void {
     const previous = this.active.get(id);
     if (previous && previous !== connection) {
       previous.displace("session continued elsewhere");
@@ -87,15 +78,13 @@ export class ChatSessionRegistry {
     this.active.set(id, connection);
   }
 
-  release(key: SessionKey, connection: DisplaceableConnection): void {
-    const id = sessionKeyString(key);
+  release(id: ChatSessionId, connection: DisplaceableConnection): void {
     if (this.active.get(id) === connection) {
       this.active.delete(id);
     }
   }
 
-  close(key: SessionKey, reason: string): void {
-    const id = sessionKeyString(key);
+  close(id: ChatSessionId, reason: string): void {
     const conn = this.active.get(id);
     if (conn) {
       conn.displace(reason);
@@ -108,8 +97,10 @@ export class ChatSessionRegistry {
     }
   }
 
-  async acquire(key: SessionKey, params: ColdAcquireParams): Promise<WarmSessionHandle> {
-    const id = sessionKeyString(key);
+  async acquire(
+    id: ChatSessionId,
+    params: ColdAcquireParams,
+  ): Promise<WarmSessionHandle> {
     const existing = this.warm.get(id);
     if (existing) {
       existing.setLiveCallbacks({

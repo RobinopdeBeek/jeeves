@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { UIMessage } from "ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stepChatSessionId } from "../ws/chat-session.js";
 import { ArtifactStore } from "../artifacts/store.js";
 import { CardStore } from "../cards/store.js";
 import { createCreateSpec } from "../chat/create-spec.js";
@@ -147,7 +148,7 @@ describe("POST /:id/create-spec", () => {
     const cardId = featureInGrill();
     seedTranscript(cardId);
     const conn = fakeConn();
-    sessions.claim({ cardId, stepKey: "grill", round: 0 }, conn);
+    sessions.claim(stepChatSessionId(cardId, "grill", 0), conn);
 
     const app = cardRoutes(store, project, deps);
     const res = await app.request(`http://localhost/${cardId}/create-spec`, {
@@ -191,7 +192,7 @@ describe("POST /:id/create-spec", () => {
     ).toBe(false);
 
     expect(conn.displacedWith).toEqual(["closing grill for spec synthesis"]);
-    expect(sessions.get({ cardId, stepKey: "grill", round: 0 })).toBeUndefined();
+    expect(sessions.get(stepChatSessionId(cardId, "grill", 0))).toBeUndefined();
 
     // start (creatingSpec) + settle (hand-off complete)
     expect(emitted).toHaveLength(2);
@@ -213,12 +214,12 @@ describe("POST /:id/create-spec", () => {
     const cardId = featureInGrill();
     seedTranscript(cardId);
     const conn = fakeConn();
-    sessions.claim({ cardId, stepKey: "grill", round: 0 }, conn);
+    sessions.claim(stepChatSessionId(cardId, "grill", 0), conn);
 
     const originalClose = sessions.close.bind(sessions);
-    sessions.close = (key, reason) => {
+    sessions.close = (id, reason) => {
       callOrder.push("close");
-      originalClose(key, reason);
+      originalClose(id, reason);
     };
     const originalHandOff = store.handOffGrillToSpec.bind(store);
     store.handOffGrillToSpec = (id) => {
@@ -259,7 +260,7 @@ describe("POST /:id/create-spec", () => {
   it("returns 422 when transcript is empty without calling extract or closing session", async () => {
     const cardId = featureInGrill();
     const conn = fakeConn();
-    sessions.claim({ cardId, stepKey: "grill", round: 0 }, conn);
+    sessions.claim(stepChatSessionId(cardId, "grill", 0), conn);
 
     const app = cardRoutes(store, project, deps);
     const res = await app.request(`http://localhost/${cardId}/create-spec`, {
@@ -270,7 +271,7 @@ describe("POST /:id/create-spec", () => {
     expect(extractGrillSession).not.toHaveBeenCalled();
     expect(synthesizeSpec).not.toHaveBeenCalled();
     expect(conn.displacedWith).toEqual([]);
-    expect(sessions.get({ cardId, stepKey: "grill", round: 0 })).toBe(conn);
+    expect(sessions.get(stepChatSessionId(cardId, "grill", 0))).toBe(conn);
     expect(store.getCard(cardId)?.steps.find((s) => s.key === "grill")?.status).toBe(
       "needs-user",
     );
@@ -289,7 +290,7 @@ describe("POST /:id/create-spec", () => {
     const cardId = featureInGrill();
     seedTranscript(cardId);
     const conn = fakeConn();
-    sessions.claim({ cardId, stepKey: "grill", round: 0 }, conn);
+    sessions.claim(stepChatSessionId(cardId, "grill", 0), conn);
     extractGrillSession.mockRejectedValueOnce(
       new GrillSessionExtractError("extract boom"),
     );
@@ -303,7 +304,7 @@ describe("POST /:id/create-spec", () => {
     expect(synthesizeSpec).not.toHaveBeenCalled();
     expect(artifacts.latest(cardId, { stepKey: "grill", round: 0, kind: "grill" })).toBeUndefined();
     expect(conn.displacedWith).toEqual([]);
-    expect(sessions.get({ cardId, stepKey: "grill", round: 0 })).toBe(conn);
+    expect(sessions.get(stepChatSessionId(cardId, "grill", 0))).toBe(conn);
     expect(store.getCard(cardId)?.steps.find((s) => s.key === "grill")?.status).toBe(
       "needs-user",
     );
@@ -315,7 +316,7 @@ describe("POST /:id/create-spec", () => {
     const cardId = featureInGrill();
     seedTranscript(cardId);
     const conn = fakeConn();
-    sessions.claim({ cardId, stepKey: "grill", round: 0 }, conn);
+    sessions.claim(stepChatSessionId(cardId, "grill", 0), conn);
     synthesizeSpec.mockRejectedValueOnce(
       new SpecSynthesisError("ACP timed out"),
     );
@@ -327,7 +328,7 @@ describe("POST /:id/create-spec", () => {
     expect(res.status).toBe(502);
     expect(await res.json()).toMatchObject({ error: "ACP timed out" });
     expect(conn.displacedWith).toEqual(["closing grill for spec synthesis"]);
-    expect(sessions.get({ cardId, stepKey: "grill", round: 0 })).toBeUndefined();
+    expect(sessions.get(stepChatSessionId(cardId, "grill", 0))).toBeUndefined();
     expect(store.getCard(cardId)?.steps.find((s) => s.key === "grill")?.status).toBe(
       "needs-user",
     );
@@ -368,7 +369,7 @@ describe("POST /:id/create-spec", () => {
     seedTranscript(cardId);
     store.setStepStatus(cardId, "grill", "ai-working");
     const conn = fakeConn();
-    sessions.claim({ cardId, stepKey: "grill", round: 0 }, conn);
+    sessions.claim(stepChatSessionId(cardId, "grill", 0), conn);
 
     const app = cardRoutes(store, project, deps);
     const res = await app.request(`http://localhost/${cardId}/create-spec`, {
@@ -379,7 +380,7 @@ describe("POST /:id/create-spec", () => {
     expect(synthesizeSpec).not.toHaveBeenCalled();
     expect(emitted).toHaveLength(0);
     expect(conn.displacedWith).toEqual([]);
-    expect(sessions.get({ cardId, stepKey: "grill", round: 0 })).toBe(conn);
+    expect(sessions.get(stepChatSessionId(cardId, "grill", 0))).toBe(conn);
   });
 
   it("returns 404 for a missing card", async () => {

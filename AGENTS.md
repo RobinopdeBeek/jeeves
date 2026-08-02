@@ -21,13 +21,20 @@ proxies `/api` and `/ws` to it. Standard commands live in [`README.md`](./README
 - First server boot creates a gitignored project store at `<repo>/.jeeves/` (SQLite + artifacts +
   worktrees) and runs Drizzle migrations automatically — no manual DB setup.
 
-### AI features need extra credentials (board itself does not)
+### AI features need a valid `CURSOR_API_KEY`
 
-- Card management (create/edit/move/delete cards) works with **no** credentials — this is enough to
-  verify the environment end-to-end via the UI.
-- The AI pipeline is gated on two independent Cursor credentials that are **not** present by default:
-  - `CURSOR_API_KEY` (env/`.env`) authenticates `@cursor/sdk` agent runs (Implement/AI-review steps).
-    Without it the board boots but any agent run throws `CURSOR_API_KEY is not set`.
-  - The **Cursor Agent CLI** (`agent` binary, installed separately + `agent login`) powers interactive
-    ACP chat steps (Grill/spec). It is not installed in the base environment.
-  To exercise the full grill → spec → tasks → implement pipeline you need both.
+- Card management (create/edit/move/delete cards) works with **no** credentials — enough to verify the
+  board + SQLite store end-to-end via the UI.
+- `@cursor/sdk` agent runs (Implement / AI-review) and the Cursor Agent CLI (Grill/spec ACP chat) both
+  authenticate with `CURSOR_API_KEY`. The CLI also accepts `--api-key` / the same env var — a separate
+  interactive `agent login` is **not** required when the key is set.
+- The Agent CLI (`agent` / `cursor-agent`) lives at `~/.local/bin` after
+  `curl -fsSL https://cursor.com/install | bash`. Ensure that dir is on `PATH` before `npm run dev`
+  so ACP chat can spawn `agent acp`.
+- `scripts/dev-guard.ts` only warns when the key is **missing**; an **invalid** key still boots the
+  board. Validate with something like
+  `agent --api-key "$CURSOR_API_KEY" -p --mode ask "Reply with exactly: OK"`
+  (or a tiny `@cursor/sdk` `Agent.create` call) before assuming the AI pipeline will work.
+- First boot of a target repo that is missing a `.jeeves/` gitignore entry will **append**
+  `.jeeves/` to that repo's `.gitignore` (see `server/project-store.ts`). That is expected runtime
+  behavior, not something to commit unless you intentionally want it tracked.

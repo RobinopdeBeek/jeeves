@@ -9,6 +9,7 @@ import type { EventBus } from "../execution/events.js";
 import type { SpawnAcp } from "./chat.js";
 import {
   createStepChatSession,
+  loadTranscript,
   stepChatSessionIdFromRef,
   stepChatTurnCompleteHook,
   type StepChatRef,
@@ -71,9 +72,16 @@ export class ChatConnection {
       promptsRoot: this.deps.promptsRoot,
     };
 
-    let session;
+    // Ready before openChat so frozen-transcript / spawn failures still get history first.
+    this.send({
+      type: "ready",
+      messages: loadTranscript(this.deps.artifacts, this.ref),
+      streaming: this.deps.sessions.isAiWorking(this.sessionId),
+    });
+    if (this.closed) return;
+
     try {
-      session = createStepChatSession(this.ref, sessionDeps, {
+      const session = createStepChatSession(this.ref, sessionDeps, {
         onStatusNotify: (status) => {
           if (this.closed) return;
           this.send({ type: "status", status });
@@ -84,23 +92,7 @@ export class ChatConnection {
           isClosed: () => this.closed,
         }),
       });
-    } catch (err) {
-      this.send({
-        type: "error",
-        error: err instanceof Error ? err.message : String(err),
-      });
-      this.ws.close();
-      return;
-    }
 
-    this.send({
-      type: "ready",
-      messages: session.loadTranscript(),
-      streaming: this.deps.sessions.isAiWorking(this.sessionId),
-    });
-    if (this.closed) return;
-
-    try {
       const opened = await openChat(session, {
         spawn: this.deps.spawn,
         sessions: this.deps.sessions,

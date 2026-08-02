@@ -72,6 +72,17 @@ describe("createStepChatSession", () => {
     expect(session.frameUserMessage).toBeTypeOf("function");
   });
 
+  it("uses cursor-like policy and framing for tasks assist", () => {
+    const session = createStepChatSession(
+      { cardId, stepKey: "tasks", round: 0 },
+      { store, artifacts, events, promptsRoot },
+    );
+    expect(session.id).toBe(`card:${cardId}:tasks:0`);
+    expect(session.openingPrompt).toEqual(expect.stringContaining("Pantry"));
+    expect(session.interactivePermissionPolicy).toBe("cursor-like");
+    expect(session.frameUserMessage).toBeTypeOf("function");
+  });
+
   it("rejects missing cards at the factory", () => {
     expect(() =>
       createStepChatSession(

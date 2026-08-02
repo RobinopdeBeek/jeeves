@@ -76,6 +76,14 @@ A file produced by a step, stored in the project store's artifact folder and ind
 The mutable `UIMessage[]` chat log for an AI chat step, stored as an artifact so the session can resume and be reviewed. Not the Grill hand-off document Spec consumes.
 _Avoid_: Using "transcript" to mean the durable Grill Q&A artifact
 
+**Project Chat**:
+A freeform ACP conversation against the active Project's repo, owned by the Project rather than any Card or Step. Distinct from step chats (Grill, Spec assist, Tasks assist), which are pipeline-bound and keyed by card/step/round.
+_Avoid_: Using "chat" alone when the Card/Step vs Project distinction matters; Global chat
+
+**Chat Thread**:
+One conversation within Project Chat — its own transcript, title, and warm ACP session. A Project may have many Chat Threads; the user switches among them from the chat sidebar.
+_Avoid_: Thread (unqualified — ambiguous with OS/async threads); using "session" for the conversation itself (session is the live ACP process)
+
 **Grill session**:
 The durable Q&A markdown artifact from a completed Grill step (kind `grill`): resolved questions and answers, still-open questions, and a short list of glossary/ADR docs updated during the interview. Produced by a host extract on Grill → Spec; shown in the done Grill tab and consumed by Spec. Read-only after harvest — corrections require a new Grill. Not a synthesis or summary of the chat.
 _Avoid_: Grill summary (implies synthesis); using "transcript" for this document; inlining full ADR/glossary bodies here

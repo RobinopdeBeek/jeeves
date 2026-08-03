@@ -6,18 +6,22 @@ import type {
 import type { ArtifactStore } from "../artifacts/store.js";
 import type { CardStore } from "../cards/store.js";
 import type { EventBus } from "../execution/events.js";
-import { resolveProjectStorePaths } from "../project-store.js";
 import type { SpawnAcp } from "./chat.js";
-import { chatStepProfile } from "./chat-step-profile.js";
-import { loadTranscript, openChat } from "./open-chat.js";
+import {
+  createStepChatSession,
+  loadTranscript,
+  stepChatSessionIdFromRef,
+  stepChatTurnCompleteHook,
+  type StepChatRef,
+} from "./chat-session.js";
+import { openChat } from "./open-chat.js";
 import {
   ChatSessionRegistry,
   type ChunkSubscriber,
-  type SessionKey,
   type WarmSessionHandle,
 } from "./session-registry.js";
 
-export type { SessionKey };
+export type { StepChatRef as SessionKey };
 export type { WsClientMessage, WsServerMessage };
 
 export interface ChatWsDeps {
@@ -30,7 +34,8 @@ export interface ChatWsDeps {
 }
 
 /**
- * Thin WebSocket adapter over openChat / warm registry.
+ * Thin WebSocket adapter: resolves a ChatSession at the boundary, then
+ * openChat / warm registry stay card-agnostic.
  * Outbound payloads are AI SDK types only (ADR 0008).
  */
 export class ChatConnection {
@@ -38,55 +43,59 @@ export class ChatConnection {
   private closed = false;
   private sending = false;
   private displaced = false;
+  private readonly sessionId: string;
   private readonly subscriber: ChunkSubscriber = {
     onChunk: (chunk) => this.send({ type: "chunk", chunk }),
   };
 
   constructor(
     private readonly ws: WSContext,
-    private readonly key: SessionKey,
+    private readonly ref: StepChatRef,
     private readonly deps: ChatWsDeps,
-  ) {}
+  ) {
+    this.sessionId = stepChatSessionIdFromRef(ref);
+  }
 
   async start(): Promise<void> {
-    this.deps.sessions.claim(this.key, this);
+    this.deps.sessions.claim(this.sessionId, this);
 
-    if (!this.deps.store.getCard(this.key.cardId)) {
+    if (!this.deps.store.getCard(this.ref.cardId)) {
       this.send({ type: "error", error: "card not found" });
       this.ws.close();
       return;
     }
 
+    const sessionDeps = {
+      store: this.deps.store,
+      artifacts: this.deps.artifacts,
+      events: this.deps.events,
+      promptsRoot: this.deps.promptsRoot,
+    };
+
+    // Ready before openChat so frozen-transcript / spawn failures still get history first.
     this.send({
       type: "ready",
-      messages: loadTranscript(this.deps.artifacts, this.key),
-      streaming: this.deps.sessions.isAiWorking(this.key),
+      messages: loadTranscript(this.deps.artifacts, this.ref),
+      streaming: this.deps.sessions.isAiWorking(this.sessionId),
     });
     if (this.closed) return;
 
-    const profile = chatStepProfile(this.key.stepKey);
-    const onTurnComplete = profile.onTurnComplete
-      ? () => {
-          const repoPath = this.deps.store.getRepoPath(this.key.cardId);
-          const storeRoot = resolveProjectStorePaths(repoPath).storeRoot;
-          profile.onTurnComplete!({
-            cardId: this.key.cardId,
-            artifacts: this.deps.artifacts,
-            storeRoot,
-            send: (msg) => this.send(msg),
-            sendError: (error) => this.send({ type: "error", error }),
-            isClosed: () => this.closed,
-          });
-        }
-      : undefined;
-
     try {
-      const opened = await openChat(this.key, this.deps, {
+      const session = createStepChatSession(this.ref, sessionDeps, {
         onStatusNotify: (status) => {
           if (this.closed) return;
           this.send({ type: "status", status });
         },
-        onTurnComplete,
+        onTurnComplete: stepChatTurnCompleteHook(this.ref, sessionDeps, {
+          send: (msg) => this.send(msg),
+          sendError: (error) => this.send({ type: "error", error }),
+          isClosed: () => this.closed,
+        }),
+      });
+
+      const opened = await openChat(session, {
+        spawn: this.deps.spawn,
+        sessions: this.deps.sessions,
       });
       if (this.closed) return;
 
@@ -95,7 +104,7 @@ export class ChatConnection {
       this.send({
         type: "session",
         status: "open",
-        streaming: this.deps.sessions.isAiWorking(this.key),
+        streaming: this.deps.sessions.isAiWorking(this.sessionId),
       });
     } catch (err) {
       if (this.closed) return;
@@ -191,7 +200,7 @@ export class ChatConnection {
     this.handle?.detach(this.subscriber);
     this.handle = null;
     if (opts.releaseSlot) {
-      this.deps.sessions.release(this.key, this);
+      this.deps.sessions.release(this.sessionId, this);
     }
   }
 

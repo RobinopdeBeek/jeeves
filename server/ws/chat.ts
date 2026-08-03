@@ -35,8 +35,11 @@ export interface AcpLiveCallbacks {
 
 export interface OpenSessionOptions {
   cwd: string;
-  /** Injected when history is empty — drives the agent's opening question. */
-  openingPrompt: string;
+  /**
+   * Injected when history is empty — drives the agent's opening question.
+   * Null skips the auto turn (Project Chat warm-and-user-first).
+   */
+  openingPrompt: string | null;
   history?: UIMessage[];
   /**
    * Live chat: auto-approve reads/shell/exchange writes; prompt only for
@@ -240,7 +243,8 @@ export class AcpBridge {
   }
 
   /**
-   * Start an ACP session. Empty history runs the opening prompt turn.
+   * Start an ACP session. Empty history + non-null openingPrompt runs that turn.
+   * Empty history + null openingPrompt warms ACP with no auto agent message.
    * Non-empty history loads messages and waits for the first user send (seed-once).
    */
   async openSession(options: OpenSessionOptions): Promise<void> {
@@ -265,7 +269,7 @@ export class AcpBridge {
     })) as { sessionId: string };
     this.sessionId = created.sessionId;
 
-    if (this.messages.length === 0) {
+    if (this.messages.length === 0 && options.openingPrompt !== null) {
       this.contextSeeded = true;
       // Fire-and-forget so acquire can return and the client can attach mid-turn.
       void this.runPromptTurn(options.openingPrompt, { recordUser: false });

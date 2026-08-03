@@ -1,13 +1,12 @@
 import type { UIMessageChunk } from "ai";
 import { describe, expect, it } from "vitest";
+import { stepChatSessionId } from "./chat-session.js";
 import { MockAcpProcess, viWaitFor } from "./mock-acp-process.js";
 import {
   ChatSessionRegistry,
   MAX_LIVE_SESSIONS,
-  sessionKeyString,
   type ChunkSubscriber,
   type DisplaceableConnection,
-  type SessionKey,
 } from "./session-registry.js";
 
 function fakeConn(): DisplaceableConnection & { displacedWith: string[] } {
@@ -30,69 +29,69 @@ function collectingSubscriber(): ChunkSubscriber & { chunks: UIMessageChunk[] } 
   };
 }
 
-const keyA: SessionKey = { cardId: "card-a", stepKey: "grill", round: 0 };
+const idA = stepChatSessionId("card-a", "grill", 0);
 
 describe("ChatSessionRegistry — writer slot", () => {
-  it("claims a session key and displaces the previous connection (last wins)", () => {
+  it("claims a session id and displaces the previous connection (last wins)", () => {
     const registry = new ChatSessionRegistry();
-    const key = { cardId: "card-1", stepKey: "grill" as const, round: 0 };
+    const id = stepChatSessionId("card-1", "grill", 0);
     const first = fakeConn();
     const second = fakeConn();
 
-    registry.claim(key, first);
-    expect(registry.get(key)).toBe(first);
+    registry.claim(id, first);
+    expect(registry.get(id)).toBe(first);
 
-    registry.claim(key, second);
+    registry.claim(id, second);
     expect(first.displacedWith).toEqual(["session continued elsewhere"]);
     expect(second.displacedWith).toEqual([]);
-    expect(registry.get(key)).toBe(second);
+    expect(registry.get(id)).toBe(second);
   });
 
   it("release only clears the slot when the same connection still owns it", () => {
     const registry = new ChatSessionRegistry();
-    const key = { cardId: "card-1", stepKey: "grill" as const, round: 0 };
+    const id = stepChatSessionId("card-1", "grill", 0);
     const first = fakeConn();
     const second = fakeConn();
 
-    registry.claim(key, first);
-    registry.claim(key, second);
-    registry.release(key, first);
-    expect(registry.get(key)).toBe(second);
+    registry.claim(id, first);
+    registry.claim(id, second);
+    registry.release(id, first);
+    expect(registry.get(id)).toBe(second);
 
-    registry.release(key, second);
-    expect(registry.get(key)).toBeUndefined();
+    registry.release(id, second);
+    expect(registry.get(id)).toBeUndefined();
   });
 
-  it("isolates different cards / rounds", () => {
+  it("isolates different opaque ids (card / round)", () => {
     const registry = new ChatSessionRegistry();
     const a = fakeConn();
     const b = fakeConn();
-    registry.claim({ cardId: "c1", stepKey: "grill", round: 0 }, a);
-    registry.claim({ cardId: "c1", stepKey: "grill", round: 1 }, b);
+    const id0 = stepChatSessionId("c1", "grill", 0);
+    const id1 = stepChatSessionId("c1", "grill", 1);
+    registry.claim(id0, a);
+    registry.claim(id1, b);
     expect(a.displacedWith).toEqual([]);
-    expect(registry.get({ cardId: "c1", stepKey: "grill", round: 0 })).toBe(a);
-    expect(sessionKeyString({ cardId: "c1", stepKey: "grill", round: 0 })).toBe(
-      "c1:grill:0",
-    );
+    expect(registry.get(id0)).toBe(a);
+    expect(id0).toBe("card:c1:grill:0");
   });
 
   it("close displaces the writer and clears the slot", () => {
     const registry = new ChatSessionRegistry();
-    const key = { cardId: "card-1", stepKey: "grill" as const, round: 0 };
+    const id = stepChatSessionId("card-1", "grill", 0);
     const conn = fakeConn();
-    registry.claim(key, conn);
+    registry.claim(id, conn);
 
-    registry.close(key, "grill handed off to spec");
+    registry.close(id, "grill handed off to spec");
 
     expect(conn.displacedWith).toEqual(["grill handed off to spec"]);
-    expect(registry.get(key)).toBeUndefined();
+    expect(registry.get(id)).toBeUndefined();
   });
 
   it("close is a no-op when no session is claimed", () => {
     const registry = new ChatSessionRegistry();
     expect(() =>
       registry.close(
-        { cardId: "card-1", stepKey: "grill", round: 0 },
+        stepChatSessionId("card-1", "grill", 0),
         "grill handed off to spec",
       ),
     ).not.toThrow();
@@ -107,7 +106,7 @@ describe("ChatSessionRegistry — warm bridges", () => {
     const statuses: Array<"ai-working" | "needs-user"> = [];
     const transcripts: unknown[] = [];
 
-    const handle = await registry.acquire(keyA, {
+    const handle = await registry.acquire(idA, {
       spawn: () => process,
       cwd: "C:/repo",
       openingPrompt: "Grill me",
@@ -157,7 +156,7 @@ describe("ChatSessionRegistry — warm bridges", () => {
     await viWaitFor(() => statuses.includes("needs-user"));
     expect(process.killed).toBe(false);
     expect(transcripts).toHaveLength(1);
-    expect(registry.hasWarm(keyA)).toBe(true);
+    expect(registry.hasWarm(idA)).toBe(true);
   });
 
   it("reacquire reuses the live bridge and delivers catch-up chunks (no second spawn)", async () => {
@@ -166,7 +165,7 @@ describe("ChatSessionRegistry — warm bridges", () => {
     process.autoHandshake("sess-reuse");
     const registry = new ChatSessionRegistry();
 
-    const handle1 = await registry.acquire(keyA, {
+    const handle1 = await registry.acquire(idA, {
       spawn: () => {
         spawnCount += 1;
         return process;
@@ -207,7 +206,7 @@ describe("ChatSessionRegistry — warm bridges", () => {
       },
     });
 
-    const handle2 = await registry.acquire(keyA, {
+    const handle2 = await registry.acquire(idA, {
       spawn: () => {
         spawnCount += 1;
         return process;
@@ -246,19 +245,17 @@ describe("ChatSessionRegistry — warm bridges", () => {
       const process = new MockAcpProcess();
       process.autoHandshake(`sess-${cardId}`);
       processes.push(process);
-      const handle = await registry.acquire(
-        { cardId, stepKey: "grill", round: 0 },
-        {
-          spawn: () => process,
-          cwd: "C:/repo",
-          openingPrompt: "hi",
-          history: [{ id: "u1", role: "user", parts: [{ type: "text", text: "x" }] }],
-          onStatus: () => {},
-          onTranscript: () => {},
-        },
-      );
+      const id = stepChatSessionId(cardId, "grill", 0);
+      const handle = await registry.acquire(id, {
+        spawn: () => process,
+        cwd: "C:/repo",
+        openingPrompt: "hi",
+        history: [{ id: "u1", role: "user", parts: [{ type: "text", text: "x" }] }],
+        onStatus: () => {},
+        onTranscript: () => {},
+      });
       // Non-empty history: no opening turn → idle, no subscriber.
-      await viWaitFor(() => registry.hasWarm({ cardId, stepKey: "grill", round: 0 }));
+      await viWaitFor(() => registry.hasWarm(id));
       void handle;
       return process;
     }
@@ -269,37 +266,35 @@ describe("ChatSessionRegistry — warm bridges", () => {
       await new Promise((r) => setTimeout(r, 5));
     }
 
-    expect(registry.hasWarm({ cardId: "c0", stepKey: "grill", round: 0 })).toBe(true);
+    expect(registry.hasWarm(stepChatSessionId("c0", "grill", 0))).toBe(true);
 
     const sixth = await acquireIdle("c-new");
     expect(processes[0]!.killed).toBe(true);
-    expect(registry.hasWarm({ cardId: "c0", stepKey: "grill", round: 0 })).toBe(false);
-    expect(registry.hasWarm({ cardId: "c-new", stepKey: "grill", round: 0 })).toBe(true);
+    expect(registry.hasWarm(stepChatSessionId("c0", "grill", 0))).toBe(false);
+    expect(registry.hasWarm(stepChatSessionId("c-new", "grill", 0))).toBe(true);
     expect(sixth.killed).toBe(false);
     expect(processes.filter((p) => !p.killed)).toHaveLength(MAX_LIVE_SESSIONS);
   });
 
   it("when all sessions are ai-working, admit waits for the longest-running turn then evicts", async () => {
     const registry = new ChatSessionRegistry();
-    const busy: Array<{ process: MockAcpProcess; cardId: string }> = [];
+    const busy: Array<{ process: MockAcpProcess; id: string }> = [];
 
     async function acquireBusy(cardId: string): Promise<MockAcpProcess> {
       const process = new MockAcpProcess();
       process.autoHandshake(`sess-${cardId}`);
-      const handle = await registry.acquire(
-        { cardId, stepKey: "grill", round: 0 },
-        {
-          spawn: () => process,
-          cwd: "C:/repo",
-          openingPrompt: "work",
-          history: [],
-          onStatus: () => {},
-          onTranscript: () => {},
-        },
-      );
+      const id = stepChatSessionId(cardId, "grill", 0);
+      const handle = await registry.acquire(id, {
+        spawn: () => process,
+        cwd: "C:/repo",
+        openingPrompt: "work",
+        history: [],
+        onStatus: () => {},
+        onTranscript: () => {},
+      });
       handle.attach(collectingSubscriber());
       await viWaitFor(() => process.prompts().length === 1);
-      busy.push({ process, cardId });
+      busy.push({ process, id });
       return process;
     }
 
@@ -309,22 +304,20 @@ describe("ChatSessionRegistry — warm bridges", () => {
     }
 
     let admitted = false;
+    const newId = stepChatSessionId("b-new", "grill", 0);
     const admitPromise = registry
-      .acquire(
-        { cardId: "b-new", stepKey: "grill", round: 0 },
-        {
-          spawn: () => {
-            const p = new MockAcpProcess();
-            p.autoHandshake("sess-new");
-            return p;
-          },
-          cwd: "C:/repo",
-          openingPrompt: "new",
-          history: [{ id: "u", role: "user", parts: [{ type: "text", text: "x" }] }],
-          onStatus: () => {},
-          onTranscript: () => {},
+      .acquire(newId, {
+        spawn: () => {
+          const p = new MockAcpProcess();
+          p.autoHandshake("sess-new");
+          return p;
         },
-      )
+        cwd: "C:/repo",
+        openingPrompt: "new",
+        history: [{ id: "u", role: "user", parts: [{ type: "text", text: "x" }] }],
+        onStatus: () => {},
+        onTranscript: () => {},
+      })
       .then(() => {
         admitted = true;
       });
@@ -343,8 +336,8 @@ describe("ChatSessionRegistry — warm bridges", () => {
     await admitPromise;
     expect(admitted).toBe(true);
     expect(oldest.process.killed).toBe(true);
-    expect(registry.hasWarm({ cardId: "b0", stepKey: "grill", round: 0 })).toBe(false);
-    expect(registry.hasWarm({ cardId: "b-new", stepKey: "grill", round: 0 })).toBe(true);
+    expect(registry.hasWarm(stepChatSessionId("b0", "grill", 0))).toBe(false);
+    expect(registry.hasWarm(newId)).toBe(true);
   });
 
   it("permission with no subscriber flips status to needs-user", async () => {
@@ -353,7 +346,7 @@ describe("ChatSessionRegistry — warm bridges", () => {
     const registry = new ChatSessionRegistry();
     const statuses: Array<"ai-working" | "needs-user"> = [];
 
-    const handle = await registry.acquire(keyA, {
+    const handle = await registry.acquire(idA, {
       spawn: () => process,
       cwd: "C:/repo",
       openingPrompt: "Grill",
@@ -389,7 +382,7 @@ describe("ChatSessionRegistry — warm bridges", () => {
     const registry = new ChatSessionRegistry();
     const conn = fakeConn();
 
-    await registry.acquire(keyA, {
+    await registry.acquire(idA, {
       spawn: () => process,
       cwd: "C:/repo",
       openingPrompt: "x",
@@ -397,14 +390,14 @@ describe("ChatSessionRegistry — warm bridges", () => {
       onStatus: () => {},
       onTranscript: () => {},
     });
-    registry.claim(keyA, conn);
-    expect(registry.hasWarm(keyA)).toBe(true);
+    registry.claim(idA, conn);
+    expect(registry.hasWarm(idA)).toBe(true);
 
-    registry.close(keyA, "grill handed off to spec");
+    registry.close(idA, "grill handed off to spec");
 
     expect(conn.displacedWith).toEqual(["grill handed off to spec"]);
-    expect(registry.get(keyA)).toBeUndefined();
-    expect(registry.hasWarm(keyA)).toBe(false);
+    expect(registry.get(idA)).toBeUndefined();
+    expect(registry.hasWarm(idA)).toBe(false);
     expect(process.killed).toBe(true);
   });
 });

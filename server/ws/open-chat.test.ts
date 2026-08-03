@@ -8,7 +8,8 @@ import { CardStore } from "../cards/store.js";
 import { openDb } from "../db/index.js";
 import { EventBus } from "../execution/events.js";
 import { MockAcpProcess, viWaitFor } from "./mock-acp-process.js";
-import { openChat, resolveOpeningPrompt } from "./open-chat.js";
+import { openStepChat, resolveOpeningPrompt } from "./open-chat.js";
+import { createStepChatSession } from "./chat-session.js";
 import { ChatSessionRegistry } from "./session-registry.js";
 
 const promptsRoot = path.resolve(import.meta.dirname, "../../prompts");
@@ -112,7 +113,7 @@ describe("openChat", () => {
       if (e.type === "card.updated") busCards.push(e.card.id);
     });
 
-    const opened = await openChat(
+    const opened = await openStepChat(
       { cardId, stepKey: "grill", round: 0 },
       {
         store,
@@ -127,7 +128,7 @@ describe("openChat", () => {
 
     expect(opened.history).toEqual([]);
     expect(opened.handle.reused).toBe(false);
-    expect(sessions.hasWarm({ cardId, stepKey: "grill", round: 0 })).toBe(true);
+    expect(sessions.hasWarm(`card:${cardId}:grill:0`)).toBe(true);
 
     await viWaitFor(() => process.prompts().length === 1);
     expect(process.prompts()[0].prompt).toEqual([
@@ -187,7 +188,7 @@ describe("openChat", () => {
     process.autoHandshake("sess-warm");
     let spawnCount = 0;
 
-    const first = await openChat(
+    const first = await openStepChat(
       { cardId, stepKey: "grill", round: 0 },
       {
         store,
@@ -205,7 +206,7 @@ describe("openChat", () => {
     expect(first.handle.reused).toBe(false);
     expect(process.prompts()).toHaveLength(0);
 
-    const second = await openChat(
+    const second = await openStepChat(
       { cardId, stepKey: "grill", round: 0 },
       {
         store,
@@ -230,7 +231,7 @@ describe("openChat", () => {
     process.autoHandshake("sess-frozen");
 
     await expect(
-      openChat(
+      openStepChat(
         { cardId, stepKey: "grill", round: 0 },
         {
           store,
@@ -244,19 +245,12 @@ describe("openChat", () => {
     ).rejects.toThrow(/frozen/i);
   });
 
-  it("rejects missing cards", async () => {
-    await expect(
-      openChat(
+  it("rejects missing cards at the ChatSession factory", async () => {
+    expect(() =>
+      createStepChatSession(
         { cardId: "missing", stepKey: "grill", round: 0 },
-        {
-          store,
-          artifacts,
-          events,
-          spawn: () => new MockAcpProcess(),
-          promptsRoot,
-          sessions,
-        },
+        { store, artifacts, events, promptsRoot },
       ),
-    ).rejects.toThrow(/card not found/i);
+    ).toThrow(/card not found/i);
   });
 });

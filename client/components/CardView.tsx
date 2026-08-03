@@ -76,7 +76,7 @@ export function CardView() {
   async function remove() {
     if (!card) return;
     await api.deleteCard(card.id);
-    navigate("/");
+    navigate("/board");
   }
 
   async function decide(path: KindPath) {
@@ -139,7 +139,7 @@ export function CardView() {
       <div className="flex h-dvh flex-col items-center justify-center gap-4">
         <Logo className="size-12" />
         <p className="text-muted-foreground">Card not found.</p>
-        <Button variant="outline" onClick={() => navigate("/")}>
+        <Button variant="outline" onClick={() => navigate("/board")}>
           <IconArrowLeft data-icon="inline-start" /> Back to board
         </Button>
       </div>
@@ -186,7 +186,7 @@ export function CardView() {
       )}
     >
       <header className="flex items-center gap-2 border-b px-4 py-2.5">
-        <Button variant="ghost" size="icon-sm" onClick={() => navigate("/")} title="Back to board">
+        <Button variant="ghost" size="icon-sm" onClick={() => navigate("/board")} title="Back to board">
           <IconArrowLeft />
         </Button>
         <span className="truncate font-semibold">{card.title || "Untitled"}</span>

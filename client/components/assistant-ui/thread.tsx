@@ -5,6 +5,11 @@ import { AttachmentChip } from "@/components/assistant-ui/attachment-chip";
 import { ComposerTriggerPopover } from "@/components/assistant-ui/composer-trigger-popover";
 import { createDirectiveText } from "@/components/assistant-ui/directive-text";
 import { Badge } from "@/components/assistant-ui/badge";
+import {
+  ComposerQuotePreview,
+  QuoteBlock,
+  SelectionToolbar,
+} from "@/components/assistant-ui/quote";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -212,6 +217,7 @@ export const Thread: FC<ThreadProps> = ({
           </ThreadPrimitive.ViewportFooter>
         </div>
       </ThreadPrimitive.Viewport>
+      <SelectionToolbar />
     </ThreadPrimitive.Root>
   );
 };
@@ -361,6 +367,7 @@ const Composer: FC<{
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
       <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
         <div data-slot="aui_composer-shell" className={COMPOSER_SHELL}>
+          <ComposerQuotePreview />
           {attachmentsEnabled ? (
             <div className="flex flex-wrap gap-1.5 px-1 pt-0.5 empty:hidden">
               <ComposerPrimitive.Attachments>
@@ -618,6 +625,9 @@ const UserMessage: FC = () => {
           {() => <UserMessageAttachment />}
         </MessagePrimitive.Attachments>
         <div className="aui-user-message-content peer rounded-xl bg-muted px-4 py-2 wrap-break-word text-foreground empty:hidden">
+          <MessagePrimitive.Quote>
+            {(quote) => <QuoteBlock {...quote} />}
+          </MessagePrimitive.Quote>
           <MessagePrimitive.Parts components={{ Text: UserDirectiveText }} />
         </div>
       </div>

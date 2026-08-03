@@ -633,6 +633,74 @@ describe("AcpChatTransport", () => {
     });
   });
 
+  it("prepends quoted message text as a markdown blockquote on send", async () => {
+    const transport = new AcpChatTransport({
+      cardId: "c1",
+      stepKey: "grill",
+    });
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({ type: "ready", messages: [], streaming: false });
+    await connectP;
+    ws.deliver({ type: "session", status: "open", streaming: false });
+
+    const stream = await transport.sendMessages({
+      messages: [
+        {
+          id: "u1",
+          role: "user",
+          parts: [{ type: "text", text: "what about this?" }],
+          metadata: {
+            custom: {
+              quote: { text: "selected span", messageId: "a1" },
+            },
+          },
+        },
+      ],
+    } as Parameters<AcpChatTransport["sendMessages"]>[0]);
+    void readAll(stream);
+
+    const sent = ws.sent.map((s) => JSON.parse(s) as unknown);
+    expect(sent).toContainEqual({
+      type: "user-message",
+      text: "> selected span\n\nwhat about this?",
+    });
+  });
+
+  it("sends a quote-only turn when the composer text is empty", async () => {
+    const transport = new AcpChatTransport({
+      cardId: "c1",
+      stepKey: "grill",
+    });
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({ type: "ready", messages: [], streaming: false });
+    await connectP;
+    ws.deliver({ type: "session", status: "open", streaming: false });
+
+    const stream = await transport.sendMessages({
+      messages: [
+        {
+          id: "u1",
+          role: "user",
+          parts: [],
+          metadata: {
+            custom: {
+              quote: { text: "line one\nline two", messageId: "a1" },
+            },
+          },
+        },
+      ],
+    } as Parameters<AcpChatTransport["sendMessages"]>[0]);
+    void readAll(stream);
+
+    const sent = ws.sent.map((s) => JSON.parse(s) as unknown);
+    expect(sent).toContainEqual({
+      type: "user-message",
+      text: "> line one\n> line two\n\n",
+    });
+  });
+
   it("sends attachment-only user turns", async () => {
     const TINY_PNG =
       "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";

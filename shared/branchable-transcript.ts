@@ -38,28 +38,114 @@ export function fromLinear(messages: UIMessage[]): BranchableTranscript {
   };
 }
 
+/** Thrown when on-disk Project Chat transcript JSON fails validation. */
+export class TranscriptParseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TranscriptParseError";
+  }
+}
+
 /**
  * Accept on-disk JSON: legacy flat `UIMessage[]` or v1 branchable object.
- * Corrupt / unknown shapes become an empty transcript.
+ * Fail closed — corrupt / unknown shapes throw `TranscriptParseError`
+ * (callers preserve the file; do not silently empty).
  */
 export function parseTranscriptFile(raw: unknown): BranchableTranscript {
   if (Array.isArray(raw)) {
-    return fromLinear(raw as UIMessage[]);
+    const messages = raw.map((item, i) => parseUiMessage(item, `messages[${i}]`));
+    return fromLinear(messages);
   }
-  if (
-    raw &&
-    typeof raw === "object" &&
-    (raw as BranchableTranscript).version === 1 &&
-    Array.isArray((raw as BranchableTranscript).messages)
-  ) {
-    const t = raw as BranchableTranscript;
-    return {
-      version: 1,
-      headId: t.headId ?? null,
-      messages: t.messages,
-    };
+  if (!raw || typeof raw !== "object") {
+    throw new TranscriptParseError("transcript must be an array or v1 object");
   }
-  return emptyTranscript();
+  const obj = raw as Record<string, unknown>;
+  if (obj.version !== 1) {
+    throw new TranscriptParseError(
+      `unsupported transcript version: ${String(obj.version)}`,
+    );
+  }
+  if (!Array.isArray(obj.messages)) {
+    throw new TranscriptParseError("v1 transcript requires messages: array");
+  }
+  if (obj.headId != null && typeof obj.headId !== "string") {
+    throw new TranscriptParseError("headId must be string | null");
+  }
+
+  const nodes: BranchNode[] = obj.messages.map((item, i) =>
+    parseBranchNode(item, `messages[${i}]`),
+  );
+  const transcript: BranchableTranscript = {
+    version: 1,
+    headId: (obj.headId as string | null | undefined) ?? null,
+    messages: nodes,
+  };
+  assertTreeInvariants(transcript);
+  return transcript;
+}
+
+function parseUiMessage(raw: unknown, path: string): UIMessage {
+  if (!raw || typeof raw !== "object") {
+    throw new TranscriptParseError(`${path} must be an object`);
+  }
+  const m = raw as Record<string, unknown>;
+  if (typeof m.id !== "string" || !m.id) {
+    throw new TranscriptParseError(`${path}.id must be a nonempty string`);
+  }
+  if (typeof m.role !== "string" || !m.role) {
+    throw new TranscriptParseError(`${path}.role must be a nonempty string`);
+  }
+  if (!Array.isArray(m.parts)) {
+    throw new TranscriptParseError(`${path}.parts must be an array`);
+  }
+  return m as UIMessage;
+}
+
+function parseBranchNode(raw: unknown, path: string): BranchNode {
+  if (!raw || typeof raw !== "object") {
+    throw new TranscriptParseError(`${path} must be an object`);
+  }
+  const n = raw as Record<string, unknown>;
+  if (n.parentId != null && typeof n.parentId !== "string") {
+    throw new TranscriptParseError(`${path}.parentId must be string | null`);
+  }
+  return {
+    parentId: (n.parentId as string | null | undefined) ?? null,
+    message: parseUiMessage(n.message, `${path}.message`),
+  };
+}
+
+function assertTreeInvariants(t: BranchableTranscript): void {
+  const ids = new Set<string>();
+  for (const node of t.messages) {
+    const id = node.message.id;
+    if (ids.has(id)) {
+      throw new TranscriptParseError(`duplicate message id: ${id}`);
+    }
+    ids.add(id);
+  }
+  for (const node of t.messages) {
+    if (node.parentId != null && !ids.has(node.parentId)) {
+      throw new TranscriptParseError(
+        `parent id not found: ${node.parentId} (child ${node.message.id})`,
+      );
+    }
+  }
+  if (t.headId != null && !ids.has(t.headId)) {
+    throw new TranscriptParseError(`headId not found: ${t.headId}`);
+  }
+  const byId = new Map(t.messages.map((n) => [n.message.id, n]));
+  for (const node of t.messages) {
+    const seen = new Set<string>();
+    let id: string | null = node.message.id;
+    while (id != null) {
+      if (seen.has(id)) {
+        throw new TranscriptParseError(`cycle detected at message id: ${id}`);
+      }
+      seen.add(id);
+      id = byId.get(id)?.parentId ?? null;
+    }
+  }
 }
 
 function nodeMap(t: BranchableTranscript): Map<string, BranchNode> {

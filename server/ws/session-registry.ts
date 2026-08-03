@@ -2,34 +2,16 @@ import type { UIMessage } from "ai";
 import type { ChatAttachment, PromptCapabilities } from "../../shared/chat-ws.js";
 import {
   AcpBridge,
-  type AcpLiveCallbacks,
   type ChunkSubscriber,
-  type InteractivePermissionPolicy,
   type SpawnAcp,
 } from "./chat.js";
-import type { ChatSessionId } from "./chat-session.js";
+import type { ChatSession, ChatSessionId } from "./chat-session.js";
 
 export type { ChunkSubscriber };
 
 /** Minimal seam for last-connection-wins — ChatConnection implements this. */
 export interface DisplaceableConnection {
   displace(reason: string): void;
-}
-
-export interface ColdAcquireParams {
-  spawn: SpawnAcp;
-  cwd: string;
-  /** Null skips the auto opening turn when history is empty. */
-  openingPrompt: string | null;
-  history: UIMessage[];
-  onStatus: AcpLiveCallbacks["onStatus"];
-  onTranscript: AcpLiveCallbacks["onTranscript"];
-  onTurnComplete?: AcpLiveCallbacks["onTurnComplete"];
-  frameUserMessage?: AcpLiveCallbacks["frameUserMessage"];
-  /** Spec (and future) live chats: Cursor-like auto-approve. */
-  interactivePermissionPolicy?: InteractivePermissionPolicy;
-  /** Pin via `agent --model`; omit/null = CLI default. */
-  model?: string | null;
 }
 
 /** Cap on live ACP bridges across all chat sessions (issue #24). */
@@ -54,8 +36,8 @@ export interface WarmSessionHandle {
 
 /**
  * Writer slot + warm AcpBridge map (cap + eviction).
- * Keys are opaque server-built ChatSession ids (`card:…` / later `thread:…`).
- * WebSocket connections subscribe; close detaches without killing the bridge.
+ * Keys are opaque server-built ChatSession ids (`card:…` / `thread:…`).
+ * Acquire takes a resolved ChatSession — no ColdAcquireParams remapping.
  */
 export class ChatSessionRegistry {
   private readonly active = new Map<string, DisplaceableConnection>();
@@ -105,21 +87,28 @@ export class ChatSessionRegistry {
   }
 
   async acquire(
-    id: ChatSessionId,
-    params: ColdAcquireParams,
+    session: ChatSession,
+    opts: { spawn: SpawnAcp },
   ): Promise<WarmSessionHandle> {
-    const requestedModel = normalizeModel(params.model);
+    const requestedModel = normalizeModel(session.model);
+    const id = session.id;
+    const wireLive = () => ({
+      onStatus: (status: "ai-working" | "needs-user") =>
+        session.notifyStatus(status),
+      onTranscript: (messages: UIMessage[]) => {
+        session.assertMutable();
+        session.saveTranscript(messages);
+      },
+      onTurnComplete: session.onTurnComplete,
+      frameUserMessage: session.frameUserMessage,
+    });
+
     const existing = this.warm.get(id);
     if (existing) {
       if (this.warmModel.get(id) !== requestedModel) {
         this.close(id, "model changed");
       } else {
-        existing.setLiveCallbacks({
-          onStatus: params.onStatus,
-          onTranscript: params.onTranscript,
-          onTurnComplete: params.onTurnComplete,
-          frameUserMessage: params.frameUserMessage,
-        });
+        existing.setLiveCallbacks(wireLive());
         return this.handleFor(existing, true);
       }
     }
@@ -130,31 +119,29 @@ export class ChatSessionRegistry {
         if (this.warmModel.get(id) !== requestedModel) {
           this.close(id, "model changed");
         } else {
-          again.setLiveCallbacks({
-            onStatus: params.onStatus,
-            onTranscript: params.onTranscript,
-            onTurnComplete: params.onTurnComplete,
-            frameUserMessage: params.frameUserMessage,
-          });
+          again.setLiveCallbacks(wireLive());
           return this.handleFor(again, true);
         }
       }
       await this.ensureCapacity();
+      const live = wireLive();
       const bridge = new AcpBridge({
-        spawn: params.spawn,
-        onStatus: params.onStatus,
-        onTranscript: params.onTranscript,
-        onTurnComplete: params.onTurnComplete,
-        frameUserMessage: params.frameUserMessage,
+        spawn: opts.spawn,
+        onStatus: live.onStatus,
+        onTranscript: live.onTranscript,
+        onTurnComplete: live.onTurnComplete,
+        frameUserMessage: live.frameUserMessage,
       });
       this.warm.set(id, bridge);
       this.warmModel.set(id, requestedModel);
       try {
+        session.assertMutable();
+        const history = session.loadTranscript();
         await bridge.openSession({
-          cwd: params.cwd,
-          openingPrompt: params.openingPrompt,
-          history: params.history,
-          interactivePermissionPolicy: params.interactivePermissionPolicy,
+          cwd: session.cwd,
+          openingPrompt: session.openingPrompt,
+          history,
+          interactivePermissionPolicy: session.interactivePermissionPolicy,
           model: requestedModel,
         });
       } catch (err) {

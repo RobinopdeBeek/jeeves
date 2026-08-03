@@ -15,6 +15,11 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import {
+  ProjectChatRewindProvider,
+  type ProjectChatRewindApi,
+  useProjectChatRewind,
+} from "@/components/chat/project-chat-rewind-context";
+import {
   ActionBarPrimitive,
   AttachmentPrimitive,
   AuiIf,
@@ -35,7 +40,6 @@ import {
   LexicalComposerInput,
   type DirectiveChipProps,
 } from "@assistant-ui/react-lexical";
-import { useProjectChatRewind } from "@/components/chat/project-chat-rewind-context";
 import {
   IconArrowDown,
   IconArrowUp,
@@ -78,6 +82,11 @@ export type ThreadProps = {
    * Shown alongside the attach control when both are present.
    */
   composerLeading?: ReactNode;
+  /**
+   * Project Chat edit/branch rewind. When omitted, Thread stays rewind-agnostic
+   * (Grill / assist paths).
+   */
+  rewind?: ProjectChatRewindApi | null;
 };
 
 const COMPOSER_SHELL =
@@ -165,10 +174,11 @@ export const Thread: FC<ThreadProps> = ({
   openingPlaceholder = "Agent starting — you can type…",
   attachmentsEnabled = false,
   composerLeading,
+  rewind = null,
 }) => {
   const isEmpty = useAuiState(isEmptyThread);
 
-  return (
+  const tree = (
     <ThreadPrimitive.Root
       className="aui-root aui-thread-root flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-background @container"
       style={THREAD_CSS_VARS}
@@ -224,6 +234,11 @@ export const Thread: FC<ThreadProps> = ({
       </ThreadPrimitive.Viewport>
       <SelectionToolbar />
     </ThreadPrimitive.Root>
+  );
+
+  if (!rewind) return tree;
+  return (
+    <ProjectChatRewindProvider value={rewind}>{tree}</ProjectChatRewindProvider>
   );
 };
 

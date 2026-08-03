@@ -1,4 +1,5 @@
 import type { UIMessage, UIMessageChunk } from "ai";
+import type { BranchableTranscript } from "./branchable-transcript.js";
 import type {
   ChatAttachment,
   PromptCapabilities,
@@ -47,7 +48,16 @@ export type WsClientMessage =
   | { type: "ping"; id: string };
 
 export type WsServerMessage =
-  | { type: "ready"; messages: UIMessage[]; streaming?: boolean }
+  | {
+      type: "ready";
+      messages: UIMessage[];
+      streaming?: boolean;
+      /**
+       * Project Chat only: full branch-aware transcript (tree + head).
+       * Step chats omit this (flat transcripts).
+       */
+      branchable?: BranchableTranscript;
+    }
   /** ACP handshake finished — client may send user turns. */
   | {
       type: "session";

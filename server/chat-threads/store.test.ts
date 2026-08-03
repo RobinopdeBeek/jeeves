@@ -191,6 +191,25 @@ describe("ChatThreadStore", () => {
     expect(threads.loadBranchable(thread.id).version).toBe(1);
   });
 
+  it("fails closed on corrupt transcript JSON without deleting the file", () => {
+    const thread = threads.createOrReuseEmptyDraft(project.id);
+    const file = threads.transcriptPath(thread.id);
+    fs.writeFileSync(file, "{not-json\n", "utf8");
+    expect(() => threads.loadBranchable(thread.id)).toThrow(/corrupt/i);
+    expect(fs.readFileSync(file, "utf8")).toContain("{not-json");
+  });
+
+  it("fails closed on invalid branchable shape without deleting the file", () => {
+    const thread = threads.createOrReuseEmptyDraft(project.id);
+    const file = threads.transcriptPath(thread.id);
+    fs.writeFileSync(
+      file,
+      `${JSON.stringify({ version: 1, headId: "ghost", messages: [] })}\n`,
+    );
+    expect(() => threads.loadBranchable(thread.id)).toThrow(/corrupt/i);
+    expect(JSON.parse(fs.readFileSync(file, "utf8")).headId).toBe("ghost");
+  });
+
   it("truncates and switches branches while retaining siblings", () => {
     const thread = threads.createOrReuseEmptyDraft(project.id);
     threads.saveTranscript(thread.id, [

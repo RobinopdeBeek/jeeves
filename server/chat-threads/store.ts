@@ -13,8 +13,9 @@ import {
   syncActivePath,
   switchToBranch,
   truncateTo,
+  TranscriptParseError,
   type BranchableTranscript,
-} from "./branchable-transcript.js";
+} from "../../shared/branchable-transcript.js";
 
 export class ChatThreadStoreError extends Error {
   constructor(
@@ -145,15 +146,33 @@ export class ChatThreadStore {
     return path.join(this.threadDir(threadId), "transcript.json");
   }
 
-  /** Full branch-aware transcript (tree + head). */
+  /**
+   * Full branch-aware transcript (tree + head).
+   * Missing file → empty. Corrupt JSON/shape → ChatThreadStoreError (file preserved).
+   */
   loadBranchable(threadId: string): BranchableTranscript {
     const file = this.transcriptPath(threadId);
     if (!fs.existsSync(file)) return emptyTranscript();
+    let parsed: unknown;
     try {
-      const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
-      return parseTranscriptFile(parsed);
+      parsed = JSON.parse(fs.readFileSync(file, "utf8"));
     } catch {
-      return emptyTranscript();
+      throw new ChatThreadStoreError(
+        500,
+        "corrupt chat transcript (invalid JSON)",
+      );
+    }
+    try {
+      return parseTranscriptFile(parsed);
+    } catch (e) {
+      const detail =
+        e instanceof TranscriptParseError || e instanceof Error
+          ? e.message
+          : String(e);
+      throw new ChatThreadStoreError(
+        500,
+        `corrupt chat transcript: ${detail}`,
+      );
     }
   }
 
@@ -205,6 +224,7 @@ export class ChatThreadStore {
       this.writeBranchable(threadId, next);
       return activePath(next);
     } catch (e) {
+      if (e instanceof ChatThreadStoreError) throw e;
       throw new ChatThreadStoreError(
         400,
         e instanceof Error ? e.message : String(e),

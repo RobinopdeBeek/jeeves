@@ -6,6 +6,9 @@ import { CardStore } from "../cards/store.js";
 import { ChatThreadStore } from "../chat-threads/store.js";
 import { openDb, type Db } from "../db/index.js";
 import type { Project } from "../db/schema.js";
+import { MockAcpProcess } from "../ws/mock-acp-process.js";
+import { ProjectChat } from "../ws/project-chat.js";
+import { ChatSessionRegistry } from "../ws/session-registry.js";
 import { chatThreadRoutes } from "./chat-threads.js";
 
 describe("chat thread routes", () => {
@@ -13,6 +16,9 @@ describe("chat thread routes", () => {
   let project: Project;
   let chatRoot: string;
   let store: ChatThreadStore;
+  let sessions: ChatSessionRegistry;
+  let projectChat: ProjectChat;
+  let spawnCount: number;
 
   beforeEach(() => {
     db = openDb(":memory:");
@@ -20,6 +26,19 @@ describe("chat thread routes", () => {
     project = cards.ensureDefaultProject("jeeves", "/tmp/repo");
     chatRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-chat-routes-"));
     store = new ChatThreadStore(db, chatRoot);
+    sessions = new ChatSessionRegistry();
+    spawnCount = 0;
+    projectChat = new ProjectChat({
+      threads: store,
+      sessions,
+      cwd: "/tmp/repo",
+      spawn: () => {
+        spawnCount += 1;
+        const p = new MockAcpProcess();
+        p.autoHandshake(`sess-route-${spawnCount}`);
+        return p;
+      },
+    });
   });
 
   afterEach(() => {
@@ -27,7 +46,7 @@ describe("chat thread routes", () => {
   });
 
   it("lists, creates, opens, renames, and deletes threads", async () => {
-    const app = chatThreadRoutes(store, project);
+    const app = chatThreadRoutes(store, project, projectChat);
 
     const createRes = await app.request("http://localhost/", { method: "POST" });
     expect(createRes.status).toBe(201);
@@ -70,7 +89,7 @@ describe("chat thread routes", () => {
   });
 
   it("POST reuses an empty draft", async () => {
-    const app = chatThreadRoutes(store, project);
+    const app = chatThreadRoutes(store, project, projectChat);
     const first = (await (
       await app.request("http://localhost/", { method: "POST" })
     ).json()) as { id: string };
@@ -80,33 +99,13 @@ describe("chat thread routes", () => {
   });
 
   it("returns 404 for missing threads", async () => {
-    const app = chatThreadRoutes(store, project);
+    const app = chatThreadRoutes(store, project, projectChat);
     const res = await app.request("http://localhost/missing", { method: "DELETE" });
     expect(res.status).toBe(404);
   });
 
-  it("notifies onThreadDeleted after a successful hard delete", async () => {
-    const deleted: string[] = [];
-    const app = chatThreadRoutes(store, project, {
-      onThreadDeleted: (id) => deleted.push(id),
-    });
-    const created = (await (
-      await app.request("http://localhost/", { method: "POST" })
-    ).json()) as { id: string };
-
-    await app.request(`http://localhost/${created.id}`, { method: "DELETE" });
-    expect(deleted).toEqual([created.id]);
-
-    deleted.length = 0;
-    await app.request("http://localhost/missing", { method: "DELETE" });
-    expect(deleted).toEqual([]);
-  });
-
-  it("PATCHes model and notifies onThreadModelChanged", async () => {
-    const changed: Array<{ id: string; model: string | null }> = [];
-    const app = chatThreadRoutes(store, project, {
-      onThreadModelChanged: (id, model) => changed.push({ id, model }),
-    });
+  it("PATCHes model via ProjectChat lifecycle", async () => {
+    const app = chatThreadRoutes(store, project, projectChat);
     const created = (await (
       await app.request("http://localhost/", { method: "POST" })
     ).json()) as { id: string };
@@ -120,7 +119,6 @@ describe("chat thread routes", () => {
     expect(await res.json()).toEqual(
       expect.objectContaining({ id: created.id, model: "composer-2.5" }),
     );
-    expect(changed).toEqual([{ id: created.id, model: "composer-2.5" }]);
 
     const clearRes = await app.request(`http://localhost/${created.id}`, {
       method: "PATCH",
@@ -131,42 +129,10 @@ describe("chat thread routes", () => {
     expect(await clearRes.json()).toEqual(
       expect.objectContaining({ model: null }),
     );
-    expect(changed).toEqual([
-      { id: created.id, model: "composer-2.5" },
-      { id: created.id, model: null },
-    ]);
   });
 
-  it("does not notify onThreadModelChanged when model is unchanged", async () => {
-    const changed: string[] = [];
-    const app = chatThreadRoutes(store, project, {
-      onThreadModelChanged: (id) => changed.push(id),
-    });
-    const created = (await (
-      await app.request("http://localhost/", { method: "POST" })
-    ).json()) as { id: string; model: string | null };
-
-    await app.request(`http://localhost/${created.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ model: created.model }),
-      headers: { "Content-Type": "application/json" },
-    });
-    expect(changed).toEqual([]);
-  });
-
-  it("GETs the branch-aware transcript and POSTs rewind", async () => {
-    const rewound: Array<{ id: string; action: string }> = [];
-    const app = chatThreadRoutes(store, project, {
-      rewindThread: async (threadId, op) => {
-        rewound.push({ id: threadId, action: op.action });
-        if (op.action === "truncate") {
-          const messages = store.truncateTranscript(threadId, op.headId);
-          return { messages, branchable: store.loadBranchable(threadId) };
-        }
-        const messages = store.switchTranscriptBranch(threadId, op.branchId);
-        return { messages, branchable: store.loadBranchable(threadId) };
-      },
-    });
+  it("GETs the branch-aware transcript and POSTs rewind with warm outcome", async () => {
+    const app = chatThreadRoutes(store, project, projectChat);
     const created = (await (
       await app.request("http://localhost/", { method: "POST" })
     ).json()) as { id: string };
@@ -209,19 +175,16 @@ describe("chat thread routes", () => {
     const body = (await rewindRes.json()) as {
       messages: Array<{ id: string }>;
       branchable: { headId: string };
+      warm: { status: string };
     };
     expect(body.messages.map((m) => m.id)).toEqual(["u1"]);
     expect(body.branchable.headId).toBe("u1");
-    expect(rewound).toEqual([{ id: created.id, action: "truncate" }]);
+    expect(body.warm.status).toBe("open");
+    expect(spawnCount).toBe(1);
   });
 
   it("rejects malformed rewind bodies", async () => {
-    const app = chatThreadRoutes(store, project, {
-      rewindThread: async () => ({
-        messages: [],
-        branchable: store.loadBranchable("x"),
-      }),
-    });
+    const app = chatThreadRoutes(store, project, projectChat);
     const created = (await (
       await app.request("http://localhost/", { method: "POST" })
     ).json()) as { id: string };

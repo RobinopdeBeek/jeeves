@@ -230,7 +230,7 @@ describe("createProjectChatSession", () => {
     expect(sessions.hasWarm(`thread:${threadId}`)).toBe(true);
   });
 
-  it("persists transcript via ChatThreadStore and auto-titles from the first user message", () => {
+  it("persists transcript via ChatThreadStore and auto-titles on turn complete", () => {
     const session = createProjectChatSession(
       { threadId },
       { threads, cwd: repoPath },
@@ -243,8 +243,10 @@ describe("createProjectChatSession", () => {
       },
     ];
     session.saveTranscript(messages);
-
     expect(threads.loadTranscript(threadId)).toEqual(messages);
+    expect(threads.getThread(threadId)?.title).toBe("New Chat");
+
+    session.onTurnComplete?.();
     expect(threads.getThread(threadId)?.title).toBe("Explain the warm pool");
   });
 

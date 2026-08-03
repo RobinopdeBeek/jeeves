@@ -253,9 +253,13 @@ export const api = {
   getChatThreadTranscript: (id: string) =>
     request<BranchableTranscript>(`/api/chat-threads/${id}/transcript`),
   rewindChatThread: (id: string, op: RewindOp) =>
-    request<{ messages: UIMessage[]; branchable: BranchableTranscript }>(
-      `/api/chat-threads/${id}/rewind`,
-      { method: "POST", body: JSON.stringify(op) },
-    ),
+    request<{
+      messages: UIMessage[];
+      branchable: BranchableTranscript;
+      warm: { status: "open" } | { status: "failed"; error: string };
+    }>(`/api/chat-threads/${id}/rewind`, {
+      method: "POST",
+      body: JSON.stringify(op),
+    }),
   listModels: () => request<{ models: AgentModel[] }>("/api/models"),
 };

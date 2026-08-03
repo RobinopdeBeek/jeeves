@@ -6,11 +6,13 @@ import type {
   WsClientMessage,
   WsServerMessage,
 } from "@shared/chat-ws";
+import type { BranchableTranscript } from "@shared/branchable-transcript";
 import {
   EMPTY_PROMPT_CAPABILITIES,
   normalizePromptCapabilities,
 } from "@shared/prompt-capabilities";
 import type { TasksDraft } from "@/lib/api";
+import { deferred, sleep, type Deferred } from "./acp-transport-deferred";
 
 export type { PermissionOptionPart, PermissionRequestData } from "@shared/chat-ws";
 export type { PromptCapabilities } from "@shared/chat-ws";
@@ -46,8 +48,18 @@ export interface AcpChatTransportOptions {
    */
   onReconnected?: (
     history: UIMessage[],
-    opts: { streaming: boolean },
+    opts: { streaming: boolean; branchable?: BranchableTranscript },
   ) => void;
+  /**
+   * Initial `ready` (and reconnect) may include Project Chat branchable.
+   * Step chats omit it.
+   */
+  onBranchable?: (branchable: BranchableTranscript) => void;
+  /**
+   * Displace reasons that clear the latch and reconnect (Project Chat Rewind).
+   * Hard displace (continued elsewhere, model changed, …) still freezes.
+   */
+  softDisplaceReasons?: readonly string[];
 }
 
 /** Backoff for reconnect attempts; last value repeats. */
@@ -61,43 +73,6 @@ const LIVENESS_FRESH_MS = 3000;
 const TURN_LIVENESS_INTERVAL_MS = 8000;
 /** How long a send waits for a healthy session before failing loudly. */
 const ENSURE_LIVE_TIMEOUT_MS = 8000;
-
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (err: Error) => void;
-  settled: boolean;
-};
-
-function deferred<T>(): Deferred<T> {
-  let resolveFn!: (value: T) => void;
-  let rejectFn!: (err: Error) => void;
-  const promise = new Promise<T>((resolve, reject) => {
-    resolveFn = resolve;
-    rejectFn = reject;
-  });
-  // Nobody may be awaiting when a generation is torn down.
-  promise.catch(() => {});
-  const d: Deferred<T> = {
-    promise,
-    settled: false,
-    resolve: (value) => {
-      if (d.settled) return;
-      d.settled = true;
-      resolveFn(value);
-    },
-    reject: (err) => {
-      if (d.settled) return;
-      d.settled = true;
-      rejectFn(err);
-    },
-  };
-  return d;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 function closedStream(): ReadableStream<UIMessageChunk> {
   return new ReadableStream({ start: (c) => c.close() });
@@ -732,10 +707,14 @@ export class AcpChatTransport {
         if (msg.messages.length > 0 && !msg.streaming) {
           this.markTurnDone();
         }
+        if (msg.branchable) {
+          this.options.onBranchable?.(msg.branchable);
+        }
         this.readyD.resolve(msg.messages);
         if (reconnected) {
           this.options.onReconnected?.(msg.messages, {
             streaming: Boolean(msg.streaming),
+            ...(msg.branchable ? { branchable: msg.branchable } : {}),
           });
         }
         break;
@@ -762,7 +741,36 @@ export class AcpChatTransport {
       case "pong":
         this.pingWaiters.get(msg.id)?.resolve();
         break;
-      case "displaced":
+      case "displaced": {
+        const soft = Boolean(
+          this.options.softDisplaceReasons?.includes(msg.reason),
+        );
+        if (soft) {
+          // Soft reattach: do not latch displaced — drop the socket and reconnect.
+          this.sessionOpen = false;
+          this.clearReconnectTimer();
+          this.clearLivenessTimer();
+          this.failPings();
+          this.abandonTurn();
+          const socket = this.socket;
+          this.socket = null;
+          if (socket) {
+            socket.onmessage = null;
+            socket.onerror = null;
+            socket.onclose = null;
+            try {
+              socket.close();
+            } catch {
+              // already closed
+            }
+          }
+          if (this.readyD.settled) this.readyD = deferred();
+          if (this.sessionD.settled) this.sessionD = deferred();
+          this.setConnectionState("reconnecting");
+          this.options.onDisplaced?.(msg.reason);
+          this.reconnectNow();
+          break;
+        }
         this.displaced = true;
         this.sessionOpen = false;
         this.clearReconnectTimer();
@@ -771,6 +779,7 @@ export class AcpChatTransport {
         this.options.onDisplaced?.(msg.reason);
         this.markTurnDone();
         break;
+      }
       case "error": {
         // Before session open ⇒ setup failure (bad card, spawn failed):
         // reconnecting would just loop. After ⇒ a turn failed; keep the socket.

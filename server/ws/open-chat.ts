@@ -58,31 +58,14 @@ export function resolveOpeningPrompt(
 
 /**
  * Open or reattach a warm ACP chat from a resolved ChatSession descriptor.
- * Registry and bridge stay card-agnostic — only opaque id + injected policies.
+ * Registry acquire wires live callbacks from the session itself.
  */
 export async function openChat(
   session: ChatSession,
   deps: Pick<OpenChatDeps, "spawn" | "sessions">,
 ): Promise<OpenChatResult> {
-  session.assertMutable();
   const history = session.loadTranscript();
-
-  const handle = await deps.sessions.acquire(session.id, {
-    spawn: deps.spawn,
-    cwd: session.cwd,
-    openingPrompt: session.openingPrompt,
-    history,
-    model: session.model,
-    interactivePermissionPolicy: session.interactivePermissionPolicy,
-    onStatus: (status) => session.notifyStatus(status),
-    onTranscript: (messages) => {
-      session.assertMutable();
-      session.saveTranscript(messages);
-    },
-    onTurnComplete: session.onTurnComplete,
-    frameUserMessage: session.frameUserMessage,
-  });
-
+  const handle = await deps.sessions.acquire(session, { spawn: deps.spawn });
   return { history, handle };
 }
 

@@ -1,4 +1,3 @@
-import type { UIMessage } from "ai";
 import type { BranchableTranscript } from "@shared/branchable-transcript";
 import { emptyTranscript } from "@shared/branchable-transcript";
 import {
@@ -10,14 +9,12 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Thread, ThreadShell } from "@/components/assistant-ui/thread";
 import { ChatModelPicker } from "@/components/chat/ChatModelPicker";
-import { ProjectChatRewindProvider } from "@/components/chat/project-chat-rewind-context";
 import { ReconnectingBanner } from "@/components/chat/ReconnectingBanner";
 import { FrozenTranscriptView } from "@/components/grill/ReadOnlyTranscript";
 import { PermissionDataUI } from "@/components/grill/PermissionPartView";
 import { GrillTransportContext } from "@/components/grill/transport-context";
 import { Button } from "@/components/ui/button";
 import { AcpChatProvider, useAcpChat } from "@/hooks/useAcpChat";
-import type { AcpChatTransport } from "@/hooks/acp-chat-transport";
 import { api, type ChatThread } from "@/lib/api";
 import {
   createProjectChatBranchAdapter,
@@ -77,6 +74,8 @@ export function ChatThreadView({
       </div>
       {thread ? (
         <LiveProjectChat
+          // Remount on model pin change (spawn identity); soft-reattach on Rewind.
+          key={`${thread.id}:${thread.model ?? ""}`}
           thread={thread}
           welcomeTitle={thread.title.trim() || "New Chat"}
           onStreamingSettled={onStreamingSettled}
@@ -102,7 +101,7 @@ function LiveProjectChat({
   onStreamingSettled?: () => void;
   onThreadUpdated?: (thread: ChatThread) => void;
 }) {
-  const [rewindEpoch, setRewindEpoch] = useState(0);
+  const [rewinding, setRewinding] = useState(false);
   const [pendingSend, setPendingSend] = useState<{
     text: string;
     key: string;
@@ -110,93 +109,19 @@ function LiveProjectChat({
   const [branchable, setBranchable] = useState<BranchableTranscript>(
     emptyTranscript(),
   );
-
-  // Authoritative branch tree for the picker (reload-safe).
-  useEffect(() => {
-    let cancelled = false;
-    void api
-      .getChatThreadTranscript(thread.id)
-      .then((t) => {
-        if (!cancelled) setBranchable(t);
-      })
-      .catch(() => {
-        /* picker stays empty until a successful load */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [thread.id, rewindEpoch]);
-
-  return (
-    <LiveProjectChatSession
-      key={`${thread.id}:${thread.model ?? ""}:${rewindEpoch}`}
-      thread={thread}
-      welcomeTitle={welcomeTitle}
-      branchable={branchable}
-      pendingSend={pendingSend}
-      onStreamingSettled={() => {
-        onStreamingSettled?.();
-        // Siblings may have been written after the turn — refresh picker.
-        void api
-          .getChatThreadTranscript(thread.id)
-          .then(setBranchable)
-          .catch(() => {});
-      }}
-      onThreadUpdated={onThreadUpdated}
-      onAutoSendConsumed={() => setPendingSend(null)}
-      onRewound={(next, sendText) => {
-        setBranchable(next.branchable);
-        setPendingSend(
-          sendText
-            ? { text: sendText, key: `${Date.now()}:${sendText.length}` }
-            : null,
-        );
-        setRewindEpoch((n) => n + 1);
-      }}
-    />
-  );
-}
-
-function LiveProjectChatSession({
-  thread,
-  welcomeTitle,
-  branchable,
-  pendingSend,
-  onStreamingSettled,
-  onThreadUpdated,
-  onAutoSendConsumed,
-  onRewound,
-}: {
-  thread: ChatThread;
-  welcomeTitle: string;
-  branchable: BranchableTranscript;
-  pendingSend: { text: string; key: string } | null;
-  onStreamingSettled?: () => void;
-  onThreadUpdated?: (thread: ChatThread) => void;
-  onAutoSendConsumed: () => void;
-  onRewound: (
-    result: { messages: UIMessage[]; branchable: BranchableTranscript },
-    pendingSendText?: string,
-  ) => void;
-}) {
-  const [rewinding, setRewinding] = useState(false);
-  const transportRef = useRef<AcpChatTransport | null>(null);
   const branchableRef = useRef(branchable);
   branchableRef.current = branchable;
 
   const chat = useAcpChat({
     threadId: thread.id,
+    softDisplaceReasons: ["rewound"],
+    onBranchable: setBranchable,
     onStreamingChange: (streaming) => {
       if (!streaming) onStreamingSettled?.();
     },
   });
 
-  if (chat.status === "ready") {
-    transportRef.current = chat.transport;
-  }
-
-  // If warm ACP was closed for a model change (this client or another), refresh
-  // the thread row so the remount key picks up the persisted pin.
+  // Model pin changed elsewhere → refresh row so the remount key picks it up.
   useEffect(() => {
     if (chat.status !== "displaced" || chat.reason !== "model changed") return;
     let cancelled = false;
@@ -215,7 +140,6 @@ function LiveProjectChatSession({
 
   async function handleModelChange(model: string | null) {
     try {
-      // Persist + close warm ACP first so the remounted session reads the new pin.
       const updated = await api.setChatThreadModel(thread.id, model);
       onThreadUpdated?.(updated);
     } catch (err) {
@@ -227,21 +151,23 @@ function LiveProjectChatSession({
     op: Parameters<typeof api.rewindChatThread>[1],
     sendText?: string,
   ) {
-    const transport = transportRef.current;
     setRewinding(true);
     try {
-      // Close our socket first so "rewound" displacement is expected teardown.
-      transport?.close();
+      // Keep the socket open so "rewound" soft-displaces and reattaches.
       const result = await api.rewindChatThread(thread.id, op);
-      onRewound(result, sendText);
+      setBranchable(result.branchable);
+      if (result.warm.status === "failed") {
+        toast.error(result.warm.error || "Warm agent failed to respawn");
+      }
+      setPendingSend(
+        sendText
+          ? { text: sendText, key: `${Date.now()}:${sendText.length}` }
+          : null,
+      );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not rewind chat");
+    } finally {
       setRewinding(false);
-      // Force remount to recover a live socket even if rewind failed mid-close.
-      onRewound(
-        { messages: [], branchable: branchableRef.current },
-        undefined,
-      );
     }
   }
 
@@ -274,15 +200,12 @@ function LiveProjectChatSession({
   }
 
   if (chat.status === "displaced") {
-    // Edit/branch rewind closes the warm slot; parent remounts on epoch bump.
-    if (chat.reason === "rewound" || chat.reason === "model changed") {
+    // Soft "rewound" never lands here; model change remounts via key.
+    if (chat.reason === "model changed") {
       return <ThreadShell composerLeading={modelPicker} />;
     }
     return (
-      <DisplacedProjectChat
-        reason={chat.reason}
-        messages={chat.messages}
-      />
+      <DisplacedProjectChat reason={chat.reason} messages={chat.messages} />
     );
   }
 
@@ -302,12 +225,17 @@ function LiveProjectChatSession({
         autoSendText={pendingSend?.text ?? null}
         autoSendKey={pendingSend?.key ?? null}
         sessionOpen={chat.sessionOpen}
-        onAutoSendConsumed={onAutoSendConsumed}
+        onAutoSendConsumed={() => setPendingSend(null)}
       >
         <GrillTransportContext.Provider value={chat.transport}>
           <PermissionDataUI />
-          <ProjectChatRewindProvider
-            value={{
+          <Thread
+            sessionOpen={chat.sessionOpen && !rewinding}
+            welcomeTitle={welcomeTitle}
+            attachmentsEnabled={chat.attachmentsEnabled}
+            openingPlaceholder="Warming agent — you can type…"
+            composerLeading={modelPicker}
+            rewind={{
               getBranches: (id) => branchAdapter.getBranches(id),
               onSwitchBranch: (id) => branchAdapter.switchToBranch(id),
               onEditMessage: (messageId, text) => {
@@ -318,15 +246,7 @@ function LiveProjectChatSession({
               },
               disabled: rewindDisabled,
             }}
-          >
-            <Thread
-              sessionOpen={chat.sessionOpen && !rewinding}
-              welcomeTitle={welcomeTitle}
-              attachmentsEnabled={chat.attachmentsEnabled}
-              openingPlaceholder="Warming agent — you can type…"
-              composerLeading={modelPicker}
-            />
-          </ProjectChatRewindProvider>
+          />
         </GrillTransportContext.Provider>
       </AcpChatProvider>
     </div>
@@ -338,7 +258,7 @@ function DisplacedProjectChat({
   messages,
 }: {
   reason: string;
-  messages: UIMessage[];
+  messages: import("ai").UIMessage[];
 }) {
   const banner =
     reason === "session continued elsewhere"

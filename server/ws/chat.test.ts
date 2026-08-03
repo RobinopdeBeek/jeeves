@@ -1271,7 +1271,13 @@ describe("AcpBridge", () => {
     }>;
     expect(prompt[0]!.type).toBe("text");
     expect(prompt[0]!.text).toContain("[attached: dot.png (image/png)]");
-    expect(prompt.some((b) => b.type === "image")).toBe(true);
+    expect(prompt[0]!.text).toContain("User: Again?");
+    // Prior images are emitted before any latest-turn attachment blocks.
+    const imageIndexes = prompt
+      .map((b, i) => (b.type === "image" ? i : -1))
+      .filter((i) => i >= 0);
+    expect(imageIndexes.length).toBeGreaterThan(0);
+    expect(imageIndexes[0]).toBe(1);
 
     const promptReq = process.promptRequest();
     process.emit({

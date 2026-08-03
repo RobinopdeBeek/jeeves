@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import type { PermissionRequestData } from "@/hooks/acp-chat-transport";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { AttachmentChip } from "@/components/assistant-ui/attachment-chip";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { PermissionPartView } from "./PermissionPartView";
 
@@ -93,21 +94,11 @@ function ReadOnlyMessage({ message }: { message: UIMessage }) {
               const label = file.filename?.trim() || file.mediaType;
               const isImage = file.mediaType.startsWith("image/");
               return (
-                <div
+                <AttachmentChip
                   key={i}
-                  className="inline-flex max-w-xs items-center gap-2 rounded-lg border border-border bg-muted/60 px-2.5 py-1.5 text-xs text-foreground"
-                >
-                  {isImage ? (
-                    <img
-                      src={file.url}
-                      alt={label}
-                      className="size-8 rounded object-cover"
-                    />
-                  ) : null}
-                  <span className="truncate" title={label}>
-                    {label}
-                  </span>
-                </div>
+                  name={label}
+                  previewUrl={isImage ? file.url : undefined}
+                />
               );
             })}
           </div>

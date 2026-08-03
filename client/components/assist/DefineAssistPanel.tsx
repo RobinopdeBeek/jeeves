@@ -7,7 +7,6 @@ import { motion, useReducedMotion } from "motion/react";
 import { useEffect, useState, useRef, type ReactNode } from "react";
 import type { UIMessage } from "ai";
 import { Thread, ThreadShell } from "@/components/assistant-ui/thread";
-import { attachmentAcceptFor } from "@shared/prompt-capabilities";
 import { AcpChatProvider, useAcpChat } from "@/hooks/useAcpChat";
 import { ReconnectingBanner } from "@/components/chat/ReconnectingBanner";
 import { PermissionDataUI } from "@/components/grill/PermissionPartView";
@@ -294,7 +293,7 @@ export function DefineAssistChat({
     <div className="flex min-h-0 flex-1 flex-col">
       {chat.connection === "reconnecting" ? <ReconnectingBanner /> : null}
       <AcpChatProvider
-        key={`${chat.epoch}:${attachmentAcceptFor(chat.promptCapabilities)}`}
+        key={`${chat.epoch}:${chat.attachmentsEnabled ? "att" : "plain"}`}
         transport={chat.transport}
         messages={chat.messages}
         promptCapabilities={chat.promptCapabilities}
@@ -305,9 +304,7 @@ export function DefineAssistChat({
             // Keep sessionOpen true while streaming — flipping it false swaps the
             // composer for a "Starting session" spinner and feels like the panel hid.
             sessionOpen={chat.sessionOpen}
-            attachmentsEnabled={
-              attachmentAcceptFor(chat.promptCapabilities).length > 0
-            }
+            attachmentsEnabled={chat.attachmentsEnabled}
             placeholder={
               composerLocked
                 ? labels.workingPlaceholder

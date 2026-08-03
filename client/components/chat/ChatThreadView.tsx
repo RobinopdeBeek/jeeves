@@ -13,7 +13,6 @@ import { FrozenTranscriptView } from "@/components/grill/ReadOnlyTranscript";
 import { PermissionDataUI } from "@/components/grill/PermissionPartView";
 import { GrillTransportContext } from "@/components/grill/transport-context";
 import { Button } from "@/components/ui/button";
-import { attachmentAcceptFor } from "@shared/prompt-capabilities";
 import { AcpChatProvider, useAcpChat } from "@/hooks/useAcpChat";
 import { api, type ChatThread } from "@/lib/api";
 import { toast } from "sonner";
@@ -171,7 +170,7 @@ function LiveProjectChat({
     <div className="flex min-h-0 flex-1 flex-col">
       {chat.connection === "reconnecting" ? <ReconnectingBanner /> : null}
       <AcpChatProvider
-        key={`${chat.epoch}:${attachmentAcceptFor(chat.promptCapabilities)}`}
+        key={`${chat.epoch}:${chat.attachmentsEnabled ? "att" : "plain"}`}
         transport={chat.transport}
         messages={chat.messages}
         promptCapabilities={chat.promptCapabilities}
@@ -181,9 +180,7 @@ function LiveProjectChat({
           <Thread
             sessionOpen={chat.sessionOpen}
             welcomeTitle={welcomeTitle}
-            attachmentsEnabled={
-              attachmentAcceptFor(chat.promptCapabilities).length > 0
-            }
+            attachmentsEnabled={chat.attachmentsEnabled}
             openingPlaceholder="Warming agent — you can type…"
             composerLeading={modelPicker}
           />

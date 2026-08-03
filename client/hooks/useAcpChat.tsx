@@ -4,13 +4,27 @@ import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ChatTransport, UIMessage } from "ai";
 import type { PromptCapabilities } from "@shared/chat-ws";
-import { EMPTY_PROMPT_CAPABILITIES } from "@shared/prompt-capabilities";
+import {
+  attachmentAcceptFor,
+  EMPTY_PROMPT_CAPABILITIES,
+} from "@shared/prompt-capabilities";
 import type { TasksDraftTip } from "@/lib/api";
 import { createAcpAttachmentAdapter } from "./acp-attachment-adapter";
 import {
   AcpChatTransport,
   type ChatConnectionState,
 } from "./acp-chat-transport";
+
+function capsFromTransport(transport: AcpChatTransport): {
+  promptCapabilities: PromptCapabilities;
+  attachmentsEnabled: boolean;
+} {
+  const promptCapabilities = transport.getPromptCapabilities();
+  return {
+    promptCapabilities,
+    attachmentsEnabled: attachmentAcceptFor(promptCapabilities).length > 0,
+  };
+}
 
 export interface UseAcpChatOptions {
   /** Step chat coordinates. Mutually exclusive with threadId. */
@@ -43,6 +57,8 @@ export type AcpChatState =
       epoch: number;
       /** Negotiated ACP prompt attachment kinds (gates the composer paperclip). */
       promptCapabilities: PromptCapabilities;
+      /** True when the session advertises at least one attachable kind. */
+      attachmentsEnabled: boolean;
     }
   | {
       status: "displaced";
@@ -106,14 +122,24 @@ export function useAcpChat({
               : connection === "open"
                 ? true
                 : prev.sessionOpen;
-          return { ...prev, connection, sessionOpen };
+          return {
+            ...prev,
+            connection,
+            sessionOpen,
+            ...capsFromTransport(transport),
+          };
         });
       },
       onReconnected: (history) => {
         if (cancelled) return;
         setState((prev) =>
           prev.status === "ready"
-            ? { ...prev, messages: history, epoch: prev.epoch + 1 }
+            ? {
+                ...prev,
+                messages: history,
+                epoch: prev.epoch + 1,
+                ...capsFromTransport(transport),
+              }
             : prev,
         );
       },
@@ -138,7 +164,7 @@ export function useAcpChat({
           sessionOpen: transport.isSessionOpen(),
           connection: transport.getConnectionState(),
           epoch: 0,
-          promptCapabilities: transport.getPromptCapabilities(),
+          ...capsFromTransport(transport),
         });
         void transport
           .whenSessionOpen()
@@ -150,7 +176,7 @@ export function useAcpChat({
                     ...prev,
                     sessionOpen: true,
                     connection: "open",
-                    promptCapabilities: transport.getPromptCapabilities(),
+                    ...capsFromTransport(transport),
                   }
                 : prev,
             );

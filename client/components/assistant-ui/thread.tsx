@@ -1,6 +1,7 @@
 "use client";
 
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
+import { AttachmentChip } from "@/components/assistant-ui/attachment-chip";
 import { ComposerTriggerPopover } from "@/components/assistant-ui/composer-trigger-popover";
 import { createDirectiveText } from "@/components/assistant-ui/directive-text";
 import { Badge } from "@/components/assistant-ui/badge";
@@ -402,18 +403,23 @@ const Composer: FC<{
 };
 
 const ComposerAttachmentChip: FC = () => {
+  const name = useAuiState((s) => s.attachment.name);
   return (
-    <AttachmentPrimitive.Root className="aui-composer-attachment group relative inline-flex max-w-48 items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-xs">
-      <AttachmentPrimitive.Name className="truncate" />
-      <AttachmentPrimitive.Remove asChild>
-        <button
-          type="button"
-          className="rounded-sm text-muted-foreground hover:text-foreground"
-          aria-label="Remove attachment"
-        >
-          <IconX className="size-3.5" />
-        </button>
-      </AttachmentPrimitive.Remove>
+    <AttachmentPrimitive.Root>
+      <AttachmentChip
+        name={name}
+        trailing={
+          <AttachmentPrimitive.Remove asChild>
+            <button
+              type="button"
+              className="shrink-0 text-muted-foreground hover:text-foreground"
+              aria-label="Remove attachment"
+            >
+              <IconX className="size-3.5" />
+            </button>
+          </AttachmentPrimitive.Remove>
+        }
+      />
     </AttachmentPrimitive.Root>
   );
 };
@@ -621,19 +627,9 @@ const UserMessage: FC = () => {
 
 const UserMessageAttachment: FC = () => {
   const name = useAuiState((s) => s.attachment.name);
-  const type = useAuiState((s) => s.attachment.type);
   return (
     <AttachmentPrimitive.Root className="mb-1.5 flex justify-end">
-      <div className="inline-flex max-w-xs items-center gap-2 rounded-lg border border-border bg-muted/60 px-2.5 py-1.5 text-xs text-foreground">
-        {type === "image" ? (
-          <AttachmentPrimitive.unstable_Thumb className="size-8 shrink-0 overflow-hidden rounded bg-background text-[10px] leading-8 text-center text-muted-foreground" />
-        ) : (
-          <IconPaperclip className="size-3.5 shrink-0 text-muted-foreground" />
-        )}
-        <span className="truncate" title={name}>
-          {name}
-        </span>
-      </div>
+      <AttachmentChip name={name} />
     </AttachmentPrimitive.Root>
   );
 };

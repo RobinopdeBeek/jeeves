@@ -92,6 +92,21 @@ describe("assertAttachmentsAllowed", () => {
       ),
     ).toThrow(/data URL/i);
   });
+
+  it("rejects mediaType that disagrees with the data URL MIME", () => {
+    expect(() =>
+      assertAttachmentsAllowed(
+        [
+          {
+            mediaType: "image/png",
+            filename: "a.pdf",
+            url: "data:application/pdf;base64,aa==",
+          },
+        ],
+        { ...EMPTY_PROMPT_CAPABILITIES, image: true },
+      ),
+    ).toThrow(/media type mismatch/i);
+  });
 });
 
 describe("unsupportedAttachmentMessage / attachmentMarker", () => {

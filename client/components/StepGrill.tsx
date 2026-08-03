@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import type { UIMessage } from "ai";
 import { Thread, ThreadShell } from "@/components/assistant-ui/thread";
-import { attachmentAcceptFor } from "@shared/prompt-capabilities";
 import { AcpChatProvider, useAcpChat } from "@/hooks/useAcpChat";
 import { ReconnectingBanner } from "@/components/chat/ReconnectingBanner";
 import { PermissionDataUI } from "@/components/grill/PermissionPartView";
@@ -86,7 +85,7 @@ function LiveGrill({
       {chat.connection === "reconnecting" ? <ReconnectingBanner /> : null}
       {/* epoch remounts the runtime after a reconnect so the server transcript wins. */}
       <AcpChatProvider
-        key={`${chat.epoch}:${attachmentAcceptFor(chat.promptCapabilities)}`}
+        key={`${chat.epoch}:${chat.attachmentsEnabled ? "att" : "plain"}`}
         transport={chat.transport}
         messages={chat.messages}
         promptCapabilities={chat.promptCapabilities}
@@ -95,9 +94,7 @@ function LiveGrill({
           <PermissionDataUI />
           <Thread
             sessionOpen={chat.sessionOpen}
-            attachmentsEnabled={
-              attachmentAcceptFor(chat.promptCapabilities).length > 0
-            }
+            attachmentsEnabled={chat.attachmentsEnabled}
           />
         </GrillTransportContext.Provider>
       </AcpChatProvider>

@@ -1,6 +1,8 @@
 /**
- * Browser-safe prompt attachment capabilities (ACP vocabulary stays server-side).
- * Omitted / unknown agent fields fail closed as unsupported.
+ * Browser-safe prompt attachment capabilities projected from ACP initialize
+ * (ADR 0008: no ACP types on the client). Field names mirror the protocol's
+ * promptCapabilities so the wire DTO stays stable; omitted / unknown agent
+ * fields fail closed as unsupported.
  */
 
 export type PromptCapabilities = {
@@ -124,7 +126,23 @@ export function assertAttachmentsAllowed(
         `Attachment "${att.filename ?? mediaType}" must be a data URL.`,
       );
     }
+    const dataMime = dataUrlMimeType(att.url);
+    if (
+      dataMime &&
+      mediaType &&
+      dataMime.toLowerCase() !== mediaType.trim().toLowerCase()
+    ) {
+      throw new Error(
+        `Attachment "${att.filename ?? mediaType}" media type mismatch (declared ${mediaType}, data is ${dataMime}).`,
+      );
+    }
   }
+}
+
+/** MIME type from a `data:` URL, or null when the URL is not a data URL. */
+export function dataUrlMimeType(url: string): string | null {
+  const match = /^data:([^;,]+)(?:[;,])/i.exec(url.trim());
+  return match?.[1]?.toLowerCase() ?? null;
 }
 
 /** Compact marker for transcript text / Grill extract when binary context is omitted. */

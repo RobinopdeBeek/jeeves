@@ -107,7 +107,7 @@ describe("buildSeedPromptContentBlocks", () => {
     const text = (blocks[0] as { text: string }).text;
     expect(text).toContain("[attached: dot.png (image/png)]");
     expect(text).toContain("User: And now?");
-    expect(blocks.some((b) => b.type === "image")).toBe(true);
+    expect(blocks[1]).toMatchObject({ type: "image", mimeType: "image/png" });
   });
 });
 

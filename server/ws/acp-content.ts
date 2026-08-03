@@ -167,17 +167,7 @@ export function buildSeedPromptContentBlocks(opts: {
     "Prior transcript (continue from here; do not repeat answered questions):",
     ...lines,
     "",
-    "User:",
   ].join("\n");
-
-  // Fold the latest text into the preamble when present so role labels stay clear;
-  // attachment ContentBlocks follow as structured blocks.
-  const latestTextBlock = latestBlocks.find((b) => b.type === "text");
-  const latestNonText = latestBlocks.filter((b) => b.type !== "text");
-  const textBody =
-    latestTextBlock && latestTextBlock.type === "text"
-      ? `${preamble} ${latestTextBlock.text}`
-      : `${preamble} (see attachments)`;
 
   const priorAttachmentBlocks: AcpContentBlock[] = [];
   for (const message of prior) {
@@ -193,8 +183,15 @@ export function buildSeedPromptContentBlocks(opts: {
     }
   }
 
+  const latestTextBlock = latestBlocks.find((b) => b.type === "text");
+  const latestNonText = latestBlocks.filter((b) => b.type !== "text");
+  const latestText =
+    latestTextBlock && latestTextBlock.type === "text"
+      ? latestTextBlock.text
+      : "(see attachments)";
+
   return [
-    { type: "text", text: textBody },
+    { type: "text", text: `${preamble}User: ${latestText}` },
     ...priorAttachmentBlocks,
     ...latestNonText,
   ];

@@ -4,7 +4,6 @@ import type {
   WsClientMessage,
   WsServerMessage,
 } from "../../shared/chat-ws.js";
-import { assertAttachmentsAllowed } from "../../shared/prompt-capabilities.js";
 import type { ArtifactStore } from "../artifacts/store.js";
 import type { CardStore } from "../cards/store.js";
 import type { ChatThreadStore } from "../chat-threads/store.js";
@@ -239,19 +238,6 @@ export class ChatConnection {
     const text = msg.text.trim();
     if (!text && attachments.length === 0) {
       this.send({ type: "error", error: "unsupported message" });
-      return;
-    }
-
-    try {
-      assertAttachmentsAllowed(
-        attachments,
-        this.handle.getPromptCapabilities(),
-      );
-    } catch (err) {
-      this.send({
-        type: "error",
-        error: err instanceof Error ? err.message : String(err),
-      });
       return;
     }
 

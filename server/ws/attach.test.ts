@@ -148,8 +148,17 @@ describe("ChatConnection attachments", () => {
     expect(sent).toEqual([]);
   });
 
-  it("rejects unsupported attachments with a clear error", async () => {
+  it("surfaces bridge errors for rejected attachments", async () => {
     const { sent, sends, conn } = connectedHarness({});
+    (
+      conn as unknown as {
+        handle: { sendMessage: () => Promise<void> };
+      }
+    ).handle.sendMessage = async () => {
+      throw new Error(
+        'Attachments are not supported by this agent session (rejected "image/png").',
+      );
+    };
     await conn.onClientMessage(
       JSON.stringify({
         type: "user-message",

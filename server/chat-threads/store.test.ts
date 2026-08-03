@@ -84,6 +84,22 @@ describe("ChatThreadStore", () => {
     expect(threads.getThread(thread.id)?.title).toBe("Refactor plan");
   });
 
+  it("persists a per-thread model id (and clears it back to null)", () => {
+    const thread = threads.createOrReuseEmptyDraft(project.id);
+    const pinned = threads.setModel(thread.id, "composer-2.5");
+
+    expect(pinned?.model).toBe("composer-2.5");
+    expect(threads.getThread(thread.id)?.model).toBe("composer-2.5");
+
+    const cleared = threads.setModel(thread.id, null);
+    expect(cleared?.model).toBeNull();
+  });
+
+  it("rejects a blank model id", () => {
+    const thread = threads.createOrReuseEmptyDraft(project.id);
+    expect(() => threads.setModel(thread.id, "  ")).toThrow(/model/i);
+  });
+
   it("returns the last-opened thread", () => {
     const a = threads.createOrReuseEmptyDraft(project.id);
     threads.renameThread(a.id, "First");

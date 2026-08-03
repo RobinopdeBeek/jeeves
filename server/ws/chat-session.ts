@@ -42,6 +42,11 @@ export interface ChatSession {
   cwd: string;
   /** Null = warm without auto agent turn (Project Chat). */
   openingPrompt: string | null;
+  /**
+   * Pin via `agent --model <id> acp` for Project Chat; omit/null = CLI default
+   * (board step chats).
+   */
+  model?: string | null;
   loadTranscript(): UIMessage[];
   saveTranscript(messages: UIMessage[]): void;
   assertMutable(): void;
@@ -228,6 +233,7 @@ export function createProjectChatSession(
     id: threadChatSessionId(ref.threadId),
     cwd: deps.cwd,
     openingPrompt: null,
+    model: thread.model,
     loadTranscript: () => deps.threads.loadTranscript(ref.threadId),
     saveTranscript: (messages) => {
       deps.threads.saveTranscript(ref.threadId, messages);

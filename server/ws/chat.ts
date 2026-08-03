@@ -22,7 +22,15 @@ export interface AcpProcess {
   kill(): void;
 }
 
-export type SpawnAcp = (cwd: string) => AcpProcess | Promise<AcpProcess>;
+/** Optional spawn knobs — omit model to keep the CLI default. */
+export interface SpawnAcpOptions {
+  model?: string | null;
+}
+
+export type SpawnAcp = (
+  cwd: string,
+  options?: SpawnAcpOptions,
+) => AcpProcess | Promise<AcpProcess>;
 
 export interface AcpLiveCallbacks {
   onStatus: (status: "ai-working" | "needs-user") => void;
@@ -46,6 +54,8 @@ export interface OpenSessionOptions {
    * `project-chat` auto-approves reads only (shell + file writes prompt).
    */
   interactivePermissionPolicy?: InteractivePermissionPolicy;
+  /** Pin via `agent --model <id> acp`; omit/null = CLI default. */
+  model?: string | null;
 }
 
 /**
@@ -255,7 +265,7 @@ export class AcpBridge {
     this.messages = options.history ? [...options.history] : [];
     this.contextSeeded = this.messages.length === 0;
     this.interactivePolicy = options.interactivePermissionPolicy ?? null;
-    this.process = await this.deps.spawn(options.cwd);
+    this.process = await this.deps.spawn(options.cwd, { model: options.model });
     this.process.onLine((line) => this.handleLine(line));
 
     await this.rpc("initialize", {

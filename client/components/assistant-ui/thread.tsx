@@ -41,7 +41,7 @@ import {
   IconTool,
   IconWorld,
 } from "@tabler/icons-react";
-import { type FC } from "react";
+import { type FC, type ReactNode } from "react";
 
 export type ThreadProps = {
   /** ACP (or other) session ready — send is enabled. */
@@ -60,6 +60,11 @@ export type ThreadProps = {
    * attachments land in a later ticket; step chats keep the stubs for now.
    */
   showComposerMediaStubs?: boolean;
+  /**
+   * Optional leading composer chrome (e.g. Project Chat model picker).
+   * Grill / Spec / Tasks omit this.
+   */
+  composerLeading?: ReactNode;
 };
 
 const COMPOSER_SHELL =
@@ -145,6 +150,7 @@ export const Thread: FC<ThreadProps> = ({
   placeholder = "Send a message... (@ to mention, / for commands)",
   openingPlaceholder = "Agent starting — you can type…",
   showComposerMediaStubs = true,
+  composerLeading,
 }) => {
   const isEmpty = useAuiState(isEmptyThread);
 
@@ -197,6 +203,7 @@ export const Thread: FC<ThreadProps> = ({
               placeholder={placeholder}
               openingPlaceholder={openingPlaceholder}
               showComposerMediaStubs={showComposerMediaStubs}
+              composerLeading={composerLeading}
             />
           </ThreadPrimitive.ViewportFooter>
         </div>
@@ -319,7 +326,14 @@ const Composer: FC<{
   placeholder: string;
   openingPlaceholder: string;
   showComposerMediaStubs: boolean;
-}> = ({ sessionOpen, placeholder, openingPlaceholder, showComposerMediaStubs }) => {
+  composerLeading?: ReactNode;
+}> = ({
+  sessionOpen,
+  placeholder,
+  openingPlaceholder,
+  showComposerMediaStubs,
+  composerLeading,
+}) => {
   const mention = unstable_useMentionAdapter({
     includeModelContextTools: false,
     items: [
@@ -356,6 +370,7 @@ const Composer: FC<{
           <ComposerAction
             sessionOpen={sessionOpen}
             showComposerMediaStubs={showComposerMediaStubs}
+            composerLeading={composerLeading}
           />
         </div>
 
@@ -376,10 +391,13 @@ const Composer: FC<{
 const ComposerAction: FC<{
   sessionOpen: boolean;
   showComposerMediaStubs: boolean;
-}> = ({ sessionOpen, showComposerMediaStubs }) => {
+  composerLeading?: ReactNode;
+}> = ({ sessionOpen, showComposerMediaStubs, composerLeading }) => {
   return (
-    <div className="aui-composer-action-wrapper relative flex items-center justify-between">
-      {showComposerMediaStubs ? (
+    <div className="aui-composer-action-wrapper relative flex items-center justify-between gap-2">
+      {composerLeading ? (
+        <div className="min-w-0">{composerLeading}</div>
+      ) : showComposerMediaStubs ? (
         <TooltipIconButton
           tooltip="Attach file"
           side="bottom"

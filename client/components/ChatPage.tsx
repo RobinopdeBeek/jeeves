@@ -104,6 +104,11 @@ export function ChatPage() {
     }
   }
 
+  function handleThreadUpdated(updated: ChatThread) {
+    setThreads((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+    if (active?.id === updated.id) setActive(updated);
+  }
+
   async function handleDelete(id: string) {
     try {
       await api.deleteChatThread(id);
@@ -151,6 +156,7 @@ export function ChatPage() {
         onStreamingSettled={() => {
           void refreshActiveTitle();
         }}
+        onThreadUpdated={handleThreadUpdated}
       />
     );
   }
@@ -177,6 +183,7 @@ export function ChatPage() {
         onStreamingSettled={() => {
           void refreshActiveTitle();
         }}
+        onThreadUpdated={handleThreadUpdated}
       />
     </div>
   );

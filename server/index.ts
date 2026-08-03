@@ -24,6 +24,7 @@ import { cardRoutes } from "./routes/cards.js";
 import { chatThreadRoutes } from "./routes/chat-threads.js";
 import { eventRoutes } from "./routes/events.js";
 import { artifactRoutes } from "./routes/artifacts.js";
+import { modelRoutes } from "./routes/models.js";
 import { runRoutes } from "./routes/runs.js";
 import { ChatSessionRegistry } from "./ws/session-registry.js";
 import { spawnAcp } from "./ws/acp-process.js";
@@ -76,11 +77,15 @@ const chatDeps = {
 const app = new Hono();
 
 app.get("/api/project", (c) => c.json(project));
+app.route("/api/models", modelRoutes());
 app.route(
   "/api/chat-threads",
   chatThreadRoutes(chatThreads, project, {
     onThreadDeleted: (threadId) => {
       chatSessions.close(`thread:${threadId}`, "thread deleted");
+    },
+    onThreadModelChanged: (threadId) => {
+      chatSessions.close(`thread:${threadId}`, "model changed");
     },
   }),
 );

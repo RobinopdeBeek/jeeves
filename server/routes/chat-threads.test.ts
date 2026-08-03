@@ -101,4 +101,56 @@ describe("chat thread routes", () => {
     await app.request("http://localhost/missing", { method: "DELETE" });
     expect(deleted).toEqual([]);
   });
+
+  it("PATCHes model and notifies onThreadModelChanged", async () => {
+    const changed: Array<{ id: string; model: string | null }> = [];
+    const app = chatThreadRoutes(store, project, {
+      onThreadModelChanged: (id, model) => changed.push({ id, model }),
+    });
+    const created = (await (
+      await app.request("http://localhost/", { method: "POST" })
+    ).json()) as { id: string };
+
+    const res = await app.request(`http://localhost/${created.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ model: "composer-2.5" }),
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(
+      expect.objectContaining({ id: created.id, model: "composer-2.5" }),
+    );
+    expect(changed).toEqual([{ id: created.id, model: "composer-2.5" }]);
+
+    const clearRes = await app.request(`http://localhost/${created.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ model: null }),
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(clearRes.status).toBe(200);
+    expect(await clearRes.json()).toEqual(
+      expect.objectContaining({ model: null }),
+    );
+    expect(changed).toEqual([
+      { id: created.id, model: "composer-2.5" },
+      { id: created.id, model: null },
+    ]);
+  });
+
+  it("does not notify onThreadModelChanged when model is unchanged", async () => {
+    const changed: string[] = [];
+    const app = chatThreadRoutes(store, project, {
+      onThreadModelChanged: (id) => changed.push(id),
+    });
+    const created = (await (
+      await app.request("http://localhost/", { method: "POST" })
+    ).json()) as { id: string; model: string | null };
+
+    await app.request(`http://localhost/${created.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ model: created.model }),
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(changed).toEqual([]);
+  });
 });

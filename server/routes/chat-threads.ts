@@ -8,6 +8,8 @@ import type { Project } from "../db/schema.js";
 export interface ChatThreadRouteHooks {
   /** Evict warm ACP for a hard-deleted Chat Thread (opaque `thread:…` id). */
   onThreadDeleted?: (threadId: string) => void;
+  /** Replace warm ACP when the thread's pinned model changes. */
+  onThreadModelChanged?: (threadId: string, model: string | null) => void;
 }
 
 /** Thin HTTP adapter over the ChatThreadStore seam. */
@@ -33,13 +35,24 @@ export function chatThreadRoutes(
   });
 
   app.patch("/:id", async (c) => {
-    const body = await c.req.json<{ title?: string }>();
+    const body = await c.req.json<{ title?: string; model?: string | null }>();
     try {
+      const id = c.req.param("id");
+      if (body.model !== undefined) {
+        const before = store.getThread(id);
+        if (!before) return c.json({ error: "not found" }, 404);
+        const thread = store.setModel(id, body.model);
+        if (!thread) return c.json({ error: "not found" }, 404);
+        if (before.model !== thread.model) {
+          hooks.onThreadModelChanged?.(id, thread.model);
+        }
+        return c.json(thread);
+      }
       if (body.title !== undefined) {
-        const thread = store.renameThread(c.req.param("id"), body.title);
+        const thread = store.renameThread(id, body.title);
         return thread ? c.json(thread) : c.json({ error: "not found" }, 404);
       }
-      const existing = store.getThread(c.req.param("id"));
+      const existing = store.getThread(id);
       return existing ? c.json(existing) : c.json({ error: "not found" }, 404);
     } catch (e) {
       if (e instanceof ChatThreadStoreError) {

@@ -324,7 +324,7 @@ export class ExecutionEngine {
   }
 }
 
-/** Slice 4 — rework rounds land in slice 8; centralize the pin here. */
+/** Slice 8 stays on round 0; task rework rounds land in slice 12. */
 function currentRound(_cardId: string): number {
   return 0;
 }

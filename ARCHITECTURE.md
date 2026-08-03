@@ -103,7 +103,7 @@ Deliberately not built (revisit only when the need is real):
 - No cloud dependencies — no Supabase, no Cloudflare Workers, no deployment pipeline
 - No parallel execution — a sequential queue, one run at a time
 - No native mobile app — responsive web only
-- No custom diff renderer — the evaluation HTML carries its own inline diffs
+- No bespoke diff engine — Implement tab uses assistant-ui DiffViewer; evaluation HTML may inline diffs
 - No workflow editor — pipelines are code
   ([ADR 0002](./docs/adr/0002-workflow-is-code-state-is-data.md))
 - No prototype step in the pipeline
@@ -204,12 +204,13 @@ Column-level only; step mechanics live in `server/pipelines.ts` and the skill pr
    artifact ([ADR 0012](./docs/adr/0012-grill-session-qa-handoff.md)), then collaborative
    spec authoring, then the feature is broken into tip `tasks-draft` slices with blocked-by edges.
 3. **Fan-out**: the host materializes active child task cards from the tip.
-4. Each child task runs **Implement Task** (Plan → Implement → AI Review) autonomously,
-   then waits in **Human Review** with its Task Evaluation. Blocked tasks wait for blocker
-   merge; independent tasks may wait concurrently. Approval validates a temporary merge and
-   integration check against the current feature tip before merging and leaving the board.
-5. When all children are merged, the feature auto-advances to **Human Review** with its
-   Feature Evaluation.
+4. Each child task runs **Implement Task** (Plan → Implement → AI Review) autonomously —
+   `/implement` split across three context windows — then **Prepare Eval** builds the Task
+   Evaluation before human Review. Blocked tasks wait for blocker merge; unblocked siblings
+   execute depth-first. Approval validates a temporary merge and integration check against
+   the current feature tip before merging and leaving the board.
+5. When all children are merged, the feature auto-advances to **Human Review**; Prepare Eval
+   builds the Feature Evaluation.
 6. On approval, **Finalize** runs Document and Deploy, opening a PR from the feature branch
    to `main`. The card is done.
 

@@ -1,4 +1,5 @@
 import type { ChatTransport, UIMessage, UIMessageChunk } from "ai";
+import { injectQuoteContext } from "@assistant-ui/react-ai-sdk";
 import type {
   ChatAttachment,
   PromptCapabilities,
@@ -203,14 +204,19 @@ export class AcpChatTransport {
     ReadableStream<UIMessageChunk>
   > {
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
-    const text = lastUser
-      ? lastUser.parts
+    // assistant-ui stamps selection quotes on metadata.custom.quote — fold them
+    // into markdown blockquotes so the ACP prompt sees the quoted span.
+    const lastUserForSend = lastUser
+      ? (injectQuoteContext([lastUser])[0] ?? lastUser)
+      : undefined;
+    const text = lastUserForSend
+      ? lastUserForSend.parts
           .filter((p): p is { type: "text"; text: string } => p.type === "text")
           .map((p) => p.text)
           .join("")
       : "";
-    const attachments = lastUser
-      ? lastUser.parts
+    const attachments = lastUserForSend
+      ? lastUserForSend.parts
           .filter(
             (p): p is {
               type: "file";

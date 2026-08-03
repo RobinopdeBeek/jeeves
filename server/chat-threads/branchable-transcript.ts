@@ -143,7 +143,6 @@ export function syncActivePath(
     return { ...t, headId: null };
   }
 
-  const byId = nodeMap(t);
   const oldPath = activePath(t);
   let common = 0;
   while (

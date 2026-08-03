@@ -61,12 +61,31 @@ describe("ChatThreadStore", () => {
 
   it("creates a new thread when the draft transcript is no longer empty", () => {
     const first = threads.createOrReuseEmptyDraft(project.id);
-    fs.writeFileSync(
-      path.join(chatRoot, first.id, "transcript.json"),
-      `${JSON.stringify([{ id: "m1", role: "user", parts: [] }], null, 2)}\n`,
-    );
+    threads.saveTranscript(first.id, [
+      {
+        id: "m1",
+        role: "user",
+        parts: [{ type: "text", text: "hi" }],
+      },
+    ]);
     const second = threads.createOrReuseEmptyDraft(project.id);
 
+    expect(second.id).not.toBe(first.id);
+  });
+
+  it("does not treat a truncated-but-branched transcript as an empty draft", () => {
+    const first = threads.createOrReuseEmptyDraft(project.id);
+    threads.saveTranscript(first.id, [
+      {
+        id: "u1",
+        role: "user",
+        parts: [{ type: "text", text: "kept" }],
+      },
+    ]);
+    threads.truncateTranscript(first.id, null);
+    expect(threads.loadTranscript(first.id)).toEqual([]);
+
+    const second = threads.createOrReuseEmptyDraft(project.id);
     expect(second.id).not.toBe(first.id);
   });
 

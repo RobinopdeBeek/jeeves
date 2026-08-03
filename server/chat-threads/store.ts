@@ -186,24 +186,22 @@ export class ChatThreadStore {
     threadId: string,
     headId: string | null,
   ): UIMessage[] {
-    try {
-      const next = truncateTo(this.loadBranchable(threadId), headId);
-      this.writeBranchable(threadId, next);
-      return activePath(next);
-    } catch (e) {
-      throw new ChatThreadStoreError(
-        400,
-        e instanceof Error ? e.message : String(e),
-      );
-    }
+    return this.mutateBranchable(threadId, (t) => truncateTo(t, headId));
   }
 
   /**
    * Switch the active head to the tip of the branch containing `branchId`.
    */
   switchTranscriptBranch(threadId: string, branchId: string): UIMessage[] {
+    return this.mutateBranchable(threadId, (t) => switchToBranch(t, branchId));
+  }
+
+  private mutateBranchable(
+    threadId: string,
+    mutate: (t: BranchableTranscript) => BranchableTranscript,
+  ): UIMessage[] {
     try {
-      const next = switchToBranch(this.loadBranchable(threadId), branchId);
+      const next = mutate(this.loadBranchable(threadId));
       this.writeBranchable(threadId, next);
       return activePath(next);
     } catch (e) {
@@ -251,7 +249,8 @@ export class ChatThreadStore {
   }
 
   private isEmptyTranscript(threadId: string): boolean {
-    return this.loadTranscript(threadId).length === 0;
+    // Off-path siblings after a rewind still count — don't reuse as an empty draft.
+    return this.loadBranchable(threadId).messages.length === 0;
   }
 
   private ensureEmptyTranscript(threadId: string): void {

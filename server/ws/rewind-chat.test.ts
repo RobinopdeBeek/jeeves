@@ -158,7 +158,7 @@ describe("rewindProjectChat", () => {
     fs.rmSync(chatRoot, { recursive: true, force: true });
   });
 
-  it("switch action moves the active path to a sibling branch tip before respawn", async () => {
+  it("switch action kills warm ACP, respawns, and reseeds the sibling branch only", async () => {
     const db = openDb(":memory:");
     const cards = new CardStore(db);
     const project = cards.ensureDefaultProject("jeeves", "/tmp/repo");
@@ -167,33 +167,73 @@ describe("rewindProjectChat", () => {
     const thread = threads.createOrReuseEmptyDraft(project.id);
 
     threads.saveTranscript(thread.id, [
-      { id: "u1", role: "user", parts: [{ type: "text", text: "A" }] },
-      { id: "a1", role: "assistant", parts: [{ type: "text", text: "Ra" }] },
+      { id: "u1", role: "user", parts: [{ type: "text", text: "Branch A prompt" }] },
+      { id: "a1", role: "assistant", parts: [{ type: "text", text: "Branch A reply" }] },
     ]);
     threads.truncateTranscript(thread.id, null);
     threads.saveTranscript(thread.id, [
-      { id: "u2", role: "user", parts: [{ type: "text", text: "B" }] },
-      { id: "a2", role: "assistant", parts: [{ type: "text", text: "Rb" }] },
+      { id: "u2", role: "user", parts: [{ type: "text", text: "Branch B prompt" }] },
+      { id: "a2", role: "assistant", parts: [{ type: "text", text: "Branch B reply" }] },
     ]);
 
     const registry = new ChatSessionRegistry();
-    const process = new MockAcpProcess();
-    process.autoHandshake("sess-switch");
+    const first = new MockAcpProcess();
+    first.autoHandshake("sess-switch-1");
+    const second = new MockAcpProcess();
+    second.autoHandshake("sess-switch-2");
+    let spawnCount = 0;
+    const spawn = () => {
+      spawnCount += 1;
+      return spawnCount === 1 ? first : second;
+    };
+
+    const session = createProjectChatSession(
+      { threadId: thread.id },
+      { threads, cwd: "/tmp/repo" },
+    );
+    const before = await openChat(session, { spawn, sessions: registry });
+    expect(before.history.map((m) => m.id)).toEqual(["u2", "a2"]);
+    await completeTurn(first, before.handle, "still on B", "ok");
+    expect(promptText(first, 0)).toContain("Branch B prompt");
 
     const result = await rewindProjectChat(
       thread.id,
       { action: "switch", branchId: "u1" },
-      {
-        threads,
-        spawn: () => process,
-        sessions: registry,
-        cwd: "/tmp/repo",
-      },
+      { threads, spawn, sessions: registry, cwd: "/tmp/repo" },
     );
 
+    expect(first.killed).toBe(true);
     expect(result.history.map((m) => m.id)).toEqual(["u1", "a1"]);
     expect(result.branchable.headId).toBe("a1");
-    expect(process.killed).toBe(false);
+    expect(result.handle.reused).toBe(false);
+    expect(spawnCount).toBe(2);
+
+    const afterTurn = result.handle.sendMessage("Continue on A");
+    await viWaitFor(() => second.prompts().length === 1);
+    const seed = promptText(second, 0);
+    expect(seed).toContain("Branch A prompt");
+    expect(seed).toContain("Branch A reply");
+    expect(seed).not.toContain("Branch B prompt");
+    expect(seed).not.toContain("Branch B reply");
+    expect(seed).toContain("Continue on A");
+
+    const req = second.promptRequest();
+    second.emit({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "On A." },
+        },
+      },
+    });
+    second.emit({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: { stopReason: "end_turn" },
+    });
+    await afterTurn;
 
     fs.rmSync(chatRoot, { recursive: true, force: true });
   });

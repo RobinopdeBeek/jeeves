@@ -33,15 +33,19 @@ _Avoid_: Stage, phase, "shape" (legacy id for Define)
 The ordered list of columns a card kind passes through. Defined in code per kind, not in the database.
 
 **Evaluation**:
-The generated, self-contained HTML report a review works from, pinned to the commit it evaluated. Created when a card **enters the Human Review column** (not during AI Review). Comes in two scopes: a **Task Evaluation** (deep: diff narrative, tests, QA checklist) and a **Feature Evaluation** (integration-focused: regression, journeys, spec criteria, refactor opportunities).
+The generated, self-contained HTML report a review works from, pinned to the commit it evaluated. Produced by the **Prepare Eval** step in the Review column (not by AI Review). Comes in two scopes: a **Task Evaluation** (deep: diff narrative, tests, QA checklist) and a **Feature Evaluation** (integration-focused: regression, journeys, spec criteria, refactor opportunities).
 _Avoid_: Evaluation plan, eval plan, acceptance eval, review doc; treating AI Review output as the evaluation
 
 **AI Review** (Implement Task step):
-An autonomous `ai-execution` step after Implement: runs a dual-axis code review (Standards + Spec, same shape as `/code-review`), then **immediately reworks** the card branch from those findings. Produces an audit **review artifact** (process/evidence), not the Human Review evaluation.
+An autonomous `ai-execution` step after Implement: runs a dual-axis code review (Standards + Spec, same shape as `/code-review`), then **immediately reworks** the card branch from those findings. Produces a concise markdown **review artifact** (process overview), not the Human Review evaluation.
 _Avoid_: Using "AI Review" for the human Review column; assuming AI Review assembles the evaluation
 
+**Prepare Eval**:
+The `ai-execution` step that opens the Review column: builds the Evaluation for the card's current tip (“Preparing interactive evaluation…” while `ai-working`). Precedes the human **Review** step. Step key `prepeval`.
+_Avoid_: Folding this into AI Review; treating it as a hidden side-effect of column entry
+
 **Review**:
-The human activity in the Review column: reading the evaluation, doing QA, and recording a decision. Distinct from the **AI Review** step, which reviews-and-reworks code before the card arrives here.
+The human activity in the Review column: reading the evaluation, doing QA, and recording a decision. Follows **Prepare Eval**. Distinct from the **AI Review** step in Implement Task.
 
 **Decision**:
 The recorded outcome of a review: approved or changes requested, with a snapshot of whether QA was complete.
@@ -59,7 +63,7 @@ A proposed vertical slice in a feature's Tasks tip — an entry in the versioned
 _Avoid_: Draft card; `status = 'draft'` card rows
 
 **Step**:
-A typed unit of work inside a column — human, AI chat, or AI execution — with status pending / queued / ai-working / needs-user / awaiting / done. **awaiting** means the step is watching child work (e.g. feature Tasks after **Implement →**); it must not be auto-reset like orphaned `ai-working` on restart. The database stores current step state only; history lives in runs and artifacts.
+A typed unit of work inside a column — human, AI chat, or AI execution — with status pending / queued / ai-working / needs-user / awaiting / done. **awaiting** means the step is watching child work (e.g. feature Tasks after **Implement →**); it must not be auto-reset like orphaned `ai-working` on restart. The database stores current step state only; history lives in runs and artifacts. Review-column steps include **Prepare Eval** then **Review**.
 
 **Round**:
 One pass of a card's rework loop, counted from 0. A partition key on record tables (artifacts, runs, change requests, decisions, notifications), never an entity of its own. A changes-requested decision at round N begets round N+1.

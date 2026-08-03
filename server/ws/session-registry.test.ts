@@ -1,6 +1,10 @@
-import type { UIMessageChunk } from "ai";
+import type { UIMessage, UIMessageChunk } from "ai";
 import { describe, expect, it } from "vitest";
-import { stepChatSessionId, threadChatSessionId } from "./chat-session.js";
+import {
+  type ChatSession,
+  stepChatSessionId,
+  threadChatSessionId,
+} from "./chat-session.js";
 import { MockAcpProcess, viWaitFor } from "./mock-acp-process.js";
 import {
   ChatSessionRegistry,
@@ -26,6 +30,30 @@ function collectingSubscriber(): ChunkSubscriber & { chunks: UIMessageChunk[] } 
     onChunk(chunk) {
       chunks.push(chunk);
     },
+  };
+}
+
+function testSession(
+  id: string,
+  overrides: Partial<ChatSession> & {
+    history?: UIMessage[];
+    onStatus?: ChatSession["notifyStatus"];
+    onTranscript?: ChatSession["saveTranscript"];
+  } = {},
+): ChatSession {
+  const history = overrides.history ?? [];
+  return {
+    id,
+    cwd: overrides.cwd ?? "/tmp/repo",
+    openingPrompt: overrides.openingPrompt ?? null,
+    model: overrides.model,
+    loadTranscript: () => history,
+    saveTranscript: overrides.onTranscript ?? (() => {}),
+    assertMutable: overrides.assertMutable ?? (() => {}),
+    notifyStatus: overrides.onStatus ?? (() => {}),
+    interactivePermissionPolicy: overrides.interactivePermissionPolicy,
+    frameUserMessage: overrides.frameUserMessage,
+    onTurnComplete: overrides.onTurnComplete,
   };
 }
 
@@ -106,14 +134,16 @@ describe("ChatSessionRegistry — warm bridges", () => {
     const statuses: Array<"ai-working" | "needs-user"> = [];
     const transcripts: unknown[] = [];
 
-    const handle = await registry.acquire(idA, {
-      spawn: () => process,
-      cwd: "C:/repo",
-      openingPrompt: "Grill me",
-      history: [],
-      onStatus: (s) => statuses.push(s),
-      onTranscript: (m) => transcripts.push(m),
-    });
+    const handle = await registry.acquire(
+      testSession(idA, {
+        cwd: "C:/repo",
+        openingPrompt: "Grill me",
+        history: [],
+        onStatus: (s) => statuses.push(s),
+        onTranscript: (m) => transcripts.push(m),
+      }),
+      { spawn: () => process },
+    );
     expect(handle.reused).toBe(false);
 
     const sub = collectingSubscriber();
@@ -165,17 +195,21 @@ describe("ChatSessionRegistry — warm bridges", () => {
     process.autoHandshake("sess-reuse");
     const registry = new ChatSessionRegistry();
 
-    const handle1 = await registry.acquire(idA, {
-      spawn: () => {
-        spawnCount += 1;
-        return process;
-      },
-      cwd: "C:/repo",
-      openingPrompt: "Grill me",
-      history: [],
-      onStatus: () => {},
-      onTranscript: () => {},
-    });
+    const spawn = () => {
+      spawnCount += 1;
+      return process;
+    };
+
+    const handle1 = await registry.acquire(
+      testSession(idA, {
+        cwd: "C:/repo",
+        openingPrompt: "Grill me",
+        history: [],
+        onStatus: () => {},
+        onTranscript: () => {},
+      }),
+      { spawn },
+    );
     const sub1 = collectingSubscriber();
     handle1.attach(sub1);
 
@@ -206,17 +240,16 @@ describe("ChatSessionRegistry — warm bridges", () => {
       },
     });
 
-    const handle2 = await registry.acquire(idA, {
-      spawn: () => {
-        spawnCount += 1;
-        return process;
-      },
-      cwd: "C:/repo",
-      openingPrompt: "Grill me",
-      history: [],
-      onStatus: () => {},
-      onTranscript: () => {},
-    });
+    const handle2 = await registry.acquire(
+      testSession(idA, {
+        cwd: "C:/repo",
+        openingPrompt: "Grill me",
+        history: [],
+        onStatus: () => {},
+        onTranscript: () => {},
+      }),
+      { spawn },
+    );
     expect(handle2.reused).toBe(true);
     expect(spawnCount).toBe(1);
 
@@ -246,14 +279,18 @@ describe("ChatSessionRegistry — warm bridges", () => {
       process.autoHandshake(`sess-${cardId}`);
       processes.push(process);
       const id = stepChatSessionId(cardId, "grill", 0);
-      const handle = await registry.acquire(id, {
-        spawn: () => process,
-        cwd: "C:/repo",
-        openingPrompt: "hi",
-        history: [{ id: "u1", role: "user", parts: [{ type: "text", text: "x" }] }],
-        onStatus: () => {},
-        onTranscript: () => {},
-      });
+      const handle = await registry.acquire(
+        testSession(id, {
+          cwd: "C:/repo",
+          openingPrompt: "hi",
+          history: [
+            { id: "u1", role: "user", parts: [{ type: "text", text: "x" }] },
+          ],
+          onStatus: () => {},
+          onTranscript: () => {},
+        }),
+        { spawn: () => process },
+      );
       // Non-empty history: no opening turn → idle, no subscriber.
       await viWaitFor(() => registry.hasWarm(id));
       void handle;
@@ -284,14 +321,16 @@ describe("ChatSessionRegistry — warm bridges", () => {
       const process = new MockAcpProcess();
       process.autoHandshake(`sess-${cardId}`);
       const id = stepChatSessionId(cardId, "grill", 0);
-      const handle = await registry.acquire(id, {
-        spawn: () => process,
-        cwd: "C:/repo",
-        openingPrompt: "work",
-        history: [],
-        onStatus: () => {},
-        onTranscript: () => {},
-      });
+      const handle = await registry.acquire(
+        testSession(id, {
+          cwd: "C:/repo",
+          openingPrompt: "work",
+          history: [],
+          onStatus: () => {},
+          onTranscript: () => {},
+        }),
+        { spawn: () => process },
+      );
       handle.attach(collectingSubscriber());
       await viWaitFor(() => process.prompts().length === 1);
       busy.push({ process, id });
@@ -306,18 +345,24 @@ describe("ChatSessionRegistry — warm bridges", () => {
     let admitted = false;
     const newId = stepChatSessionId("b-new", "grill", 0);
     const admitPromise = registry
-      .acquire(newId, {
-        spawn: () => {
-          const p = new MockAcpProcess();
-          p.autoHandshake("sess-new");
-          return p;
+      .acquire(
+        testSession(newId, {
+          cwd: "C:/repo",
+          openingPrompt: "new",
+          history: [
+            { id: "u", role: "user", parts: [{ type: "text", text: "x" }] },
+          ],
+          onStatus: () => {},
+          onTranscript: () => {},
+        }),
+        {
+          spawn: () => {
+            const p = new MockAcpProcess();
+            p.autoHandshake("sess-new");
+            return p;
+          },
         },
-        cwd: "C:/repo",
-        openingPrompt: "new",
-        history: [{ id: "u", role: "user", parts: [{ type: "text", text: "x" }] }],
-        onStatus: () => {},
-        onTranscript: () => {},
-      })
+      )
       .then(() => {
         admitted = true;
       });
@@ -346,14 +391,16 @@ describe("ChatSessionRegistry — warm bridges", () => {
     const registry = new ChatSessionRegistry();
     const statuses: Array<"ai-working" | "needs-user"> = [];
 
-    const handle = await registry.acquire(idA, {
-      spawn: () => process,
-      cwd: "C:/repo",
-      openingPrompt: "Grill",
-      history: [],
-      onStatus: (s) => statuses.push(s),
-      onTranscript: () => {},
-    });
+    const handle = await registry.acquire(
+      testSession(idA, {
+        cwd: "C:/repo",
+        openingPrompt: "Grill",
+        history: [],
+        onStatus: (s) => statuses.push(s),
+        onTranscript: () => {},
+      }),
+      { spawn: () => process },
+    );
     // Never attach — detached for the whole opening turn.
     await viWaitFor(() => process.prompts().length === 1);
 
@@ -382,14 +429,18 @@ describe("ChatSessionRegistry — warm bridges", () => {
     const registry = new ChatSessionRegistry();
     const conn = fakeConn();
 
-    await registry.acquire(idA, {
-      spawn: () => process,
-      cwd: "C:/repo",
-      openingPrompt: "x",
-      history: [{ id: "u", role: "user", parts: [{ type: "text", text: "hi" }] }],
-      onStatus: () => {},
-      onTranscript: () => {},
-    });
+    await registry.acquire(
+      testSession(idA, {
+        cwd: "C:/repo",
+        openingPrompt: "x",
+        history: [
+          { id: "u", role: "user", parts: [{ type: "text", text: "hi" }] },
+        ],
+        onStatus: () => {},
+        onTranscript: () => {},
+      }),
+      { spawn: () => process },
+    );
     registry.claim(idA, conn);
     expect(registry.hasWarm(idA)).toBe(true);
 
@@ -409,16 +460,18 @@ describe("ChatSessionRegistry — warm bridges", () => {
       const process = new MockAcpProcess();
       process.autoHandshake(`sess-${id}`);
       processes.push(process);
-      await registry.acquire(id, {
-        spawn: () => process,
-        cwd: "C:/repo",
-        openingPrompt: null,
-        history: [
-          { id: "u1", role: "user", parts: [{ type: "text", text: "x" }] },
-        ],
-        onStatus: () => {},
-        onTranscript: () => {},
-      });
+      await registry.acquire(
+        testSession(id, {
+          cwd: "C:/repo",
+          openingPrompt: null,
+          history: [
+            { id: "u1", role: "user", parts: [{ type: "text", text: "x" }] },
+          ],
+          onStatus: () => {},
+          onTranscript: () => {},
+        }),
+        { spawn: () => process },
+      );
       await viWaitFor(() => registry.hasWarm(id));
     }
 
@@ -453,27 +506,31 @@ describe("ChatSessionRegistry — warm bridges", () => {
       return spawnModels.length === 1 ? first : second;
     };
 
-    const handle1 = await registry.acquire(idA, {
-      spawn,
-      cwd: "C:/repo",
-      openingPrompt: null,
-      history: [],
-      model: "composer-2.5",
-      onStatus: () => {},
-      onTranscript: () => {},
-    });
+    const handle1 = await registry.acquire(
+      testSession(idA, {
+        cwd: "C:/repo",
+        openingPrompt: null,
+        history: [],
+        model: "composer-2.5",
+        onStatus: () => {},
+        onTranscript: () => {},
+      }),
+      { spawn },
+    );
     expect(handle1.reused).toBe(false);
     expect(spawnModels).toEqual(["composer-2.5"]);
 
-    const handle2 = await registry.acquire(idA, {
-      spawn,
-      cwd: "C:/repo",
-      openingPrompt: null,
-      history: [],
-      model: "gpt-5.5",
-      onStatus: () => {},
-      onTranscript: () => {},
-    });
+    const handle2 = await registry.acquire(
+      testSession(idA, {
+        cwd: "C:/repo",
+        openingPrompt: null,
+        history: [],
+        model: "gpt-5.5",
+        onStatus: () => {},
+        onTranscript: () => {},
+      }),
+      { spawn },
+    );
     expect(handle2.reused).toBe(false);
     expect(first.killed).toBe(true);
     expect(spawnModels).toEqual(["composer-2.5", "gpt-5.5"]);

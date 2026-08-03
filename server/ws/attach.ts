@@ -12,10 +12,10 @@ import type { SpawnAcp } from "./chat.js";
 import {
   createProjectChatSession,
   createStepChatSession,
-  loadTranscript,
   stepChatSessionIdFromRef,
   stepChatTurnCompleteHook,
   threadChatSessionId,
+  type ChatSession,
   type ProjectChatRef,
   type StepChatRef,
 } from "./chat-session.js";
@@ -47,9 +47,8 @@ export interface ChatWsDeps {
 }
 
 /**
- * Thin WebSocket adapter: resolves a ChatSession at the boundary, then
- * openChat / warm registry stay card-agnostic.
- * Outbound payloads are AI SDK types only (ADR 0008).
+ * Thin WebSocket adapter: resolve ChatSession once, send ready (with optional
+ * branchable for Project Chat), then one openChat path for both kinds.
  */
 export class ChatConnection {
   private handle: WarmSessionHandle | null = null;
@@ -75,37 +74,51 @@ export class ChatConnection {
   async start(): Promise<void> {
     this.deps.sessions.claim(this.sessionId, this);
 
-    if (this.target.kind === "step") {
-      await this.startStep(this.target.ref);
-    } else {
-      await this.startThread(this.target.ref);
-    }
-  }
-
-  private async startStep(ref: StepChatRef): Promise<void> {
-    if (!this.deps.store.getCard(ref.cardId)) {
-      this.send({ type: "error", error: "card not found" });
+    let session: ChatSession;
+    try {
+      session = this.resolveSession();
+    } catch (err) {
+      this.send({
+        type: "error",
+        error: err instanceof Error ? err.message : String(err),
+      });
       this.ws.close();
       return;
     }
 
-    const sessionDeps = {
-      store: this.deps.store,
-      artifacts: this.deps.artifacts,
-      events: this.deps.events,
-      promptsRoot: this.deps.promptsRoot,
-    };
-
     // Ready before openChat so frozen-transcript / spawn failures still get history first.
-    this.send({
-      type: "ready",
-      messages: loadTranscript(this.deps.artifacts, ref),
-      streaming: this.deps.sessions.isAiWorking(this.sessionId),
-    });
+    try {
+      this.sendReady(session);
+    } catch (err) {
+      this.send({
+        type: "error",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      this.ws.close();
+      return;
+    }
     if (this.closed) return;
 
     try {
-      const session = createStepChatSession(ref, sessionDeps, {
+      await this.finishOpen(session);
+    } catch (err) {
+      this.sendOpenError(err);
+    }
+  }
+
+  private resolveSession(): ChatSession {
+    if (this.target.kind === "step") {
+      const ref = this.target.ref;
+      if (!this.deps.store.getCard(ref.cardId)) {
+        throw new Error("card not found");
+      }
+      const sessionDeps = {
+        store: this.deps.store,
+        artifacts: this.deps.artifacts,
+        events: this.deps.events,
+        promptsRoot: this.deps.promptsRoot,
+      };
+      return createStepChatSession(ref, sessionDeps, {
         onStatusNotify: (status) => {
           if (this.closed) return;
           this.send({ type: "status", status });
@@ -116,42 +129,39 @@ export class ChatConnection {
           isClosed: () => this.closed,
         }),
       });
-
-      await this.finishOpen(session);
-    } catch (err) {
-      this.sendOpenError(err);
     }
-  }
 
-  private async startThread(ref: ProjectChatRef): Promise<void> {
+    const ref = this.target.ref;
     if (!this.deps.chatThreads.getThread(ref.threadId)) {
-      this.send({ type: "error", error: "thread not found" });
-      this.ws.close();
-      return;
+      throw new Error("thread not found");
     }
-
-    const session = createProjectChatSession(ref, {
+    return createProjectChatSession(ref, {
       threads: this.deps.chatThreads,
       cwd: this.deps.projectCwd,
     });
-
-    this.send({
-      type: "ready",
-      messages: session.loadTranscript(),
-      streaming: this.deps.sessions.isAiWorking(this.sessionId),
-    });
-    if (this.closed) return;
-
-    try {
-      await this.finishOpen(session);
-    } catch (err) {
-      this.sendOpenError(err);
-    }
   }
 
-  private async finishOpen(
-    session: Parameters<typeof openChat>[0],
-  ): Promise<void> {
+  private sendReady(session: ChatSession): void {
+    const messages = session.loadTranscript();
+    if (this.target.kind === "thread") {
+      this.send({
+        type: "ready",
+        messages,
+        streaming: this.deps.sessions.isAiWorking(this.sessionId),
+        branchable: this.deps.chatThreads.loadBranchable(
+          this.target.ref.threadId,
+        ),
+      });
+      return;
+    }
+    this.send({
+      type: "ready",
+      messages,
+      streaming: this.deps.sessions.isAiWorking(this.sessionId),
+    });
+  }
+
+  private async finishOpen(session: ChatSession): Promise<void> {
     const opened = await openChat(session, {
       spawn: this.deps.spawn,
       sessions: this.deps.sessions,

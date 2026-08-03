@@ -7,7 +7,7 @@ import { CardStore } from "../cards/store.js";
 import { ChatThreadStore } from "../chat-threads/store.js";
 import { openDb } from "../db/index.js";
 import { MockAcpProcess, viWaitFor } from "./mock-acp-process.js";
-import { rewindProjectChat } from "./rewind-chat.js";
+import { ProjectChat, rewindProjectChat } from "./project-chat.js";
 import { openChat } from "./open-chat.js";
 import { createProjectChatSession } from "./chat-session.js";
 import { ChatSessionRegistry } from "./session-registry.js";
@@ -52,7 +52,7 @@ async function completeTurn(
   await turn;
 }
 
-describe("rewindProjectChat", () => {
+describe("ProjectChat.rewind", () => {
   it("truncates → kills warm ACP → respawns → reseeds without discarded branch context", async () => {
     const db = openDb(":memory:");
     const cards = new CardStore(db);
@@ -101,14 +101,12 @@ describe("rewindProjectChat", () => {
       { threads, cwd: "/tmp/repo" },
     );
 
-    // Warm with the full (pre-rewind) transcript and take a turn so context is seeded.
     const before = await openChat(session, { spawn, sessions: registry });
     expect(before.history.map((m) => m.id)).toEqual(["u1", "a1", "u2", "a2"]);
     await completeTurn(first, before.handle, "follow-up", "ok");
     expect(promptText(first, 0)).toContain("Discard this wrong turn");
     expect(promptText(first, 0)).toContain("Wrong-direction answer");
 
-    // Edit rewind: truncate to the first exchange, kill + respawn.
     const rewound = await rewindProjectChat(
       thread.id,
       { action: "truncate", headId: "a1" },
@@ -116,13 +114,14 @@ describe("rewindProjectChat", () => {
     );
 
     expect(first.killed).toBe(true);
-    expect(rewound.history.map((m) => m.id)).toEqual(["u1", "a1"]);
-    expect(rewound.handle.reused).toBe(false);
+    expect(rewound.warm.status).toBe("open");
+    expect(rewound.messages.map((m) => m.id)).toEqual(["u1", "a1"]);
+    if (rewound.warm.status !== "open") throw new Error("expected warm open");
+    expect(rewound.warm.handle.reused).toBe(false);
     expect(spawnCount).toBe(2);
     expect(registry.hasWarm(session.id)).toBe(true);
 
-    // Next agent turn reseeds from the truncated path only.
-    const afterTurn = rewound.handle.sendMessage("Corrected direction");
+    const afterTurn = rewound.warm.handle.sendMessage("Corrected direction");
     await viWaitFor(() => second.prompts().length === 1);
     const seed = promptText(second, 0);
     expect(seed).toContain("Prior transcript");
@@ -150,10 +149,43 @@ describe("rewindProjectChat", () => {
     });
     await afterTurn;
 
-    // Sibling branch retained on disk for later switch (u2 under a1, plus new user turn).
     const siblings = threads.getBranches(thread.id, "u2");
     expect(siblings).toContain("u2");
     expect(siblings.length).toBeGreaterThanOrEqual(2);
+
+    fs.rmSync(chatRoot, { recursive: true, force: true });
+  });
+
+  it("keeps durable rewind when warm respawn fails", async () => {
+    const db = openDb(":memory:");
+    const cards = new CardStore(db);
+    const project = cards.ensureDefaultProject("jeeves", "/tmp/repo");
+    const chatRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-rewind-fail-"));
+    const threads = new ChatThreadStore(db, chatRoot);
+    const thread = threads.createOrReuseEmptyDraft(project.id);
+    threads.saveTranscript(thread.id, [
+      { id: "u1", role: "user", parts: [{ type: "text", text: "a" }] },
+      { id: "a1", role: "assistant", parts: [{ type: "text", text: "b" }] },
+    ]);
+
+    const registry = new ChatSessionRegistry();
+    const result = await new ProjectChat({
+      threads,
+      sessions: registry,
+      cwd: "/tmp/repo",
+      spawn: () => {
+        throw new Error("spawn exploded");
+      },
+    }).rewind(thread.id, { action: "truncate", headId: "u1" });
+
+    expect(result.messages.map((m) => m.id)).toEqual(["u1"]);
+    expect(result.branchable.headId).toBe("u1");
+    expect(result.warm).toEqual({
+      status: "failed",
+      error: "spawn exploded",
+    });
+    expect(threads.loadTranscript(thread.id).map((m) => m.id)).toEqual(["u1"]);
+    expect(registry.hasWarm(`thread:${thread.id}`)).toBe(false);
 
     fs.rmSync(chatRoot, { recursive: true, force: true });
   });
@@ -203,12 +235,14 @@ describe("rewindProjectChat", () => {
     );
 
     expect(first.killed).toBe(true);
-    expect(result.history.map((m) => m.id)).toEqual(["u1", "a1"]);
+    expect(result.warm.status).toBe("open");
+    expect(result.messages.map((m) => m.id)).toEqual(["u1", "a1"]);
     expect(result.branchable.headId).toBe("a1");
-    expect(result.handle.reused).toBe(false);
+    if (result.warm.status !== "open") throw new Error("expected warm open");
+    expect(result.warm.handle.reused).toBe(false);
     expect(spawnCount).toBe(2);
 
-    const afterTurn = result.handle.sendMessage("Continue on A");
+    const afterTurn = result.warm.handle.sendMessage("Continue on A");
     await viWaitFor(() => second.prompts().length === 1);
     const seed = promptText(second, 0);
     expect(seed).toContain("Branch A prompt");

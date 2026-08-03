@@ -237,7 +237,6 @@ export function createProjectChatSession(
     loadTranscript: () => deps.threads.loadTranscript(ref.threadId),
     saveTranscript: (messages) => {
       deps.threads.saveTranscript(ref.threadId, messages);
-      maybeAutoTitleFromFirstUserMessage(deps.threads, ref.threadId, messages);
     },
     assertMutable: () => {
       if (!deps.threads.getThread(ref.threadId)) {
@@ -247,6 +246,13 @@ export function createProjectChatSession(
     // Project Chat has no board step status column.
     notifyStatus: () => {},
     interactivePermissionPolicy: "project-chat",
+    onTurnComplete: () => {
+      maybeAutoTitleFromFirstUserMessage(
+        deps.threads,
+        ref.threadId,
+        deps.threads.loadTranscript(ref.threadId),
+      );
+    },
   };
 }
 

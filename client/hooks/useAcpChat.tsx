@@ -4,6 +4,7 @@ import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ChatTransport, UIMessage } from "ai";
 import type { PromptCapabilities } from "@shared/chat-ws";
+import type { BranchableTranscript } from "@shared/branchable-transcript";
 import {
   attachmentAcceptFor,
   EMPTY_PROMPT_CAPABILITIES,
@@ -38,6 +39,13 @@ export interface UseAcpChatOptions {
   onSpecRevised?: (markdown: string) => void;
   onTasksRevised?: (draft: TasksDraftTip) => void;
   onStreamingChange?: (streaming: boolean) => void;
+  /**
+   * Displace reasons that soft-reattach instead of freezing the transcript
+   * (Project Chat Rewind → "rewound").
+   */
+  softDisplaceReasons?: readonly string[];
+  /** Project Chat: authoritative branchable from WS ready / reconnect. */
+  onBranchable?: (branchable: BranchableTranscript) => void;
 }
 
 export type AcpChatState =
@@ -83,6 +91,8 @@ export function useAcpChat({
   onSpecRevised,
   onTasksRevised,
   onStreamingChange,
+  softDisplaceReasons = [],
+  onBranchable,
 }: UseAcpChatOptions): AcpChatState {
   const [state, setState] = useState<AcpChatState>({ status: "connecting" });
   const getLiveDraftRef = useRef(getLiveDraftBody);
@@ -93,6 +103,10 @@ export function useAcpChat({
   onTasksRevisedRef.current = onTasksRevised;
   const onStreamingRef = useRef(onStreamingChange);
   onStreamingRef.current = onStreamingChange;
+  const onBranchableRef = useRef(onBranchable);
+  onBranchableRef.current = onBranchable;
+  const softDisplaceRef = useRef(softDisplaceReasons);
+  softDisplaceRef.current = softDisplaceReasons;
   const injectLiveDraft = getLiveDraftBody != null;
 
   useEffect(() => {
@@ -110,6 +124,8 @@ export function useAcpChat({
       onSpecRevised: (markdown) => onRevisedRef.current?.(markdown),
       onTasksRevised: (draft) => onTasksRevisedRef.current?.(draft),
       onStreamingChange: (streaming) => onStreamingRef.current?.(streaming),
+      onBranchable: (branchable) => onBranchableRef.current?.(branchable),
+      softDisplaceReasons: softDisplaceRef.current,
       onConnectionChange: (connection) => {
         if (cancelled) return;
         setState((prev) => {
@@ -130,14 +146,19 @@ export function useAcpChat({
           };
         });
       },
-      onReconnected: (history) => {
+      onReconnected: (history, opts) => {
         if (cancelled) return;
+        if (opts.branchable) onBranchableRef.current?.(opts.branchable);
         setState((prev) =>
-          prev.status === "ready"
+          prev.status === "ready" || prev.status === "connecting"
             ? {
-                ...prev,
+                status: "ready",
+                transport,
                 messages: history,
-                epoch: prev.epoch + 1,
+                sessionOpen: transport.isSessionOpen(),
+                connection: transport.getConnectionState(),
+                epoch:
+                  prev.status === "ready" ? prev.epoch + 1 : Date.now(),
                 ...capsFromTransport(transport),
               }
             : prev,
@@ -145,6 +166,20 @@ export function useAcpChat({
       },
       onDisplaced: (reason) => {
         if (cancelled) return;
+        if (softDisplaceRef.current.includes(reason)) {
+          // Soft path: transport already reconnecting; mirror reconnecting UI.
+          setState((prev) =>
+            prev.status === "ready"
+              ? {
+                  ...prev,
+                  sessionOpen: false,
+                  connection: "reconnecting",
+                  ...capsFromTransport(transport),
+                }
+              : prev,
+          );
+          return;
+        }
         setState((prev) => ({
           status: "displaced",
           reason,

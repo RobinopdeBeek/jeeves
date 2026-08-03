@@ -52,7 +52,44 @@ describe("BranchableTranscript (shared)", () => {
       ],
     };
     expect(parseTranscriptFile(branched).headId).toBe("u2");
-    expect(parseTranscriptFile({ version: 2 })).toEqual(emptyTranscript());
+  });
+
+  it("fails closed on unknown version, bad nodes, cycles, and missing head", () => {
+    expect(() => parseTranscriptFile({ version: 2 })).toThrow(/version/i);
+    expect(() =>
+      parseTranscriptFile({
+        version: 1,
+        headId: null,
+        messages: [{ parentId: null, message: { id: "x" } }],
+      }),
+    ).toThrow(/role/i);
+    expect(() =>
+      parseTranscriptFile({
+        version: 1,
+        headId: "missing",
+        messages: [{ parentId: null, message: msg("u1", "user", "a") }],
+      }),
+    ).toThrow(/headId/i);
+    expect(() =>
+      parseTranscriptFile({
+        version: 1,
+        headId: "a",
+        messages: [
+          { parentId: "b", message: msg("a", "user", "a") },
+          { parentId: "a", message: msg("b", "assistant", "b") },
+        ],
+      }),
+    ).toThrow(/cycle/i);
+    expect(() =>
+      parseTranscriptFile({
+        version: 1,
+        headId: "u1",
+        messages: [
+          { parentId: null, message: msg("u1", "user", "a") },
+          { parentId: null, message: msg("u1", "user", "dup") },
+        ],
+      }),
+    ).toThrow(/duplicate/i);
   });
 
   it("reports parentIdOf for edit truncate and lists sibling branches", () => {

@@ -29,7 +29,7 @@ import { runRoutes } from "./routes/runs.js";
 import { ChatSessionRegistry } from "./ws/session-registry.js";
 import { spawnAcp } from "./ws/acp-process.js";
 import { ChatConnection } from "./ws/attach.js";
-import { rewindProjectChat } from "./ws/rewind-chat.js";
+import { ProjectChat } from "./ws/project-chat.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 try {
@@ -64,6 +64,12 @@ const engine = new ExecutionEngine({
 });
 
 const chatSessions = new ChatSessionRegistry();
+const projectChat = new ProjectChat({
+  threads: chatThreads,
+  spawn: spawnAcp,
+  sessions: chatSessions,
+  cwd: paths.repoPath,
+});
 const chatDeps = {
   store,
   artifacts,
@@ -79,26 +85,7 @@ const app = new Hono();
 
 app.get("/api/project", (c) => c.json(project));
 app.route("/api/models", modelRoutes());
-app.route(
-  "/api/chat-threads",
-  chatThreadRoutes(chatThreads, project, {
-    onThreadDeleted: (threadId) => {
-      chatSessions.close(`thread:${threadId}`, "thread deleted");
-    },
-    onThreadModelChanged: (threadId) => {
-      chatSessions.close(`thread:${threadId}`, "model changed");
-    },
-    rewindThread: async (threadId, op) => {
-      const result = await rewindProjectChat(threadId, op, {
-        threads: chatThreads,
-        spawn: spawnAcp,
-        sessions: chatSessions,
-        cwd: paths.repoPath,
-      });
-      return { messages: result.history, branchable: result.branchable };
-    },
-  }),
-);
+app.route("/api/chat-threads", chatThreadRoutes(chatThreads, project, projectChat));
 app.route(
   "/api/cards",
   cardRoutes(store, project, {

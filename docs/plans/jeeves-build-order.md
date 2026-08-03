@@ -130,8 +130,12 @@ blocker relationship can be built in parallel or reordered.
 
 17. **Edit/branch rewind (server).** Branch-aware Project Chat transcripts; `rewindProjectChat`
     truncates or switches the active head, closes warm ACP, respawns, and seed-onces from the
-    kept path (mocked ACP coverage). REST `GET/POST …/transcript` + `…/rewind`. UI branch
-    picker is a follow-on (#42). See [ADR 0016](../adr/0016-branchable-transcript-rewind.md).
+    kept path (mocked ACP coverage). REST `GET/POST …/transcript` + `…/rewind`. See
+    [ADR 0016](../adr/0016-branchable-transcript-rewind.md).
+
+18. **Edit/branch rewind (UI, #42).** Project Chat edit-and-send + sibling branch picker call
+    the server rewind seam (external branch adapter); remount reconnects ACP so the agent
+    reseeds from the kept path. Reload reads the branchable transcript for picker state.
 
 Note the inversion versus a layered plan: the review *loop* works first with a stub-quality
 evaluation (slice 9), then the evaluation's sections improve one prompt at a time (slice 11) —

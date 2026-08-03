@@ -91,15 +91,13 @@ export function isInteractiveAutoAllow(title: string): boolean {
 }
 
 /**
- * Project Chat allow-list: reads auto-approve; shell and file writes prompt.
- * Stricter than cursor-like so freeform chat cannot silently mutate the checkout.
+ * Project Chat allow-list: only clear reads auto-approve; shell, file writes,
+ * and unrecognized tools prompt (stricter than cursor-like on the main checkout).
  */
 export function isProjectChatAutoAllow(title: string): boolean {
   if (isShellTool(title)) return false;
   if (isFileWriteTool(title)) return false;
-  if (READ_TOOL_RE.test(title)) return true;
-  // Unknown non-write / non-shell tools — treat as routine reads.
-  return true;
+  return READ_TOOL_RE.test(title);
 }
 
 /** Pick allow/deny for headless ACP without a permission UI. */

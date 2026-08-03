@@ -8,6 +8,35 @@ import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { PermissionPartView } from "./PermissionPartView";
 
+/**
+ * Replay a frozen UIMessage transcript (displaced / completed chat).
+ * Shared by step chats (artifact-backed) and Project Chat (socket fallback).
+ */
+export function FrozenTranscriptView({
+  messages,
+}: {
+  messages: UIMessage[];
+}) {
+  return (
+    <ScrollArea
+      className="min-h-0 flex-1 bg-background"
+      style={{
+        ["--thread-max-width" as string]: "44rem",
+      }}
+    >
+      <div className="mx-auto flex w-full max-w-(--thread-max-width) flex-col gap-y-6 px-4 py-4">
+        {messages.length === 0 ? (
+          <p className="text-muted-foreground">No transcript yet.</p>
+        ) : (
+          messages.map((message) => (
+            <ReadOnlyMessage key={message.id} message={message} />
+          ))
+        )}
+      </div>
+    </ScrollArea>
+  );
+}
+
 /** Frozen / displaced chat transcript from the artifact API (no live ACP). */
 export function ReadOnlyTranscript({
   cardId,
@@ -40,24 +69,7 @@ export function ReadOnlyTranscript({
     };
   }, [cardId, stepKey]);
 
-  return (
-    <ScrollArea
-      className="min-h-0 flex-1 bg-background"
-      style={{
-        ["--thread-max-width" as string]: "44rem",
-      }}
-    >
-      <div className="mx-auto flex w-full max-w-(--thread-max-width) flex-col gap-y-6 px-4 py-4">
-        {messages.length === 0 ? (
-          <p className="text-muted-foreground">No transcript yet.</p>
-        ) : (
-          messages.map((message) => (
-            <ReadOnlyMessage key={message.id} message={message} />
-          ))
-        )}
-      </div>
-    </ScrollArea>
-  );
+  return <FrozenTranscriptView messages={messages} />;
 }
 
 function ReadOnlyMessage({ message }: { message: UIMessage }) {

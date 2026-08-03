@@ -1165,7 +1165,7 @@ describe("decideInteractivePermission", () => {
     ).toEqual({ action: "prompt" });
   });
 
-  it("project-chat auto-approves reads but prompts for shell and file writes", () => {
+  it("project-chat auto-approves reads but prompts for shell, writes, and unknowns", () => {
     expect(
       decideInteractivePermission(
         { title: "Read file CONTEXT.md", options },
@@ -1190,6 +1190,12 @@ describe("decideInteractivePermission", () => {
           title: "Write file .jeeves/exchange/c1/spec.md",
           options,
         },
+        "project-chat",
+      ),
+    ).toEqual({ action: "prompt" });
+    expect(
+      decideInteractivePermission(
+        { title: "MysteriousTool doSomething", options },
         "project-chat",
       ),
     ).toEqual({ action: "prompt" });

@@ -7,12 +7,12 @@ import {
 import { Link } from "react-router-dom";
 import { Thread, ThreadShell } from "@/components/assistant-ui/thread";
 import { ReconnectingBanner } from "@/components/chat/ReconnectingBanner";
+import { FrozenTranscriptView } from "@/components/grill/ReadOnlyTranscript";
 import { PermissionDataUI } from "@/components/grill/PermissionPartView";
 import { GrillTransportContext } from "@/components/grill/transport-context";
 import { Button } from "@/components/ui/button";
 import { AcpChatProvider, useAcpChat } from "@/hooks/useAcpChat";
 import type { ChatThread } from "@/lib/api";
-import { cn } from "@/lib/utils";
 
 /** Live Project Chat thread — ACP over WS, user-first welcome, no attach stubs. */
 export function ChatThreadView({
@@ -156,34 +156,7 @@ function DisplacedProjectChat({
       >
         {banner}
       </div>
-      <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 overflow-y-auto px-4 py-6">
-        {messages.length === 0 ? (
-          <p className="text-center text-sm text-muted-foreground">
-            No messages in this session.
-          </p>
-        ) : (
-          messages.map((m) => (
-            <div
-              key={m.id}
-              className={cn(
-                "text-sm leading-relaxed",
-                m.role === "user" ? "text-foreground" : "text-muted-foreground",
-              )}
-            >
-              <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                {m.role === "user" ? "You" : "Assistant"}
-              </p>
-              {m.parts.map((part, i) =>
-                part.type === "text" ? (
-                  <p key={i} className="whitespace-pre-wrap">
-                    {part.text}
-                  </p>
-                ) : null,
-              )}
-            </div>
-          ))
-        )}
-      </div>
+      <FrozenTranscriptView messages={messages} />
     </div>
   );
 }

@@ -5,6 +5,16 @@ import path from "node:path";
 import { nanoid } from "nanoid";
 import type { Db } from "../db/index.js";
 import { chatThreads, type ChatThread } from "../db/schema.js";
+import {
+  activePath,
+  emptyTranscript,
+  getBranches,
+  parseTranscriptFile,
+  syncActivePath,
+  switchToBranch,
+  truncateTo,
+  type BranchableTranscript,
+} from "./branchable-transcript.js";
 
 export class ChatThreadStoreError extends Error {
   constructor(
@@ -135,25 +145,82 @@ export class ChatThreadStore {
     return path.join(this.threadDir(threadId), "transcript.json");
   }
 
-  /** Load the persisted UIMessage transcript (empty when missing/corrupt). */
-  loadTranscript(threadId: string): UIMessage[] {
+  /** Full branch-aware transcript (tree + head). */
+  loadBranchable(threadId: string): BranchableTranscript {
     const file = this.transcriptPath(threadId);
-    if (!fs.existsSync(file)) return [];
+    if (!fs.existsSync(file)) return emptyTranscript();
     try {
       const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
-      return Array.isArray(parsed) ? (parsed as UIMessage[]) : [];
+      return parseTranscriptFile(parsed);
     } catch {
-      return [];
+      return emptyTranscript();
     }
   }
 
-  /** Persist the live ACP transcript for resume/reload. */
+  /**
+   * Active-path UIMessage[] for ACP seed-once / WS ready (hides sibling branches).
+   */
+  loadTranscript(threadId: string): UIMessage[] {
+    return activePath(this.loadBranchable(threadId));
+  }
+
+  /**
+   * Persist the live ACP active path into the branch-aware tree.
+   * Off-path siblings from prior edit/branch rewinds are retained.
+   */
   saveTranscript(threadId: string, messages: UIMessage[]): void {
+    const next = syncActivePath(this.loadBranchable(threadId), messages);
+    this.writeBranchable(threadId, next);
+  }
+
+  /** Sibling branch ids for a message (including itself). */
+  getBranches(threadId: string, messageId: string): string[] {
+    return getBranches(this.loadBranchable(threadId), messageId);
+  }
+
+  /**
+   * Edit rewind: set the active head exactly to `headId` (or empty).
+   * Keeps discarded-branch messages so a later append forks a sibling.
+   */
+  truncateTranscript(
+    threadId: string,
+    headId: string | null,
+  ): UIMessage[] {
+    return this.mutateBranchable(threadId, (t) => truncateTo(t, headId));
+  }
+
+  /**
+   * Switch the active head to the tip of the branch containing `branchId`.
+   */
+  switchTranscriptBranch(threadId: string, branchId: string): UIMessage[] {
+    return this.mutateBranchable(threadId, (t) => switchToBranch(t, branchId));
+  }
+
+  private mutateBranchable(
+    threadId: string,
+    mutate: (t: BranchableTranscript) => BranchableTranscript,
+  ): UIMessage[] {
+    try {
+      const next = mutate(this.loadBranchable(threadId));
+      this.writeBranchable(threadId, next);
+      return activePath(next);
+    } catch (e) {
+      throw new ChatThreadStoreError(
+        400,
+        e instanceof Error ? e.message : String(e),
+      );
+    }
+  }
+
+  private writeBranchable(
+    threadId: string,
+    transcript: BranchableTranscript,
+  ): void {
     const dir = this.threadDir(threadId);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
       this.transcriptPath(threadId),
-      `${JSON.stringify(messages, null, 2)}\n`,
+      `${JSON.stringify(transcript, null, 2)}\n`,
       "utf8",
     );
   }
@@ -182,14 +249,8 @@ export class ChatThreadStore {
   }
 
   private isEmptyTranscript(threadId: string): boolean {
-    const file = this.transcriptPath(threadId);
-    if (!fs.existsSync(file)) return true;
-    try {
-      const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
-      return Array.isArray(parsed) && parsed.length === 0;
-    } catch {
-      return false;
-    }
+    // Off-path siblings after a rewind still count — don't reuse as an empty draft.
+    return this.loadBranchable(threadId).messages.length === 0;
   }
 
   private ensureEmptyTranscript(threadId: string): void {
@@ -197,7 +258,7 @@ export class ChatThreadStore {
     fs.mkdirSync(dir, { recursive: true });
     const file = this.transcriptPath(threadId);
     if (!fs.existsSync(file)) {
-      fs.writeFileSync(file, `${JSON.stringify([], null, 2)}\n`, "utf8");
+      this.writeBranchable(threadId, emptyTranscript());
     }
   }
 

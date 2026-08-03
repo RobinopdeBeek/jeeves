@@ -153,4 +153,84 @@ describe("chat thread routes", () => {
     });
     expect(changed).toEqual([]);
   });
+
+  it("GETs the branch-aware transcript and POSTs rewind", async () => {
+    const rewound: Array<{ id: string; action: string }> = [];
+    const app = chatThreadRoutes(store, project, {
+      rewindThread: async (threadId, op) => {
+        rewound.push({ id: threadId, action: op.action });
+        if (op.action === "truncate") {
+          const messages = store.truncateTranscript(threadId, op.headId);
+          return { messages, branchable: store.loadBranchable(threadId) };
+        }
+        const messages = store.switchTranscriptBranch(threadId, op.branchId);
+        return { messages, branchable: store.loadBranchable(threadId) };
+      },
+    });
+    const created = (await (
+      await app.request("http://localhost/", { method: "POST" })
+    ).json()) as { id: string };
+
+    store.saveTranscript(created.id, [
+      {
+        id: "u1",
+        role: "user",
+        parts: [{ type: "text", text: "hi" }],
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [{ type: "text", text: "hello" }],
+      },
+    ]);
+
+    const transcriptRes = await app.request(
+      `http://localhost/${created.id}/transcript`,
+    );
+    expect(transcriptRes.status).toBe(200);
+    const branchable = (await transcriptRes.json()) as {
+      version: number;
+      headId: string;
+      messages: unknown[];
+    };
+    expect(branchable.version).toBe(1);
+    expect(branchable.headId).toBe("a1");
+    expect(branchable.messages).toHaveLength(2);
+
+    const rewindRes = await app.request(
+      `http://localhost/${created.id}/rewind`,
+      {
+        method: "POST",
+        body: JSON.stringify({ action: "truncate", headId: "u1" }),
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+    expect(rewindRes.status).toBe(200);
+    const body = (await rewindRes.json()) as {
+      messages: Array<{ id: string }>;
+      branchable: { headId: string };
+    };
+    expect(body.messages.map((m) => m.id)).toEqual(["u1"]);
+    expect(body.branchable.headId).toBe("u1");
+    expect(rewound).toEqual([{ id: created.id, action: "truncate" }]);
+  });
+
+  it("rejects malformed rewind bodies", async () => {
+    const app = chatThreadRoutes(store, project, {
+      rewindThread: async () => ({
+        messages: [],
+        branchable: store.loadBranchable("x"),
+      }),
+    });
+    const created = (await (
+      await app.request("http://localhost/", { method: "POST" })
+    ).json()) as { id: string };
+
+    const res = await app.request(`http://localhost/${created.id}/rewind`, {
+      method: "POST",
+      body: JSON.stringify({ action: "nope" }),
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(res.status).toBe(400);
+  });
 });

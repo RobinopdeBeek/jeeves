@@ -73,7 +73,7 @@ A free-text item raised during review, scoped to a round, moving open → consum
 A file produced by a step, stored in the project store's artifact folder and indexed by a database row holding metadata and a path — never content. Self-describing via frontmatter; lineage recorded as derived-from links.
 
 **Transcript**:
-The mutable `UIMessage[]` chat log for an AI chat step or Chat Thread, stored so the session can resume and be reviewed. Step transcripts are artifacts under a card; Project Chat transcripts live under the project store's chat data area (`data/chat/<threadId>/`). Not the Grill hand-off document Spec consumes.
+The mutable chat log for an AI chat step or Chat Thread, stored so the session can resume and be reviewed. Step transcripts are artifacts under a card (flat `UIMessage[]`). Project Chat transcripts are branch-aware (message tree + active head) under the project store's chat data area (`data/chat/<threadId>/`); the active path is what the agent sees. Not the Grill hand-off document Spec consumes.
 _Avoid_: Using "transcript" to mean the durable Grill Q&A artifact
 
 **Project Chat**:
@@ -83,6 +83,10 @@ _Avoid_: Using "chat" alone when the Card/Step vs Project distinction matters; G
 **Chat Thread**:
 One conversation within Project Chat — its own transcript, title, optional pinned Cursor model (spawn-pinned via `agent --model`), and warm ACP session. A Project may have many Chat Threads; the user switches among them from the chat sidebar.
 _Avoid_: Thread (unqualified — ambiguous with OS/async threads); using "session" for the conversation itself (session is the live ACP process)
+
+**Rewind**:
+A server operation that truncates or switches a Project Chat transcript to a chosen branch, kills that thread's warm ACP process, and respawns so the next agent turn is seeded only from the kept path — never a client-only edit of the visible message list.
+_Avoid_: Client-side transcript edit; fake rewind
 
 **Grill session**:
 The durable Q&A markdown artifact from a completed Grill step (kind `grill`): resolved questions and answers, still-open questions, and a short list of glossary/ADR docs updated during the interview. Produced by a host extract on Grill → Spec; shown in the done Grill tab and consumed by Spec. Read-only after harvest — corrections require a new Grill. Not a synthesis or summary of the chat.

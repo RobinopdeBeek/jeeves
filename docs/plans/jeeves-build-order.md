@@ -128,6 +128,11 @@ blocker relationship can be built in parallel or reordered.
     Project Chat, Grill, Spec assist, and Tasks assist; fail closed for unsupported types;
     no in-app mic.
 
+17. **Edit/branch rewind (server).** Branch-aware Project Chat transcripts; `rewindProjectChat`
+    truncates or switches the active head, closes warm ACP, respawns, and seed-onces from the
+    kept path (mocked ACP coverage). REST `GET/POST …/transcript` + `…/rewind`. UI branch
+    picker is a follow-on (#42). See [ADR 0016](../adr/0016-branchable-transcript-rewind.md).
+
 Note the inversion versus a layered plan: the review *loop* works first with a stub-quality
 evaluation (slice 9), then the evaluation's sections improve one prompt at a time (slice 11) —
 instead of building all seven eval skills before anything renders.

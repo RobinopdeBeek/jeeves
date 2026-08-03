@@ -35,7 +35,11 @@ describe("ChatThreadStore", () => {
 
     const transcriptPath = path.join(chatRoot, thread.id, "transcript.json");
     expect(fs.existsSync(transcriptPath)).toBe(true);
-    expect(JSON.parse(fs.readFileSync(transcriptPath, "utf8"))).toEqual([]);
+    expect(JSON.parse(fs.readFileSync(transcriptPath, "utf8"))).toEqual({
+      version: 1,
+      headId: null,
+      messages: [],
+    });
   });
 
   it("reuses an existing empty draft instead of stacking another", () => {
@@ -57,12 +61,31 @@ describe("ChatThreadStore", () => {
 
   it("creates a new thread when the draft transcript is no longer empty", () => {
     const first = threads.createOrReuseEmptyDraft(project.id);
-    fs.writeFileSync(
-      path.join(chatRoot, first.id, "transcript.json"),
-      `${JSON.stringify([{ id: "m1", role: "user", parts: [] }], null, 2)}\n`,
-    );
+    threads.saveTranscript(first.id, [
+      {
+        id: "m1",
+        role: "user",
+        parts: [{ type: "text", text: "hi" }],
+      },
+    ]);
     const second = threads.createOrReuseEmptyDraft(project.id);
 
+    expect(second.id).not.toBe(first.id);
+  });
+
+  it("does not treat a truncated-but-branched transcript as an empty draft", () => {
+    const first = threads.createOrReuseEmptyDraft(project.id);
+    threads.saveTranscript(first.id, [
+      {
+        id: "u1",
+        role: "user",
+        parts: [{ type: "text", text: "kept" }],
+      },
+    ]);
+    threads.truncateTranscript(first.id, null);
+    expect(threads.loadTranscript(first.id)).toEqual([]);
+
+    const second = threads.createOrReuseEmptyDraft(project.id);
     expect(second.id).not.toBe(first.id);
   });
 
@@ -139,8 +162,73 @@ describe("ChatThreadStore", () => {
     threads.saveTranscript(thread.id, messages);
 
     expect(threads.loadTranscript(thread.id)).toEqual(messages);
-    expect(JSON.parse(fs.readFileSync(threads.transcriptPath(thread.id), "utf8"))).toEqual(
-      messages,
+    const onDisk = JSON.parse(
+      fs.readFileSync(threads.transcriptPath(thread.id), "utf8"),
     );
+    expect(onDisk.version).toBe(1);
+    expect(onDisk.headId).toBe("a1");
+    expect(threads.loadBranchable(thread.id).messages).toHaveLength(2);
+  });
+
+  it("migrates a legacy flat transcript array on load", () => {
+    const thread = threads.createOrReuseEmptyDraft(project.id);
+    fs.writeFileSync(
+      threads.transcriptPath(thread.id),
+      `${JSON.stringify(
+        [
+          {
+            id: "u1",
+            role: "user",
+            parts: [{ type: "text", text: "legacy" }],
+          },
+        ],
+        null,
+        2,
+      )}\n`,
+    );
+
+    expect(threads.loadTranscript(thread.id).map((m) => m.id)).toEqual(["u1"]);
+    expect(threads.loadBranchable(thread.id).version).toBe(1);
+  });
+
+  it("truncates and switches branches while retaining siblings", () => {
+    const thread = threads.createOrReuseEmptyDraft(project.id);
+    threads.saveTranscript(thread.id, [
+      {
+        id: "u1",
+        role: "user",
+        parts: [{ type: "text", text: "v1" }],
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [{ type: "text", text: "r1" }],
+      },
+    ]);
+
+    // Edit rewind: truncate before the user message so the next send forks.
+    threads.truncateTranscript(thread.id, null);
+    expect(threads.loadTranscript(thread.id)).toEqual([]);
+
+    threads.saveTranscript(thread.id, [
+      {
+        id: "u2",
+        role: "user",
+        parts: [{ type: "text", text: "v2" }],
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        parts: [{ type: "text", text: "r2" }],
+      },
+    ]);
+
+    expect(threads.getBranches(thread.id, "u2").sort()).toEqual(["u1", "u2"]);
+
+    threads.switchTranscriptBranch(thread.id, "u1");
+    expect(threads.loadTranscript(thread.id).map((m) => m.id)).toEqual([
+      "u1",
+      "a1",
+    ]);
   });
 });

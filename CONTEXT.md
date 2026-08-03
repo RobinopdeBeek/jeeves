@@ -89,7 +89,7 @@ The durable Q&A markdown artifact from a completed Grill step (kind `grill`): re
 _Avoid_: Grill summary (implies synthesis); using "transcript" for this document; inlining full ADR/glossary bodies here
 
 **Project store**:
-Per-target-repository workflow storage at `<repo>/.jeeves/` (gitignored on disk). Holds `jeeves.db`, the artifact tree under `data/`, and ephemeral agent worktrees under `worktrees/`. Jeeves creates it on first use and ensures `.jeeves/` is in the target repo's `.gitignore`. Application source stays git-clean — nothing in the store is committed.
+Per-target-repository workflow storage at `<repo>/.jeeves/` (gitignored on disk). Holds `jeeves.db`, the artifact tree under `data/` (including Project Chat transcripts under `data/chat/`), and ephemeral agent worktrees under `worktrees/`. Jeeves creates it on first use and ensures `.jeeves/` is in the target repo's `.gitignore`. Application source stays git-clean — nothing in the store is committed.
 _Avoid_: Data dir (ambiguous with app vs project)
 
 **Artifact folder**:

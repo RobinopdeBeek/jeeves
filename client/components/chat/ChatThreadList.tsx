@@ -86,7 +86,6 @@ export function ChatThreadList({
                   type="button"
                   variant="ghost"
                   size="icon-xs"
-                  className="opacity-100 md:opacity-0 md:group-hover:opacity-100"
                   aria-label={`Rename ${thread.title}`}
                   onClick={() => {
                     setRenameId(thread.id);
@@ -101,7 +100,6 @@ export function ChatThreadList({
                       type="button"
                       variant="ghost"
                       size="icon-xs"
-                      className="opacity-100 md:opacity-0 md:group-hover:opacity-100"
                       aria-label={`Delete ${thread.title}`}
                     >
                       <IconTrash />

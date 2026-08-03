@@ -4,6 +4,7 @@ import {
   IconLayoutSidebar,
   IconLayoutSidebarFilled,
 } from "@tabler/icons-react";
+import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { Thread, ThreadShell } from "@/components/assistant-ui/thread";
 import { ChatModelPicker } from "@/components/chat/ChatModelPicker";
@@ -100,6 +101,24 @@ function LiveProjectChat({
     },
   });
 
+  // If warm ACP was closed for a model change (this client or another), refresh
+  // the thread row so the remount key picks up the persisted pin.
+  useEffect(() => {
+    if (chat.status !== "displaced" || chat.reason !== "model changed") return;
+    let cancelled = false;
+    void api
+      .getChatThread(thread.id)
+      .then((updated) => {
+        if (!cancelled) onThreadUpdated?.(updated);
+      })
+      .catch(() => {
+        /* keep shell until parent refreshes */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [chat, onThreadUpdated, thread.id]);
+
   async function handleModelChange(model: string | null) {
     try {
       // Persist + close warm ACP first so the remounted session reads the new pin.
@@ -128,13 +147,22 @@ function LiveProjectChat({
   }
 
   if (chat.status === "connecting") {
-    return <ThreadShell showComposerMediaStubs={false} />;
+    return (
+      <ThreadShell
+        showComposerMediaStubs={false}
+        composerLeading={modelPicker}
+      />
+    );
   }
 
   if (chat.status === "displaced") {
     if (chat.reason === "model changed") {
-      // Parent remounts via key when model updates; show a brief wait state.
-      return <ThreadShell showComposerMediaStubs={false} />;
+      return (
+        <ThreadShell
+          showComposerMediaStubs={false}
+          composerLeading={modelPicker}
+        />
+      );
     }
     return (
       <DisplacedProjectChat

@@ -216,9 +216,11 @@ export const Thread: FC<ThreadProps> = ({
 export function ThreadShell({
   placeholder = "Loading…",
   showComposerMediaStubs = true,
+  composerLeading,
 }: {
   placeholder?: string;
   showComposerMediaStubs?: boolean;
+  composerLeading?: ReactNode;
 }) {
   return (
     <div
@@ -240,8 +242,10 @@ export function ThreadShell({
                 placeholder={placeholder}
                 className="max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none"
               />
-              <div className="relative flex items-center justify-between">
-                {showComposerMediaStubs ? (
+              <div className="relative flex items-center justify-between gap-2">
+                {composerLeading ? (
+                  <div className="min-w-0">{composerLeading}</div>
+                ) : showComposerMediaStubs ? (
                   <TooltipIconButton
                     tooltip="Attach file"
                     side="bottom"

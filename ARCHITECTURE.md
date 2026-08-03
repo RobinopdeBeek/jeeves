@@ -134,7 +134,9 @@ Browser                          Server
   lives inside the AcpBridge module. At the WebSocket boundary, step chats and Project Chat
   resolve into a **ChatSession** descriptor (`createStepChatSession` /
   `createProjectChatSession`); `openChat` acquires the warm bridge from that descriptor only
-  — registry and bridge stay card-agnostic
+  — registry and bridge stay card-agnostic. Project Chat may pin `model` so spawn uses
+  `agent --model <id> acp`; board step chats omit it (CLI default). Changing a thread model
+  closes that warm process and respawns
   ([ADR 0015](./docs/adr/0015-project-chat-threads-and-chatsession.md)). The WebSocket
   `ChatConnection` is framing-only. The client never sees ACP types. Permission requests
   render as custom message parts; responses flow back through the transport. Transcripts

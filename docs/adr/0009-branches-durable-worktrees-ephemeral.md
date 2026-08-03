@@ -1,8 +1,8 @@
 # Branches are durable, worktrees are ephemeral
 
-A task's Plan → Implement → AI Review steps run as **separate runs on one durable task branch**, but each run gets a **fresh ephemeral worktree**. The durable hand-offs are explicit: Plan is harvested into the artifact folder and injected into Implement; Implement commits its source changes; AI Review reads that committed branch. No legitimate state lives only in a worktree, so a worktree may be closed after every run and recreated after a process restart without losing context.
+A task's Plan → Implement → AI Review steps run as **separate runs on one durable task branch**, but each run gets a **fresh ephemeral worktree**. The durable hand-offs are explicit: Plan is harvested into the artifact folder and injected into Implement; Implement commits its source changes; AI Review reads that committed branch and may commit rework. No legitimate state lives only in a worktree, so a worktree may be closed after every run and recreated after a process restart without losing context.
 
-Keeping the steps separate preserves per-step progress, retry granularity, the rework loop (`Implement changes →` re-queues `impl` and resets `airev` without re-planning), and per-step artifacts. This is the opposite trade-off from the interactive `/implement` skill, which combines stages because it is a manual development tool rather than an asynchronous monitor.
+Keeping the steps separate preserves per-step progress, retry granularity, the human rework loop (`Implement changes →` re-queues `impl` and resets `airev` without re-planning), and per-step artifacts. Product-wise the three steps are `/implement` split across separate context windows (light plan → TDD implement → code-review + immediate rework); operationally they stay separate runs so the board can monitor and retry each stage.
 
 The branch persists until merge: a child task branch merges into its feature branch on approval; standalone and feature branches persist through Finalize. Branches are named per card (`jeeves/card-<id>`), never per step. A new branch is created from an explicit base ref and recorded base SHA: the project's configured local default branch for features/standalone tasks, or the parent feature branch for child tasks. Jeeves never bases work on the host repository's current checkout and never fetches or updates refs implicitly.
 
@@ -12,7 +12,7 @@ The branch persists until merge: a child task branch merges into its feature bra
 
 - **Plan:** a non-empty Plan artifact must be harvested; no source changes or commit are required.
 - **Implement:** source commits are required and the tree must be clean after declared exchange files are removed.
-- **AI Review/evaluation:** declared review artifacts are required; source changes and source commits are forbidden.
+- **AI Review:** a non-empty audit **review** artifact must be harvested (findings + what was reworked, or an explicit clean review); **zero or more** rework commits are allowed; the tree must be clean after declared exchange files are removed. AI Review does **not** produce the Human Review Evaluation (see [ADR 0015](./0015-ai-review-reworks-eval-on-human-review-entry.md)).
 
 Missing or invalid required output fails the run atomically and preserves the worktree for diagnosis. Retry captures the failed worktree's status/diff as a diagnostic artifact, discards the contaminated generated worktree, and recreates a clean one from the recorded pre-run SHA. Harvested exchange files are removed from the target worktree; downstream runs receive canonical artifacts explicitly from `ArtifactStore`.
 

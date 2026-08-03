@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   ActionBarPrimitive,
+  AttachmentPrimitive,
   AuiIf,
   type AssistantState,
   ComposerPrimitive,
@@ -20,6 +21,7 @@ import {
   unstable_defaultDirectiveFormatter,
   unstable_useMentionAdapter,
   unstable_useSlashCommandAdapter,
+  useAuiEvent,
   useAuiState,
 } from "@assistant-ui/react";
 import {
@@ -34,14 +36,14 @@ import {
   IconFileText,
   IconHelp,
   IconLoader2,
-  IconMicrophone,
   IconPaperclip,
   IconSlash,
   IconSquare,
   IconTool,
   IconWorld,
+  IconX,
 } from "@tabler/icons-react";
-import { type FC, type ReactNode } from "react";
+import { type FC, type ReactNode, useState } from "react";
 
 export type ThreadProps = {
   /** ACP (or other) session ready — send is enabled. */
@@ -56,13 +58,13 @@ export type ThreadProps = {
   /** Composer placeholder while the ACP session is still opening. */
   openingPlaceholder?: string;
   /**
-   * Disabled attach / voice stub buttons. Project Chat hides these until
-   * attachments land in a later ticket; step chats keep the stubs for now.
+   * Show the capability-gated attach control. False while connecting or when
+   * the agent advertises no prompt attachment kinds.
    */
-  showComposerMediaStubs?: boolean;
+  attachmentsEnabled?: boolean;
   /**
    * Optional leading composer chrome (e.g. Project Chat model picker).
-   * Grill / Spec / Tasks omit this.
+   * Shown alongside the attach control when both are present.
    */
   composerLeading?: ReactNode;
 };
@@ -142,14 +144,15 @@ const UserDirectiveText = createDirectiveText(unstable_defaultDirectiveFormatter
 
 /**
  * Reusable assistant-ui chat thread: composer always docked at the bottom,
- * scroll-to-bottom, copy action, and stub attach / voice / @ / / chrome.
+ * scroll-to-bottom, copy action, capability-gated attachments, and @ / / chrome.
+ * No in-app mic/dictation — use OS STT tools instead.
  */
 export const Thread: FC<ThreadProps> = ({
   sessionOpen = true,
   welcomeTitle = null,
   placeholder = "Send a message... (@ to mention, / for commands)",
   openingPlaceholder = "Agent starting — you can type…",
-  showComposerMediaStubs = true,
+  attachmentsEnabled = false,
   composerLeading,
 }) => {
   const isEmpty = useAuiState(isEmptyThread);
@@ -202,7 +205,7 @@ export const Thread: FC<ThreadProps> = ({
               sessionOpen={sessionOpen}
               placeholder={placeholder}
               openingPlaceholder={openingPlaceholder}
-              showComposerMediaStubs={showComposerMediaStubs}
+              attachmentsEnabled={attachmentsEnabled}
               composerLeading={composerLeading}
             />
           </ThreadPrimitive.ViewportFooter>
@@ -215,11 +218,11 @@ export const Thread: FC<ThreadProps> = ({
 /** Visual twin of {@link Thread} while the runtime / socket is connecting. */
 export function ThreadShell({
   placeholder = "Loading…",
-  showComposerMediaStubs = true,
+  attachmentsEnabled = false,
   composerLeading,
 }: {
   placeholder?: string;
-  showComposerMediaStubs?: boolean;
+  attachmentsEnabled?: boolean;
   composerLeading?: ReactNode;
 }) {
   return (
@@ -243,37 +246,26 @@ export function ThreadShell({
                 className="max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none"
               />
               <div className="relative flex items-center justify-between gap-2">
-                {composerLeading ? (
-                  <div className="min-w-0">{composerLeading}</div>
-                ) : showComposerMediaStubs ? (
-                  <TooltipIconButton
-                    tooltip="Attach file"
-                    side="bottom"
-                    type="button"
-                    variant="ghost"
-                    size="icon-round"
-                    disabled
-                    aria-label="Attach file"
-                  >
-                    <IconPaperclip />
-                  </TooltipIconButton>
-                ) : (
-                  <span />
-                )}
-                <div className="flex items-center gap-1.5">
-                  {showComposerMediaStubs ? (
+                <div className="flex min-w-0 items-center gap-1.5">
+                  {composerLeading ? (
+                    <div className="min-w-0">{composerLeading}</div>
+                  ) : null}
+                  {attachmentsEnabled ? (
                     <TooltipIconButton
-                      tooltip="Voice input"
+                      tooltip="Attach file"
                       side="bottom"
                       type="button"
                       variant="ghost"
                       size="icon-round"
                       disabled
-                      aria-label="Voice input"
+                      aria-label="Attach file"
                     >
-                      <IconMicrophone />
+                      <IconPaperclip />
                     </TooltipIconButton>
                   ) : null}
+                  {!composerLeading && !attachmentsEnabled ? <span /> : null}
+                </div>
+                <div className="flex items-center gap-1.5">
                   <Button
                     type="button"
                     variant="default"
@@ -329,13 +321,13 @@ const Composer: FC<{
   sessionOpen: boolean;
   placeholder: string;
   openingPlaceholder: string;
-  showComposerMediaStubs: boolean;
+  attachmentsEnabled: boolean;
   composerLeading?: ReactNode;
 }> = ({
   sessionOpen,
   placeholder,
   openingPlaceholder,
-  showComposerMediaStubs,
+  attachmentsEnabled,
   composerLeading,
 }) => {
   const mention = unstable_useMentionAdapter({
@@ -359,11 +351,22 @@ const Composer: FC<{
     iconMap: slashIconMap,
     fallbackIcon: IconSlash,
   });
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  useAuiEvent("composer.attachmentAddError", (event) => {
+    setAttachmentError(event.message);
+  });
 
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
       <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
         <div data-slot="aui_composer-shell" className={COMPOSER_SHELL}>
+          {attachmentsEnabled ? (
+            <div className="flex flex-wrap gap-1.5 px-1 pt-0.5 empty:hidden">
+              <ComposerPrimitive.Attachments>
+                {() => <ComposerAttachmentChip />}
+              </ComposerPrimitive.Attachments>
+            </div>
+          ) : null}
           <LexicalComposerInput
             placeholder={sessionOpen ? placeholder : openingPlaceholder}
             autoFocus
@@ -371,10 +374,16 @@ const Composer: FC<{
             className="aui-composer-input relative max-h-32 min-h-10 w-full overflow-y-auto bg-transparent px-2.5 py-1 text-base caret-primary outline-none"
             aria-label="Message input"
           />
+          {attachmentError ? (
+            <p role="alert" className="px-2.5 text-xs text-destructive">
+              {attachmentError}
+            </p>
+          ) : null}
           <ComposerAction
             sessionOpen={sessionOpen}
-            showComposerMediaStubs={showComposerMediaStubs}
+            attachmentsEnabled={attachmentsEnabled}
             composerLeading={composerLeading}
+            onClearAttachmentError={() => setAttachmentError(null)}
           />
         </div>
 
@@ -392,44 +401,59 @@ const Composer: FC<{
   );
 };
 
+const ComposerAttachmentChip: FC = () => {
+  return (
+    <AttachmentPrimitive.Root className="aui-composer-attachment group relative inline-flex max-w-48 items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-xs">
+      <AttachmentPrimitive.Name className="truncate" />
+      <AttachmentPrimitive.Remove asChild>
+        <button
+          type="button"
+          className="rounded-sm text-muted-foreground hover:text-foreground"
+          aria-label="Remove attachment"
+        >
+          <IconX className="size-3.5" />
+        </button>
+      </AttachmentPrimitive.Remove>
+    </AttachmentPrimitive.Root>
+  );
+};
+
 const ComposerAction: FC<{
   sessionOpen: boolean;
-  showComposerMediaStubs: boolean;
+  attachmentsEnabled: boolean;
   composerLeading?: ReactNode;
-}> = ({ sessionOpen, showComposerMediaStubs, composerLeading }) => {
+  onClearAttachmentError: () => void;
+}> = ({
+  sessionOpen,
+  attachmentsEnabled,
+  composerLeading,
+  onClearAttachmentError,
+}) => {
   return (
     <div className="aui-composer-action-wrapper relative flex items-center justify-between gap-2">
-      {composerLeading ? (
-        <div className="min-w-0">{composerLeading}</div>
-      ) : showComposerMediaStubs ? (
-        <TooltipIconButton
-          tooltip="Attach file"
-          side="bottom"
-          type="button"
-          variant="ghost"
-          size="icon-round"
-          disabled
-          aria-label="Attach file"
-        >
-          <IconPaperclip />
-        </TooltipIconButton>
-      ) : (
-        <span />
-      )}
-      <div className="flex items-center gap-1.5">
-        {showComposerMediaStubs ? (
-          <TooltipIconButton
-            tooltip="Voice input"
-            side="bottom"
-            type="button"
-            variant="ghost"
-            size="icon-round"
-            disabled
-            aria-label="Voice input"
-          >
-            <IconMicrophone />
-          </TooltipIconButton>
+      <div className="flex min-w-0 items-center gap-1.5">
+        {composerLeading ? (
+          <div className="min-w-0">{composerLeading}</div>
         ) : null}
+        {attachmentsEnabled ? (
+          <ComposerPrimitive.AddAttachment asChild>
+            <TooltipIconButton
+              tooltip="Attach file"
+              side="bottom"
+              type="button"
+              variant="ghost"
+              size="icon-round"
+              disabled={!sessionOpen}
+              aria-label="Attach file"
+              onClick={onClearAttachmentError}
+            >
+              <IconPaperclip />
+            </TooltipIconButton>
+          </ComposerPrimitive.AddAttachment>
+        ) : null}
+        {!composerLeading && !attachmentsEnabled ? <span /> : null}
+      </div>
+      <div className="flex items-center gap-1.5">
         {!sessionOpen ? (
           <Button
             type="button"
@@ -584,10 +608,32 @@ const UserMessage: FC = () => {
       className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 [&:where(>*)]:col-start-2"
     >
       <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
+        <MessagePrimitive.Attachments>
+          {() => <UserMessageAttachment />}
+        </MessagePrimitive.Attachments>
         <div className="aui-user-message-content peer rounded-xl bg-muted px-4 py-2 wrap-break-word text-foreground empty:hidden">
           <MessagePrimitive.Parts components={{ Text: UserDirectiveText }} />
         </div>
       </div>
     </MessagePrimitive.Root>
+  );
+};
+
+const UserMessageAttachment: FC = () => {
+  const name = useAuiState((s) => s.attachment.name);
+  const type = useAuiState((s) => s.attachment.type);
+  return (
+    <AttachmentPrimitive.Root className="mb-1.5 flex justify-end">
+      <div className="inline-flex max-w-xs items-center gap-2 rounded-lg border border-border bg-muted/60 px-2.5 py-1.5 text-xs text-foreground">
+        {type === "image" ? (
+          <AttachmentPrimitive.unstable_Thumb className="size-8 shrink-0 overflow-hidden rounded bg-background text-[10px] leading-8 text-center text-muted-foreground" />
+        ) : (
+          <IconPaperclip className="size-3.5 shrink-0 text-muted-foreground" />
+        )}
+        <span className="truncate" title={name}>
+          {name}
+        </span>
+      </div>
+    </AttachmentPrimitive.Root>
   );
 };

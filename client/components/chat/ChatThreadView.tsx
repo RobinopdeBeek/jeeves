@@ -13,6 +13,7 @@ import { FrozenTranscriptView } from "@/components/grill/ReadOnlyTranscript";
 import { PermissionDataUI } from "@/components/grill/PermissionPartView";
 import { GrillTransportContext } from "@/components/grill/transport-context";
 import { Button } from "@/components/ui/button";
+import { attachmentAcceptFor } from "@shared/prompt-capabilities";
 import { AcpChatProvider, useAcpChat } from "@/hooks/useAcpChat";
 import { api, type ChatThread } from "@/lib/api";
 import { toast } from "sonner";
@@ -148,20 +149,14 @@ function LiveProjectChat({
 
   if (chat.status === "connecting") {
     return (
-      <ThreadShell
-        showComposerMediaStubs={false}
-        composerLeading={modelPicker}
-      />
+      <ThreadShell composerLeading={modelPicker} />
     );
   }
 
   if (chat.status === "displaced") {
     if (chat.reason === "model changed") {
       return (
-        <ThreadShell
-          showComposerMediaStubs={false}
-          composerLeading={modelPicker}
-        />
+        <ThreadShell composerLeading={modelPicker} />
       );
     }
     return (
@@ -176,16 +171,19 @@ function LiveProjectChat({
     <div className="flex min-h-0 flex-1 flex-col">
       {chat.connection === "reconnecting" ? <ReconnectingBanner /> : null}
       <AcpChatProvider
-        key={chat.epoch}
+        key={`${chat.epoch}:${attachmentAcceptFor(chat.promptCapabilities)}`}
         transport={chat.transport}
         messages={chat.messages}
+        promptCapabilities={chat.promptCapabilities}
       >
         <GrillTransportContext.Provider value={chat.transport}>
           <PermissionDataUI />
           <Thread
             sessionOpen={chat.sessionOpen}
             welcomeTitle={welcomeTitle}
-            showComposerMediaStubs={false}
+            attachmentsEnabled={
+              attachmentAcceptFor(chat.promptCapabilities).length > 0
+            }
             openingPlaceholder="Warming agent — you can type…"
             composerLeading={modelPicker}
           />

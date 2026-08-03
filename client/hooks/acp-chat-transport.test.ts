@@ -575,4 +575,107 @@ describe("AcpChatTransport", () => {
     ws.deliver({ type: "session", status: "open", streaming: false });
     expect(transport.isSessionOpen()).toBe(true);
   });
+
+  it("stores promptCapabilities from session/open and sends file attachments", async () => {
+    const TINY_PNG =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const transport = new AcpChatTransport({
+      cardId: "c1",
+      stepKey: "grill",
+    });
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({ type: "ready", messages: [], streaming: false });
+    await connectP;
+    expect(transport.getPromptCapabilities()).toEqual({
+      image: false,
+      audio: false,
+      embeddedContext: false,
+    });
+    ws.deliver({
+      type: "session",
+      status: "open",
+      streaming: false,
+      promptCapabilities: { image: true, audio: false, embeddedContext: false },
+    });
+    expect(transport.getPromptCapabilities()).toEqual({
+      image: true,
+      audio: false,
+      embeddedContext: false,
+    });
+
+    const stream = await transport.sendMessages({
+      messages: [
+        {
+          id: "u1",
+          role: "user",
+          parts: [
+            { type: "text", text: "see this" },
+            {
+              type: "file",
+              url: TINY_PNG,
+              mediaType: "image/png",
+              filename: "dot.png",
+            },
+          ],
+        },
+      ],
+    } as Parameters<AcpChatTransport["sendMessages"]>[0]);
+    void readAll(stream);
+
+    const sent = ws.sent.map((s) => JSON.parse(s) as unknown);
+    expect(sent).toContainEqual({
+      type: "user-message",
+      text: "see this",
+      attachments: [
+        { mediaType: "image/png", filename: "dot.png", url: TINY_PNG },
+      ],
+    });
+  });
+
+  it("sends attachment-only user turns", async () => {
+    const TINY_PNG =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const transport = new AcpChatTransport({
+      cardId: "c1",
+      stepKey: "grill",
+    });
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({ type: "ready", messages: [], streaming: false });
+    await connectP;
+    ws.deliver({
+      type: "session",
+      status: "open",
+      streaming: false,
+      promptCapabilities: { image: true, audio: false, embeddedContext: false },
+    });
+
+    const stream = await transport.sendMessages({
+      messages: [
+        {
+          id: "u1",
+          role: "user",
+          parts: [
+            {
+              type: "file",
+              url: TINY_PNG,
+              mediaType: "image/png",
+              filename: "dot.png",
+            },
+          ],
+        },
+      ],
+    } as Parameters<AcpChatTransport["sendMessages"]>[0]);
+    void readAll(stream);
+
+    const sent = ws.sent.map((s) => JSON.parse(s) as unknown);
+    expect(sent).toContainEqual({
+      type: "user-message",
+      text: "",
+      attachments: [
+        { mediaType: "image/png", filename: "dot.png", url: TINY_PNG },
+      ],
+    });
+  });
 });

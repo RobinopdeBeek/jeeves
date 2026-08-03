@@ -3,7 +3,10 @@ import { useAISDKRuntime } from "@assistant-ui/react-ai-sdk";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ChatTransport, UIMessage } from "ai";
+import type { PromptCapabilities } from "@shared/chat-ws";
+import { EMPTY_PROMPT_CAPABILITIES } from "@shared/prompt-capabilities";
 import type { TasksDraftTip } from "@/lib/api";
+import { createAcpAttachmentAdapter } from "./acp-attachment-adapter";
 import {
   AcpChatTransport,
   type ChatConnectionState,
@@ -26,25 +29,27 @@ export interface UseAcpChatOptions {
 export type AcpChatState =
   | { status: "connecting" }
   | {
-    status: "ready";
-    transport: AcpChatTransport;
-    messages: UIMessage[];
-    /** ACP handshake done — composer send is allowed. */
-    sessionOpen: boolean;
-    /** Socket health; "reconnecting" drives the recovery hint. */
-    connection: ChatConnectionState;
-    /**
-     * Bumped when a reconnect delivers a fresh transcript. Callers key the
-     * chat runtime on it so recovery re-seeds history (like remounting).
-     */
-    epoch: number;
-  }
+      status: "ready";
+      transport: AcpChatTransport;
+      messages: UIMessage[];
+      /** ACP handshake done — composer send is allowed. */
+      sessionOpen: boolean;
+      /** Socket health; "reconnecting" drives the recovery hint. */
+      connection: ChatConnectionState;
+      /**
+       * Bumped when a reconnect delivers a fresh transcript. Callers key the
+       * chat runtime on it so recovery re-seeds history (like remounting).
+       */
+      epoch: number;
+      /** Negotiated ACP prompt attachment kinds (gates the composer paperclip). */
+      promptCapabilities: PromptCapabilities;
+    }
   | {
-    status: "displaced";
-    reason: string;
-    /** Last messages seen on the live socket before displacement (may be stale). */
-    messages: UIMessage[];
-  }
+      status: "displaced";
+      reason: string;
+      /** Last messages seen on the live socket before displacement (may be stale). */
+      messages: UIMessage[];
+    }
   | { status: "error"; error: string };
 
 /**
@@ -133,6 +138,7 @@ export function useAcpChat({
           sessionOpen: transport.isSessionOpen(),
           connection: transport.getConnectionState(),
           epoch: 0,
+          promptCapabilities: transport.getPromptCapabilities(),
         });
         void transport
           .whenSessionOpen()
@@ -140,7 +146,12 @@ export function useAcpChat({
             if (cancelled) return;
             setState((prev) =>
               prev.status === "ready"
-                ? { ...prev, sessionOpen: true, connection: "open" }
+                ? {
+                    ...prev,
+                    sessionOpen: true,
+                    connection: "open",
+                    promptCapabilities: transport.getPromptCapabilities(),
+                  }
                 : prev,
             );
           })
@@ -188,10 +199,12 @@ export function useAcpChat({
 export function AcpChatProvider({
   transport,
   messages,
+  promptCapabilities = EMPTY_PROMPT_CAPABILITIES,
   children,
 }: {
   transport: AcpChatTransport;
   messages: UIMessage[];
+  promptCapabilities?: PromptCapabilities;
   children: ReactNode;
 }) {
   const chat = useChat({
@@ -205,6 +218,11 @@ export function AcpChatProvider({
   // Nested @ai-sdk/react inside react-ai-sdk can disagree on UseChatHelpers.
   const runtime = useAISDKRuntime(
     chat as unknown as Parameters<typeof useAISDKRuntime>[0],
+    {
+      adapters: {
+        attachments: createAcpAttachmentAdapter(promptCapabilities),
+      },
+    },
   );
   return (
     <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>

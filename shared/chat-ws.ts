@@ -1,4 +1,10 @@
 import type { UIMessage, UIMessageChunk } from "ai";
+import type {
+  ChatAttachment,
+  PromptCapabilities,
+} from "./prompt-capabilities.js";
+
+export type { ChatAttachment, PromptCapabilities } from "./prompt-capabilities.js";
 
 /** Client-visible permission option projected from ACP (no ACP types leak). */
 export type PermissionOptionPart = {
@@ -28,6 +34,11 @@ export type WsClientMessage =
        * Kind is implied by the step; body is opaque to the transport.
        */
       liveDraftBody?: string;
+      /**
+       * AI SDK file-part attachments for this turn. Server converts accepted
+       * kinds to ACP ContentBlocks; unsupported kinds fail closed.
+       */
+      attachments?: ChatAttachment[];
     }
   | { type: "permission-response"; requestId: string; optionId: string }
   /** Abort the in-flight ACP prompt turn (Stop). */
@@ -38,7 +49,13 @@ export type WsClientMessage =
 export type WsServerMessage =
   | { type: "ready"; messages: UIMessage[]; streaming?: boolean }
   /** ACP handshake finished — client may send user turns. */
-  | { type: "session"; status: "open"; streaming?: boolean }
+  | {
+      type: "session";
+      status: "open";
+      streaming?: boolean;
+      /** Negotiated ACP prompt ContentBlock kinds (fail-closed defaults). */
+      promptCapabilities: PromptCapabilities;
+    }
   | { type: "chunk"; chunk: UIMessageChunk }
   | { type: "status"; status: "ai-working" | "needs-user" }
   /** Answer to a client `ping` — proves the socket is not half-open. */

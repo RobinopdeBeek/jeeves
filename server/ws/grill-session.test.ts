@@ -53,6 +53,27 @@ describe("serializeTranscriptForExtract", () => {
     expect(text).toContain("---");
   });
 
+  it("includes attachment markers for file parts", () => {
+    const messages: UIMessage[] = [
+      {
+        id: "u1",
+        role: "user",
+        parts: [
+          { type: "text", text: "See this" },
+          {
+            type: "file",
+            url: "data:image/png;base64,aa==",
+            mediaType: "image/png",
+            filename: "dot.png",
+          },
+        ],
+      },
+    ];
+    expect(serializeTranscriptForExtract(messages)).toContain(
+      "[attached: dot.png (image/png)]",
+    );
+  });
+
   it("skips messages with no usable parts", () => {
     const messages: UIMessage[] = [
       { id: "empty", role: "assistant", parts: [{ type: "text", text: "  " }] },

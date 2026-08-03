@@ -139,7 +139,9 @@ Browser                          Server
   closes that warm process and respawns
   ([ADR 0015](./docs/adr/0015-project-chat-threads-and-chatsession.md)). The WebSocket
   `ChatConnection` is framing-only. The client never sees ACP types. Permission requests
-  render as custom message parts; responses flow back through the transport. Transcripts
+  render as custom message parts; responses flow back through the transport. Attachments are
+  gated by `initialize` `promptCapabilities` (fail-closed): accepted kinds travel as AI SDK
+  file parts on the wire and become ACP `ContentBlock`s inside `AcpBridge`. Transcripts
   serialize as `UIMessage[]` for artifact persistence and replay.
 - **Execution:** `AgentRunner` (`run(prompt, options): AsyncIterable<RunEvent>`) is the inner
   seam inside `ExecutionEngine`. One call owns one temporary worktree and invokes a generic

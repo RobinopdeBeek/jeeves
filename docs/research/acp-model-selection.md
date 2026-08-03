@@ -227,7 +227,7 @@ These items were **not** established from official Cursor product docs / ACP spe
 5. **How JetBrains (or Zed/Neovim) ACP clients implement the “Model selection” UX** against Cursor — JetBrains docs claim the capability without documenting the RPC.
 6. **Cursor-private ACP client capabilities / `_meta` extensions** for parameterized model pickers (variants, Max, thought level).
 7. **Per-prompt model override for Cursor ACP** — not in ACP `PromptRequest`; Cursor docs do not add a Cursor-specific extension for it.
-8. **Whether Cursor ACP prompt capabilities include `image` / `embeddedContext`** in practice — protocol defines the gates; Cursor’s ACP page does not list advertised `promptCapabilities`.
+8. **Whether Cursor ACP prompt capabilities include `image` / `embeddedContext`** in practice — **resolved for the installed Cursor CLI (2026.07.23-e383d2b):** `image: true`, `audio: false`, `embeddedContext: false`. Jeeves still fail-closes from the live `initialize` probe rather than hard-coding this spike.
 9. **Exact machine-readable shape** of `agent models` / `--list-models` output (needs a local CLI probe).
 
 ---

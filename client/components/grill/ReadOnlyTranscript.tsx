@@ -81,6 +81,36 @@ function ReadOnlyMessage({ message }: { message: UIMessage }) {
         className="grid auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 [&:where(>*)]:col-start-2"
       >
         <div className="relative col-start-2 min-w-0">
+          <div className="mb-1.5 flex flex-col items-end gap-1.5 empty:hidden">
+            {message.parts.map((part, i) => {
+              if (part.type !== "file") return null;
+              const file = part as {
+                type: "file";
+                mediaType: string;
+                filename?: string;
+                url: string;
+              };
+              const label = file.filename?.trim() || file.mediaType;
+              const isImage = file.mediaType.startsWith("image/");
+              return (
+                <div
+                  key={i}
+                  className="inline-flex max-w-xs items-center gap-2 rounded-lg border border-border bg-muted/60 px-2.5 py-1.5 text-xs text-foreground"
+                >
+                  {isImage ? (
+                    <img
+                      src={file.url}
+                      alt={label}
+                      className="size-8 rounded object-cover"
+                    />
+                  ) : null}
+                  <span className="truncate" title={label}>
+                    {label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
           <div className="rounded-xl bg-muted px-4 py-2 wrap-break-word text-sm text-foreground empty:hidden">
             {message.parts.map((part, i) => {
               if (part.type !== "text") return null;

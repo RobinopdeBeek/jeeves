@@ -73,7 +73,7 @@ A free-text item raised during review, scoped to a round, moving open → consum
 A file produced by a step, stored in the project store's artifact folder and indexed by a database row holding metadata and a path — never content. Self-describing via frontmatter; lineage recorded as derived-from links.
 
 **Transcript**:
-The mutable `UIMessage[]` chat log for an AI chat step, stored as an artifact so the session can resume and be reviewed. Not the Grill hand-off document Spec consumes.
+The mutable `UIMessage[]` chat log for an AI chat step or Chat Thread, stored so the session can resume and be reviewed. Step transcripts are artifacts under a card; Project Chat transcripts live under the project store's chat data area (`data/chat/<threadId>/`). Not the Grill hand-off document Spec consumes.
 _Avoid_: Using "transcript" to mean the durable Grill Q&A artifact
 
 **Project Chat**:
@@ -89,7 +89,7 @@ The durable Q&A markdown artifact from a completed Grill step (kind `grill`): re
 _Avoid_: Grill summary (implies synthesis); using "transcript" for this document; inlining full ADR/glossary bodies here
 
 **Project store**:
-Per-target-repository workflow storage at `<repo>/.jeeves/` (gitignored on disk). Holds `jeeves.db`, the artifact tree under `data/`, and ephemeral agent worktrees under `worktrees/`. Jeeves creates it on first use and ensures `.jeeves/` is in the target repo's `.gitignore`. Application source stays git-clean — nothing in the store is committed.
+Per-target-repository workflow storage at `<repo>/.jeeves/` (gitignored on disk). Holds `jeeves.db`, the artifact tree under `data/` (including Project Chat transcripts under `data/chat/`), and ephemeral agent worktrees under `worktrees/`. Jeeves creates it on first use and ensures `.jeeves/` is in the target repo's `.gitignore`. Application source stays git-clean — nothing in the store is committed.
 _Avoid_: Data dir (ambiguous with app vs project)
 
 **Artifact folder**:

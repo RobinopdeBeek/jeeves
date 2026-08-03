@@ -51,6 +51,7 @@ Laptop (always on)
 │     └── .jeeves/  — per-project store (created on first use)
 │           ├── jeeves.db
 │           ├── data/cards/<cardId>/<round>/   ← artifact folder
+│           ├── data/chat/<threadId>/          ← Project Chat transcripts
 │           └── worktrees/<cardId>/            ← ephemeral agent checkouts
 └── Tailscale — phone/tablet/other machines reach the board privately
 ```
@@ -151,7 +152,8 @@ Browser                          Server
 
 ## Module map
 
-Five deep modules, each a small interface hiding a lot of behaviour. These interfaces are
+Five deep modules, each a small interface hiding a lot of behaviour (plus `ChatThreadStore`
+for project-scoped Project Chat index/files). These interfaces are
 the **pre-agreed seams**: specs sketch their testing against them and all TDD happens at
 them. Everything else (routes, React components) is a thin adapter.
 
@@ -159,6 +161,7 @@ them. Everything else (routes, React components) is a thin adapter.
 |---|---|---|---|
 | `PipelineEngine` | `server/pipelines.ts` | pipeline lookup by `(kind, hasParent)`; real `advance(card, trigger)` → patches + side-effects (`enqueue`, `close-chat`) | all column/step transition rules, auto-advance, board predicates (`canCreateSpec`), "workflow is code" |
 | `CardStore` | `server/db/` + card logic | CRUD, kind decision, fan-out, blocker edges, derived queries ("X of Y", queue candidates, Round N history); persists `advance` patches | SQLite/Drizzle, active/merged/done cards + tip drafts in ArtifactStore, every derivation rule |
+| `ChatThreadStore` | `server/chat-threads/` | list / create-or-reuse empty draft / rename / mark-opened / hard-delete; transcript path under `data/chat/` | SQLite `chat_threads` index + on-disk empty transcript files (ADR 0015) |
 | `ArtifactStore` | `server/artifacts/store.ts` + routes | `save`, `harvest(worktree, declarations)`, `list(card)`, serve-path resolution; transcript upsert is file/index only | atomic/versioned files, metadata, root containment, manifest regeneration, lineage, rounds, supersession |
 | `ExecutionEngine` | `server/execution/` (`engine.ts`, `runner.ts`, `worktree-manager.ts`, `cursor-sdk-runner.ts`, `run-store.ts`, `events.ts`) | `enqueue(card, step)` + run events; `startPreview(card, gitSha)` / `stopPreview()`; dispatches `advance` side-effects on finish | `AgentRunner`, per-run worktrees/finalization, branch strategy, host-process preview lifecycle, sequential queue, blockers, restart recovery, eval sequencing |
 | `AcpBridge` | `server/ws/chat.ts` (+ `chat-session.ts`, `open-chat.ts`, `session-registry.ts`) | push-only `openSession` / `sendMessage` + `attach`/`onChunk`; headless `runToCompletion`; warm registry acquire/reattach on opaque ids; `ChatSession` + `openChat` for adapters | spawning `agent acp`, ACP→`UIMessage` projection, permission responses (incl. headless cursor-like policy), JSON-RPC piping, warm cap/eviction, seed-once / nullable opener, disconnect/hand-off close |
@@ -176,7 +179,8 @@ Entity definitions live in [`CONTEXT.md`](./CONTEXT.md); columns live in
 - A **project** (a target repository) has many **cards**, a gitignored **project store** at
   `<repo>/.jeeves/` (SQLite + artifact tree + worktrees — created on first use), its explicit
   local default branch, and validated preview configuration; reviewed branches cannot alter
-  launch policy.
+  launch policy. The same project owns **Chat Threads** for Project Chat (`chat_threads` index
+  rows; transcript files under `<repo>/.jeeves/data/chat/<threadId>/`).
 - A **card** is the one entity for features and tasks on the board. Tasks shaping drafts
   are versioned `tasks-draft` artifacts until fan-out ([ADR 0014](docs/adr/0014-tasks-drafts-are-versioned-artifacts.md)).
   A card with a `parent_card_id` is a child task of that feature; blocked-by relationships are

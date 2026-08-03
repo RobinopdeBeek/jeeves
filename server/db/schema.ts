@@ -137,6 +137,20 @@ export const artifacts = sqliteTable("artifacts", {
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 });
 
+/** Project Chat threads — index rows; transcript files live under chatRoot (ADR 0015). */
+export const chatThreads = sqliteTable("chat_threads", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => projects.id),
+  title: text("title").notNull(),
+  /** Cursor model id for this thread; null until the model picker lands. */
+  model: text("model"),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  lastOpenedAt: integer("last_opened_at", { mode: "timestamp_ms" }),
+});
+
 export type Project = typeof projects.$inferSelect;
 export type Card = typeof cards.$inferSelect;
 export type CardStep = typeof cardSteps.$inferSelect;
@@ -144,3 +158,4 @@ export type CardBlocker = typeof cardBlockers.$inferSelect;
 export type Run = typeof runs.$inferSelect;
 export type Artifact = typeof artifacts.$inferSelect;
 export type ArtifactKind = (typeof artifactKinds)[number];
+export type ChatThread = typeof chatThreads.$inferSelect;

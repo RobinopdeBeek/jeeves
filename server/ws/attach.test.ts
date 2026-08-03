@@ -68,6 +68,131 @@ describe("ChatConnection liveness", () => {
   });
 });
 
+describe("ChatConnection attachments", () => {
+  const TINY_PNG =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+  function connectedHarness(caps: {
+    image?: boolean;
+    audio?: boolean;
+    embeddedContext?: boolean;
+  }) {
+    const sent: string[] = [];
+    const ws = {
+      send: (data: string) => sent.push(data),
+      close: () => {},
+    } as unknown as WSContext;
+    const sends: Array<{
+      text: string;
+      opts?: { liveDraftBody?: string; attachments?: unknown };
+    }> = [];
+    const conn = new ChatConnection(ws, stepTarget, {} as ChatWsDeps);
+    (
+      conn as unknown as {
+        handle: {
+          cancelTurn: () => void;
+          sendMessage: (
+            text: string,
+            opts?: { liveDraftBody?: string; attachments?: unknown },
+          ) => Promise<void>;
+          respondToPermission: () => void;
+          attach: () => void;
+          detach: () => void;
+          getPendingPermissionIds: () => string[];
+          getPromptCapabilities: () => {
+            image: boolean;
+            audio: boolean;
+            embeddedContext: boolean;
+          };
+        };
+      }
+    ).handle = {
+      cancelTurn: () => {},
+      sendMessage: async (text, opts) => {
+        sends.push({ text, opts });
+      },
+      respondToPermission: () => {},
+      attach: () => {},
+      detach: () => {},
+      getPendingPermissionIds: () => [],
+      getPromptCapabilities: () => ({
+        image: caps.image === true,
+        audio: caps.audio === true,
+        embeddedContext: caps.embeddedContext === true,
+      }),
+    };
+    return { sent, sends, conn };
+  }
+
+  it("forwards accepted image attachments", async () => {
+    const { sent, sends, conn } = connectedHarness({ image: true });
+    await conn.onClientMessage(
+      JSON.stringify({
+        type: "user-message",
+        text: "see",
+        attachments: [
+          { mediaType: "image/png", filename: "dot.png", url: TINY_PNG },
+        ],
+      }),
+    );
+    expect(sends).toEqual([
+      {
+        text: "see",
+        opts: {
+          attachments: [
+            { mediaType: "image/png", filename: "dot.png", url: TINY_PNG },
+          ],
+        },
+      },
+    ]);
+    expect(sent).toEqual([]);
+  });
+
+  it("surfaces bridge errors for rejected attachments", async () => {
+    const { sent, sends, conn } = connectedHarness({});
+    (
+      conn as unknown as {
+        handle: { sendMessage: () => Promise<void> };
+      }
+    ).handle.sendMessage = async () => {
+      throw new Error(
+        'Attachments are not supported by this agent session (rejected "image/png").',
+      );
+    };
+    await conn.onClientMessage(
+      JSON.stringify({
+        type: "user-message",
+        text: "see",
+        attachments: [
+          { mediaType: "image/png", filename: "dot.png", url: TINY_PNG },
+        ],
+      }),
+    );
+    expect(sends).toEqual([]);
+    expect(sent.map((s) => JSON.parse(s) as unknown)).toEqual([
+      {
+        type: "error",
+        error: expect.stringMatching(/not supported|does not accept image/i),
+      },
+    ]);
+  });
+
+  it("allows attachment-only turns", async () => {
+    const { sends, conn } = connectedHarness({ image: true });
+    await conn.onClientMessage(
+      JSON.stringify({
+        type: "user-message",
+        text: "   ",
+        attachments: [
+          { mediaType: "image/png", filename: "dot.png", url: TINY_PNG },
+        ],
+      }),
+    );
+    expect(sends[0]?.text).toBe("");
+    expect(sends[0]?.opts?.attachments).toHaveLength(1);
+  });
+});
+
 describe("ChatConnection thread target", () => {
   it("answers ping on a thread connection before ACP is ready", async () => {
     const sent: string[] = [];

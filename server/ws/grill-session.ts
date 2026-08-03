@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { UIMessage } from "ai";
+import { attachmentMarker } from "../../shared/prompt-capabilities.js";
 
 /** Flatten a chat transcript into role-tagged text for the grill-session extract. */
 export function serializeTranscriptForExtract(messages: UIMessage[]): string {
@@ -12,6 +13,15 @@ export function serializeTranscriptForExtract(messages: UIMessage[]): string {
       if (part.type === "text") {
         const text = part.text.trim();
         if (text) lines.push(text);
+        continue;
+      }
+      if (part.type === "file") {
+        const file = part as {
+          type: "file";
+          mediaType: string;
+          filename?: string;
+        };
+        lines.push(attachmentMarker(file.filename, file.mediaType));
         continue;
       }
       if (part.type === "data-permission") {

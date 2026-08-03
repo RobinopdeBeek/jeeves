@@ -1111,6 +1111,182 @@ describe("AcpBridge", () => {
       sub.chunks.some((c) => (c as { type?: string }).type === "finish"),
     ).toBe(true);
   });
+
+  const TINY_PNG =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+  it("captures initialize promptCapabilities (fail-closed when omitted)", async () => {
+    const closed = new MockAcpProcess();
+    closed.autoHandshake("sess-caps-off");
+    const bridgeOff = new AcpBridge({
+      spawn: () => closed,
+      onTranscript: () => {},
+    });
+    await bridgeOff.openSession({
+      cwd: "/repo",
+      openingPrompt: null,
+      history: [],
+    });
+    expect(bridgeOff.getPromptCapabilities()).toEqual({
+      image: false,
+      audio: false,
+      embeddedContext: false,
+    });
+
+    const open = new MockAcpProcess();
+    open.autoHandshake("sess-caps-on", {
+      promptCapabilities: { image: true },
+    });
+    const bridgeOn = new AcpBridge({
+      spawn: () => open,
+      onTranscript: () => {},
+    });
+    await bridgeOn.openSession({
+      cwd: "/repo",
+      openingPrompt: null,
+      history: [],
+    });
+    expect(bridgeOn.getPromptCapabilities()).toEqual({
+      image: true,
+      audio: false,
+      embeddedContext: false,
+    });
+  });
+
+  it("sends image ContentBlocks on session/prompt and stores file parts", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-img", {
+      promptCapabilities: { image: true },
+    });
+    const transcripts: UIMessage[][] = [];
+    const bridge = new AcpBridge({
+      spawn: () => process,
+      onTranscript: (messages) => transcripts.push(messages),
+    });
+    await bridge.openSession({
+      cwd: "/repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    const replyPromise = bridge.sendMessage("What is this?", {
+      attachments: [
+        { mediaType: "image/png", filename: "dot.png", url: TINY_PNG },
+      ],
+    });
+    await viWaitFor(() => process.prompts().length === 1);
+
+    expect(process.prompts()[0]!.prompt).toEqual([
+      { type: "text", text: "What is this?" },
+      {
+        type: "image",
+        mimeType: "image/png",
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      },
+    ]);
+
+    const promptReq = process.promptRequest();
+    process.emit({
+      jsonrpc: "2.0",
+      id: promptReq.id,
+      result: { stopReason: "end_turn" },
+    });
+    await replyPromise;
+
+    const user = transcripts.at(-1)?.find((m) => m.role === "user");
+    expect(user?.parts).toEqual([
+      { type: "text", text: "What is this?" },
+      {
+        type: "file",
+        url: TINY_PNG,
+        mediaType: "image/png",
+        filename: "dot.png",
+      },
+    ]);
+  });
+
+  it("rejects unsupported attachments before prompting", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-reject");
+    const bridge = new AcpBridge({
+      spawn: () => process,
+      onTranscript: () => {},
+    });
+    await bridge.openSession({
+      cwd: "/repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    await expect(
+      bridge.sendMessage("see this", {
+        attachments: [
+          { mediaType: "image/png", filename: "dot.png", url: TINY_PNG },
+        ],
+      }),
+    ).rejects.toThrow(/not supported|does not accept image/i);
+    expect(process.prompts()).toHaveLength(0);
+    expect(bridge.getMessages()).toHaveLength(0);
+  });
+
+  it("reseeds prior image attachments on cold resume", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-seed-img", {
+      promptCapabilities: { image: true },
+    });
+    const bridge = new AcpBridge({
+      spawn: () => process,
+      onTranscript: () => {},
+    });
+    await bridge.openSession({
+      cwd: "/repo",
+      openingPrompt: "unused",
+      history: [
+        {
+          id: "u1",
+          role: "user",
+          parts: [
+            { type: "text", text: "Look" },
+            {
+              type: "file",
+              url: TINY_PNG,
+              mediaType: "image/png",
+              filename: "dot.png",
+            },
+          ],
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          parts: [{ type: "text", text: "A pixel." }],
+        },
+      ],
+    });
+
+    const replyPromise = bridge.sendMessage("Again?");
+    await viWaitFor(() => process.prompts().length === 1);
+    const prompt = process.prompts()[0]!.prompt as Array<{
+      type: string;
+      text?: string;
+    }>;
+    expect(prompt[0]!.type).toBe("text");
+    expect(prompt[0]!.text).toContain("[attached: dot.png (image/png)]");
+    expect(prompt[0]!.text).toContain("User: Again?");
+    // Prior images are emitted before any latest-turn attachment blocks.
+    const imageIndexes = prompt
+      .map((b, i) => (b.type === "image" ? i : -1))
+      .filter((i) => i >= 0);
+    expect(imageIndexes.length).toBeGreaterThan(0);
+    expect(imageIndexes[0]).toBe(1);
+
+    const promptReq = process.promptRequest();
+    process.emit({
+      jsonrpc: "2.0",
+      id: promptReq.id,
+      result: { stopReason: "end_turn" },
+    });
+    await replyPromise;
+  });
 });
 
 describe("decideInteractivePermission", () => {

@@ -1,4 +1,5 @@
 import type { UIMessage } from "ai";
+import type { ChatAttachment, PromptCapabilities } from "../../shared/chat-ws.js";
 import {
   AcpBridge,
   type AcpLiveCallbacks,
@@ -42,12 +43,13 @@ export interface WarmSessionHandle {
   /** Send a user message; chunks arrive via attach / onChunk buffering. */
   sendMessage(
     text: string,
-    opts?: { liveDraftBody?: string },
+    opts?: { liveDraftBody?: string; attachments?: ChatAttachment[] },
   ): Promise<void>;
   respondToPermission(requestId: string, optionId: string): void;
   /** Abort the in-flight ACP prompt turn. */
   cancelTurn(): void;
   getPendingPermissionIds(): string[];
+  getPromptCapabilities(): PromptCapabilities;
 }
 
 /**
@@ -175,6 +177,7 @@ export class ChatSessionRegistry {
         bridge.respondToPermission(requestId, optionId),
       cancelTurn: () => bridge.cancelTurn(),
       getPendingPermissionIds: () => bridge.getPendingPermissionIds(),
+      getPromptCapabilities: () => bridge.getPromptCapabilities(),
     };
   }
 

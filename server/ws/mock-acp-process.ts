@@ -24,7 +24,21 @@ export class MockAcpProcess implements AcpProcess {
     for (const handler of this.lineHandlers) handler(line);
   }
 
-  autoHandshake(sessionId = "sess-test"): void {
+  /**
+   * Answer initialize / authenticate / session/new.
+   * Default initialize omits promptCapabilities (fail-closed — text only).
+   * Pass `promptCapabilities` to simulate agents that accept richer blocks.
+   */
+  autoHandshake(
+    sessionId = "sess-test",
+    opts?: {
+      promptCapabilities?: {
+        image?: boolean;
+        audio?: boolean;
+        embeddedContext?: boolean;
+      };
+    },
+  ): void {
     const answered = new Set<number>();
     const originalWrite = this.write.bind(this);
     this.write = (line: string) => {
@@ -32,8 +46,18 @@ export class MockAcpProcess implements AcpProcess {
       const m = JSON.parse(line) as { id?: number; method?: string };
       if (m.id == null || m.method == null || answered.has(m.id)) return;
       let result: unknown;
-      if (m.method === "initialize") result = { protocolVersion: 1 };
-      else if (m.method === "authenticate") result = {};
+      if (m.method === "initialize") {
+        result = {
+          protocolVersion: 1,
+          ...(opts?.promptCapabilities
+            ? {
+                agentCapabilities: {
+                  promptCapabilities: opts.promptCapabilities,
+                },
+              }
+            : {}),
+        };
+      } else if (m.method === "authenticate") result = {};
       else if (m.method === "session/new") result = { sessionId };
       else return;
       answered.add(m.id);

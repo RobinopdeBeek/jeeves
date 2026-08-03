@@ -1,5 +1,6 @@
 import type { WSContext } from "hono/ws";
 import type {
+  ChatAttachment,
   WsClientMessage,
   WsServerMessage,
 } from "../../shared/chat-ws.js";
@@ -163,6 +164,7 @@ export class ChatConnection {
       type: "session",
       status: "open",
       streaming: this.deps.sessions.isAiWorking(this.sessionId),
+      promptCapabilities: this.handle.getPromptCapabilities(),
     });
   }
 
@@ -217,7 +219,24 @@ export class ChatConnection {
     }
 
     if (this.sending) return;
-    if (msg.type !== "user-message" || typeof msg.text !== "string" || !msg.text.trim()) {
+    if (msg.type !== "user-message" || typeof msg.text !== "string") {
+      this.send({ type: "error", error: "unsupported message" });
+      return;
+    }
+
+    let attachments: ChatAttachment[] = [];
+    try {
+      attachments = parseClientAttachments(msg.attachments);
+    } catch (err) {
+      this.send({
+        type: "error",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+
+    const text = msg.text.trim();
+    if (!text && attachments.length === 0) {
       this.send({ type: "error", error: "unsupported message" });
       return;
     }
@@ -226,7 +245,10 @@ export class ChatConnection {
     try {
       const liveDraftBody =
         typeof msg.liveDraftBody === "string" ? msg.liveDraftBody : undefined;
-      await this.handle.sendMessage(msg.text.trim(), { liveDraftBody });
+      await this.handle.sendMessage(text, {
+        liveDraftBody,
+        ...(attachments.length > 0 ? { attachments } : {}),
+      });
     } catch (err) {
       this.send({
         type: "error",
@@ -271,4 +293,28 @@ export class ChatConnection {
       // Client gone.
     }
   }
+}
+
+/** Coerce/validate the optional attachments array from a client user-message. */
+function parseClientAttachments(raw: unknown): ChatAttachment[] {
+  if (raw == null) return [];
+  if (!Array.isArray(raw)) {
+    throw new Error("attachments must be an array");
+  }
+  const out: ChatAttachment[] = [];
+  for (const item of raw) {
+    if (item == null || typeof item !== "object") {
+      throw new Error("invalid attachment");
+    }
+    const att = item as Record<string, unknown>;
+    if (typeof att.mediaType !== "string" || typeof att.url !== "string") {
+      throw new Error("attachment requires mediaType and url");
+    }
+    out.push({
+      mediaType: att.mediaType,
+      url: att.url,
+      ...(typeof att.filename === "string" ? { filename: att.filename } : {}),
+    });
+  }
+  return out;
 }

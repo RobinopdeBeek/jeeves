@@ -85,13 +85,17 @@ function LiveGrill({
       {chat.connection === "reconnecting" ? <ReconnectingBanner /> : null}
       {/* epoch remounts the runtime after a reconnect so the server transcript wins. */}
       <AcpChatProvider
-        key={chat.epoch}
+        key={`${chat.epoch}:${chat.attachmentsEnabled ? "att" : "plain"}`}
         transport={chat.transport}
         messages={chat.messages}
+        promptCapabilities={chat.promptCapabilities}
       >
         <GrillTransportContext.Provider value={chat.transport}>
           <PermissionDataUI />
-          <Thread sessionOpen={chat.sessionOpen} />
+          <Thread
+            sessionOpen={chat.sessionOpen}
+            attachmentsEnabled={chat.attachmentsEnabled}
+          />
         </GrillTransportContext.Provider>
       </AcpChatProvider>
     </div>

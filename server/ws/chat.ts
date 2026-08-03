@@ -1,9 +1,21 @@
 import { nanoid } from "nanoid";
 import type { UIMessage, UIMessageChunk } from "ai";
 import type {
+  ChatAttachment,
   PermissionOptionPart,
   PermissionRequestData,
+  PromptCapabilities,
 } from "../../shared/chat-ws.js";
+import {
+  assertAttachmentsAllowed,
+  EMPTY_PROMPT_CAPABILITIES,
+  normalizePromptCapabilities,
+} from "../../shared/prompt-capabilities.js";
+import {
+  buildPromptContentBlocks,
+  buildSeedPromptContentBlocks,
+  userMessageParts,
+} from "./acp-content.js";
 import {
   decideHeadlessPermission,
   decideInteractivePermission,
@@ -156,6 +168,10 @@ export class AcpBridge {
   private headlessFail: ((err: Error) => void) | null = null;
   /** Live Cursor-like auto-approve; prompt for non-exchange file writes. */
   private interactivePolicy: InteractivePermissionPolicy | null = null;
+  /** Negotiated from initialize; omitted fields fail closed. */
+  private promptCapabilities: PromptCapabilities = {
+    ...EMPTY_PROMPT_CAPABILITIES,
+  };
 
   constructor(
     private readonly deps: { spawn: SpawnAcp } & Partial<AcpLiveCallbacks>,
@@ -174,6 +190,10 @@ export class AcpBridge {
 
   getMessages(): UIMessage[] {
     return this.messages;
+  }
+
+  getPromptCapabilities(): PromptCapabilities {
+    return this.promptCapabilities;
   }
 
   getPendingPermissionIds(): string[] {
@@ -268,14 +288,19 @@ export class AcpBridge {
     this.process = await this.deps.spawn(options.cwd, { model: options.model });
     this.process.onLine((line) => this.handleLine(line));
 
-    await this.rpc("initialize", {
+    const initResult = (await this.rpc("initialize", {
       protocolVersion: 1,
       clientCapabilities: {
         fs: { readTextFile: false, writeTextFile: false },
         terminal: false,
       },
       clientInfo: { name: "jeeves-acp-bridge", version: "0.1.0" },
-    });
+    })) as {
+      agentCapabilities?: { promptCapabilities?: unknown };
+    };
+    this.promptCapabilities = normalizePromptCapabilities(
+      initResult?.agentCapabilities?.promptCapabilities,
+    );
     await this.rpc("authenticate", { methodId: "cursor_login" });
     const created = (await this.rpc("session/new", {
       cwd: options.cwd,
@@ -293,12 +318,17 @@ export class AcpBridge {
   /** Send a user message; chunks arrive via attach / onChunk buffering. */
   async sendMessage(
     text: string,
-    opts?: { liveDraftBody?: string },
+    opts?: { liveDraftBody?: string; attachments?: ChatAttachment[] },
   ): Promise<void> {
     if (!this.sessionId) throw new Error("session not open");
+    const attachments = opts?.attachments ?? [];
+    if (!text.trim() && attachments.length === 0) {
+      throw new Error("Message must include text or at least one attachment.");
+    }
     await this.runPromptTurn(text, {
       recordUser: true,
       liveDraftBody: opts?.liveDraftBody,
+      attachments,
     });
   }
 
@@ -417,9 +447,19 @@ export class AcpBridge {
     opts: {
       recordUser: boolean;
       liveDraftBody?: string;
+      attachments?: ChatAttachment[];
     },
   ): Promise<void> {
     if (!this.sessionId || !this.process) throw new Error("session not open");
+
+    const attachments = opts.attachments ?? [];
+    // Fail closed before mutating transcript / starting the turn.
+    if (opts.recordUser) {
+      if (!text.trim() && attachments.length === 0) {
+        throw new Error("Message must include text or at least one attachment.");
+      }
+      assertAttachmentsAllowed(attachments, this.promptCapabilities);
+    }
 
     this.beginTurn();
 
@@ -427,7 +467,7 @@ export class AcpBridge {
       this.messages.push({
         id: nanoid(10),
         role: "user",
-        parts: [{ type: "text", text }],
+        parts: userMessageParts(text, attachments),
       });
     }
 
@@ -449,18 +489,27 @@ export class AcpBridge {
         ? this.live.frameUserMessage(text, opts.liveDraftBody)
         : text;
 
-    let promptText = agentText;
-    if (opts.recordUser) {
-      if (!this.contextSeeded) {
-        promptText = this.formatPromptWithHistory(agentText);
-        this.contextSeeded = true;
-      }
+    let promptBlocks;
+    if (opts.recordUser && !this.contextSeeded) {
+      promptBlocks = buildSeedPromptContentBlocks({
+        history: this.messages,
+        latestText: agentText,
+        latestAttachments: attachments,
+        caps: this.promptCapabilities,
+      });
+      this.contextSeeded = true;
+    } else {
+      promptBlocks = buildPromptContentBlocks({
+        text: agentText,
+        attachments: opts.recordUser ? attachments : [],
+        caps: this.promptCapabilities,
+      });
     }
 
     try {
       const result = (await this.rpc("session/prompt", {
         sessionId: this.sessionId,
-        prompt: [{ type: "text", text: promptText }],
+        prompt: promptBlocks,
       })) as { stopReason?: string } | undefined;
       const cancelled = result?.stopReason === "cancelled";
       if (this.currentTextId) {
@@ -489,24 +538,6 @@ export class AcpBridge {
       this.currentAssistant = null;
       this.endTurn();
     }
-  }
-
-  private formatPromptWithHistory(latestUserText: string): string {
-    const prior = this.messages.slice(0, -1);
-    if (prior.length === 0) return latestUserText;
-    const lines = prior.map((m) => {
-      const body = m.parts
-        .filter((p): p is { type: "text"; text: string } => p.type === "text")
-        .map((p) => p.text)
-        .join("");
-      return `${m.role === "user" ? "User" : "Assistant"}: ${body}`;
-    });
-    return [
-      "Prior transcript (continue from here; do not repeat answered questions):",
-      ...lines,
-      "",
-      `User: ${latestUserText}`,
-    ].join("\n");
   }
 
   private pushChunk(chunk: UIMessageChunk): void {

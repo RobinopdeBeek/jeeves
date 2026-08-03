@@ -122,7 +122,11 @@ blocker relationship can be built in parallel or reordered.
     last-opened; desktop rail + mobile list; live text-only ACP via `createProjectChatSession`
     (`thread:…` ids, null opener, project-chat permission policy, shared warm pool).
     *Demo: open a Chat Thread, send a message, get a streamed reply against the Project checkout.*
-    (Follow-ons: model picker, attachments — GitHub #33 children.)
+    (Follow-ons: model picker done; attachments — GitHub #39.)
+
+16. **ACP composer attachments.** Capability-gated ContentBlocks on `session/prompt` for
+    Project Chat, Grill, Spec assist, and Tasks assist; fail closed for unsupported types;
+    no in-app mic.
 
 Note the inversion versus a layered plan: the review *loop* works first with a stub-quality
 evaluation (slice 9), then the evaluation's sections improve one prompt at a time (slice 11) —

@@ -1,8 +1,18 @@
 import type { ChatTransport, UIMessage, UIMessageChunk } from "ai";
-import type { WsClientMessage, WsServerMessage } from "@shared/chat-ws";
+import type {
+  ChatAttachment,
+  PromptCapabilities,
+  WsClientMessage,
+  WsServerMessage,
+} from "@shared/chat-ws";
+import {
+  EMPTY_PROMPT_CAPABILITIES,
+  normalizePromptCapabilities,
+} from "@shared/prompt-capabilities";
 import type { TasksDraft } from "@/lib/api";
 
 export type { PermissionOptionPart, PermissionRequestData } from "@shared/chat-ws";
+export type { PromptCapabilities } from "@shared/chat-ws";
 
 /** Socket health, for reconnect UI. */
 export type ChatConnectionState =
@@ -111,6 +121,10 @@ export class AcpChatTransport {
   private sessionD = deferred<void>();
   private sessionOpen = false;
   private displaced = false;
+  /** Negotiated ACP prompt kinds from the session/open frame. */
+  private promptCapabilities: PromptCapabilities = {
+    ...EMPTY_PROMPT_CAPABILITIES,
+  };
   /** Set by close() — no reconnects after the hook tears us down. */
   private closedByUs = false;
   /** Server rejected this session (bad card, …) — retrying cannot help. */
@@ -154,6 +168,10 @@ export class AcpChatTransport {
     return this.sessionOpen && this.isSocketUsable() && !this.displaced;
   }
 
+  getPromptCapabilities(): PromptCapabilities {
+    return this.promptCapabilities;
+  }
+
   /** Resolves when the server signals the ACP session is ready for user turns. */
   whenSessionOpen(): Promise<void> {
     if (this.isSessionOpen()) return Promise.resolve();
@@ -191,7 +209,25 @@ export class AcpChatTransport {
           .map((p) => p.text)
           .join("")
       : "";
-    if (!text.trim()) return closedStream();
+    const attachments = lastUser
+      ? lastUser.parts
+          .filter(
+            (p): p is {
+              type: "file";
+              url: string;
+              mediaType: string;
+              filename?: string;
+            } => p.type === "file",
+          )
+          .map(
+            (p): ChatAttachment => ({
+              mediaType: p.mediaType,
+              url: p.url,
+              ...(p.filename != null ? { filename: p.filename } : {}),
+            }),
+          )
+      : [];
+    if (!text.trim() && attachments.length === 0) return closedStream();
 
     // Pre-send health check: heal a dead/half-open socket before we commit the
     // turn, so a stale connection can never swallow the prompt.
@@ -206,6 +242,7 @@ export class AcpChatTransport {
         type: "user-message",
         text,
         ...(liveDraftBody != null ? { liveDraftBody } : {}),
+        ...(attachments.length > 0 ? { attachments } : {}),
       });
     } catch (err) {
       this.abandonTurn();
@@ -700,6 +737,9 @@ export class AcpChatTransport {
       case "session":
         if (msg.status === "open") {
           this.sessionOpen = true;
+          this.promptCapabilities = normalizePromptCapabilities(
+            msg.promptCapabilities,
+          );
           this.sessionD.resolve();
           this.setConnectionState("open");
           // Authoritative only when we are not waiting on an opening/warm turn.

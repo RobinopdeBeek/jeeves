@@ -226,11 +226,24 @@ export function AcpChatProvider({
   transport,
   messages,
   promptCapabilities = EMPTY_PROMPT_CAPABILITIES,
+  /**
+   * After rewind remount: send this user text once the chat runtime is up
+   * and the ACP session is open (edit-and-send). Cleared via onAutoSendConsumed.
+   */
+  autoSendText,
+  autoSendKey,
+  sessionOpen = true,
+  onAutoSendConsumed,
   children,
 }: {
   transport: AcpChatTransport;
   messages: UIMessage[];
   promptCapabilities?: PromptCapabilities;
+  autoSendText?: string | null;
+  /** Unique per edit-and-send so identical text can be resent. */
+  autoSendKey?: string | null;
+  sessionOpen?: boolean;
+  onAutoSendConsumed?: () => void;
   children: ReactNode;
 }) {
   const chat = useChat({
@@ -241,6 +254,18 @@ export function AcpChatProvider({
     messages,
     resume: true,
   });
+  const autoSendConsumedKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (!autoSendText || !autoSendKey || !sessionOpen) return;
+    if (autoSendConsumedKey.current === autoSendKey) return;
+    autoSendConsumedKey.current = autoSendKey;
+    void chat.sendMessage({
+      role: "user",
+      parts: [{ type: "text", text: autoSendText }],
+    });
+    onAutoSendConsumed?.();
+  }, [autoSendText, autoSendKey, sessionOpen, chat, onAutoSendConsumed]);
+
   // Nested @ai-sdk/react inside react-ai-sdk can disagree on UseChatHelpers.
   const runtime = useAISDKRuntime(
     chat as unknown as Parameters<typeof useAISDKRuntime>[0],

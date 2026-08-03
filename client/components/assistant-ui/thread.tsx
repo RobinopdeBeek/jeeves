@@ -12,6 +12,7 @@ import {
 } from "@/components/assistant-ui/quote";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import {
   ActionBarPrimitive,
@@ -34,22 +35,26 @@ import {
   LexicalComposerInput,
   type DirectiveChipProps,
 } from "@assistant-ui/react-lexical";
+import { useProjectChatRewind } from "@/components/chat/project-chat-rewind-context";
 import {
   IconArrowDown,
   IconArrowUp,
   IconCheck,
+  IconChevronLeft,
+  IconChevronRight,
   IconCopy,
   IconFileText,
   IconHelp,
   IconLoader2,
   IconPaperclip,
+  IconPencil,
   IconSlash,
   IconSquare,
   IconTool,
   IconWorld,
   IconX,
 } from "@tabler/icons-react";
-import { type FC, type ReactNode, useState } from "react";
+import { type FC, type FormEvent, type ReactNode, useState } from "react";
 
 export type ThreadProps = {
   /** ACP (or other) session ready — send is enabled. */
@@ -614,6 +619,68 @@ const AssistantActionBar: FC = () => {
 };
 
 const UserMessage: FC = () => {
+  const rewind = useProjectChatRewind();
+  const messageId = useAuiState((s) => s.message.id);
+  const messageText = useAuiState((s) => {
+    const parts = s.message.content;
+    return parts
+      .filter((p): p is { type: "text"; text: string } => p.type === "text")
+      .map((p) => p.text)
+      .join("");
+  });
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(messageText);
+
+  if (editing && rewind) {
+    return (
+      <MessagePrimitive.Root
+        data-slot="aui_user-message-root"
+        data-role="user"
+        className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 [&:where(>*)]:col-start-2"
+      >
+        <form
+          className="aui-user-message-content-wrapper relative col-start-2 flex min-w-0 flex-col gap-2"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            const text = draft.trim();
+            if (!text || rewind.disabled) return;
+            setEditing(false);
+            rewind.onEditMessage(messageId, text);
+          }}
+        >
+          <Textarea
+            className="min-h-20 w-full resize-y"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            disabled={rewind.disabled}
+            aria-label="Edit message"
+          />
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={rewind.disabled}
+              onClick={() => {
+                setDraft(messageText);
+                setEditing(false);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              size="sm"
+              disabled={rewind.disabled || !draft.trim()}
+            >
+              Send
+            </Button>
+          </div>
+        </form>
+      </MessagePrimitive.Root>
+    );
+  }
+
   return (
     <MessagePrimitive.Root
       data-slot="aui_user-message-root"
@@ -630,8 +697,60 @@ const UserMessage: FC = () => {
           </MessagePrimitive.Quote>
           <MessagePrimitive.Parts components={{ Text: UserDirectiveText }} />
         </div>
+        {rewind ? (
+          <div className="mt-1 flex items-center justify-end gap-1">
+            <UserMessageBranchPicker messageId={messageId} />
+            <TooltipIconButton
+              tooltip="Edit"
+              disabled={rewind.disabled}
+              onClick={() => {
+                setDraft(messageText);
+                setEditing(true);
+              }}
+            >
+              <IconPencil data-icon="inline-start" />
+            </TooltipIconButton>
+          </div>
+        ) : null}
       </div>
     </MessagePrimitive.Root>
+  );
+};
+
+const UserMessageBranchPicker: FC<{ messageId: string }> = ({ messageId }) => {
+  const rewind = useProjectChatRewind();
+  if (!rewind) return null;
+  const branches = rewind.getBranches(messageId);
+  if (branches.length <= 1) return null;
+  const index = branches.indexOf(messageId);
+  if (index < 0) return null;
+
+  return (
+    <div className="flex items-center gap-0.5" aria-label="Message branches">
+      <TooltipIconButton
+        tooltip="Previous branch"
+        disabled={rewind.disabled || index <= 0}
+        onClick={() => {
+          const prev = branches[index - 1];
+          if (prev) rewind.onSwitchBranch(prev);
+        }}
+      >
+        <IconChevronLeft data-icon="inline-start" />
+      </TooltipIconButton>
+      <span className="min-w-8 text-center tabular-nums">
+        {index + 1}/{branches.length}
+      </span>
+      <TooltipIconButton
+        tooltip="Next branch"
+        disabled={rewind.disabled || index >= branches.length - 1}
+        onClick={() => {
+          const next = branches[index + 1];
+          if (next) rewind.onSwitchBranch(next);
+        }}
+      >
+        <IconChevronRight data-icon="inline-start" />
+      </TooltipIconButton>
+    </div>
   );
 };
 

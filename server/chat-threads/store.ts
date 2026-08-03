@@ -71,6 +71,27 @@ export class ChatThreadStore {
     return this.getThread(id);
   }
 
+  /** Pin Cursor model id for this Chat Thread (`null` = CLI default). */
+  setModel(id: string, model: string | null): ChatThread | undefined {
+    const existing = this.getThread(id);
+    if (!existing) return undefined;
+    let next: string | null = model;
+    if (model != null) {
+      const trimmed = model.trim();
+      if (!trimmed) {
+        throw new ChatThreadStoreError(400, "model is required");
+      }
+      next = trimmed;
+    }
+    const now = new Date();
+    this.db
+      .update(chatThreads)
+      .set({ model: next, updatedAt: now })
+      .where(eq(chatThreads.id, id))
+      .run();
+    return this.getThread(id);
+  }
+
   /** Remember this thread as last-opened for bare `/chat` restore. */
   markOpened(id: string): ChatThread | undefined {
     const existing = this.getThread(id);

@@ -2,7 +2,34 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AcpSpawnError, resolveAgentLaunch } from "./acp-process.js";
+import {
+  AcpSpawnError,
+  buildAcpSpawnArgs,
+  resolveAgentLaunch,
+} from "./acp-process.js";
+
+describe("buildAcpSpawnArgs", () => {
+  it("launches agent acp with no model flag by default", () => {
+    expect(buildAcpSpawnArgs([])).toEqual(["acp"]);
+  });
+
+  it("pins --model before acp when a model id is set", () => {
+    expect(buildAcpSpawnArgs([], "composer-2.5")).toEqual([
+      "--model",
+      "composer-2.5",
+      "acp",
+    ]);
+  });
+
+  it("treats null/blank model as CLI default (no --model)", () => {
+    expect(buildAcpSpawnArgs(["--api-key", "x"], null)).toEqual([
+      "--api-key",
+      "x",
+      "acp",
+    ]);
+    expect(buildAcpSpawnArgs([], "  ")).toEqual(["acp"]);
+  });
+});
 
 describe("resolveAgentLaunch", () => {
   const prevBin = process.env.JEEVES_AGENT_BIN;

@@ -81,7 +81,7 @@ A freeform ACP conversation against the active Project's repo, owned by the Proj
 _Avoid_: Using "chat" alone when the Card/Step vs Project distinction matters; Global chat
 
 **Chat Thread**:
-One conversation within Project Chat — its own transcript, title, and warm ACP session. A Project may have many Chat Threads; the user switches among them from the chat sidebar.
+One conversation within Project Chat — its own transcript, title, optional pinned Cursor model (spawn-pinned via `agent --model`), and warm ACP session. A Project may have many Chat Threads; the user switches among them from the chat sidebar.
 _Avoid_: Thread (unqualified — ambiguous with OS/async threads); using "session" for the conversation itself (session is the live ACP process)
 
 **Grill session**:

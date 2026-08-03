@@ -192,9 +192,42 @@ describe("createProjectChatSession", () => {
     expect(session.id).toBe(`thread:${threadId}`);
     expect(session.cwd).toBe(repoPath);
     expect(session.openingPrompt).toBeNull();
+    expect(session.model).toBeNull();
     expect(session.interactivePermissionPolicy).toBe("project-chat");
     expect(session.loadTranscript()).toEqual([]);
     expect(() => session.assertMutable()).not.toThrow();
+  });
+
+  it("exposes the thread's pinned model on the ChatSession", () => {
+    threads.setModel(threadId, "composer-2.5");
+    const session = createProjectChatSession(
+      { threadId },
+      { threads, cwd: repoPath },
+    );
+    expect(session.model).toBe("composer-2.5");
+  });
+
+  it("opens Project Chat ACP with --model via spawn options", async () => {
+    threads.setModel(threadId, "composer-2.5");
+    const sessions = new ChatSessionRegistry();
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-model");
+    const spawnCalls: Array<{ cwd: string; model?: string | null }> = [];
+    const session = createProjectChatSession(
+      { threadId },
+      { threads, cwd: repoPath },
+    );
+
+    await openChat(session, {
+      spawn: (cwd, options) => {
+        spawnCalls.push({ cwd, model: options?.model });
+        return process;
+      },
+      sessions,
+    });
+
+    expect(spawnCalls).toEqual([{ cwd: repoPath, model: "composer-2.5" }]);
+    expect(sessions.hasWarm(`thread:${threadId}`)).toBe(true);
   });
 
   it("persists transcript via ChatThreadStore and auto-titles from the first user message", () => {

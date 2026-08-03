@@ -27,6 +27,8 @@ export interface ColdAcquireParams {
   frameUserMessage?: AcpLiveCallbacks["frameUserMessage"];
   /** Spec (and future) live chats: Cursor-like auto-approve. */
   interactivePermissionPolicy?: InteractivePermissionPolicy;
+  /** Pin via `agent --model`; omit/null = CLI default. */
+  model?: string | null;
 }
 
 /** Cap on live ACP bridges across all chat sessions (issue #24). */
@@ -56,6 +58,8 @@ export interface WarmSessionHandle {
 export class ChatSessionRegistry {
   private readonly active = new Map<string, DisplaceableConnection>();
   private readonly warm = new Map<string, AcpBridge>();
+  /** Model id pinned when each warm bridge was spawned (`null` = CLI default). */
+  private readonly warmModel = new Map<string, string | null>();
   private admitChain: Promise<void> = Promise.resolve();
 
   get(id: ChatSessionId): DisplaceableConnection | undefined {
@@ -94,6 +98,7 @@ export class ChatSessionRegistry {
     if (bridge) {
       bridge.close();
       this.warm.delete(id);
+      this.warmModel.delete(id);
     }
   }
 
@@ -101,27 +106,36 @@ export class ChatSessionRegistry {
     id: ChatSessionId,
     params: ColdAcquireParams,
   ): Promise<WarmSessionHandle> {
+    const requestedModel = normalizeModel(params.model);
     const existing = this.warm.get(id);
     if (existing) {
-      existing.setLiveCallbacks({
-        onStatus: params.onStatus,
-        onTranscript: params.onTranscript,
-        onTurnComplete: params.onTurnComplete,
-        frameUserMessage: params.frameUserMessage,
-      });
-      return this.handleFor(existing, true);
-    }
-
-    return this.withAdmitLock(async () => {
-      const again = this.warm.get(id);
-      if (again) {
-        again.setLiveCallbacks({
+      if (this.warmModel.get(id) !== requestedModel) {
+        this.close(id, "model changed");
+      } else {
+        existing.setLiveCallbacks({
           onStatus: params.onStatus,
           onTranscript: params.onTranscript,
           onTurnComplete: params.onTurnComplete,
           frameUserMessage: params.frameUserMessage,
         });
-        return this.handleFor(again, true);
+        return this.handleFor(existing, true);
+      }
+    }
+
+    return this.withAdmitLock(async () => {
+      const again = this.warm.get(id);
+      if (again) {
+        if (this.warmModel.get(id) !== requestedModel) {
+          this.close(id, "model changed");
+        } else {
+          again.setLiveCallbacks({
+            onStatus: params.onStatus,
+            onTranscript: params.onTranscript,
+            onTurnComplete: params.onTurnComplete,
+            frameUserMessage: params.frameUserMessage,
+          });
+          return this.handleFor(again, true);
+        }
       }
       await this.ensureCapacity();
       const bridge = new AcpBridge({
@@ -132,12 +146,20 @@ export class ChatSessionRegistry {
         frameUserMessage: params.frameUserMessage,
       });
       this.warm.set(id, bridge);
-      await bridge.openSession({
-        cwd: params.cwd,
-        openingPrompt: params.openingPrompt,
-        history: params.history,
-        interactivePermissionPolicy: params.interactivePermissionPolicy,
-      });
+      this.warmModel.set(id, requestedModel);
+      try {
+        await bridge.openSession({
+          cwd: params.cwd,
+          openingPrompt: params.openingPrompt,
+          history: params.history,
+          interactivePermissionPolicy: params.interactivePermissionPolicy,
+          model: requestedModel,
+        });
+      } catch (err) {
+        this.warm.delete(id);
+        this.warmModel.delete(id);
+        throw err;
+      }
       return this.handleFor(bridge, false);
     });
   }
@@ -212,5 +234,11 @@ export class ChatSessionRegistry {
     }
     bridge.close();
     this.warm.delete(id);
+    this.warmModel.delete(id);
   }
+}
+
+function normalizeModel(model?: string | null): string | null {
+  const trimmed = model?.trim();
+  return trimmed ? trimmed : null;
 }

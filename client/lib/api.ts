@@ -134,6 +134,14 @@ export interface ChatThread {
   lastOpenedAt: string | null;
 }
 
+/** Cursor Agent CLI model row for the Project Chat picker. */
+export interface AgentModel {
+  id: string;
+  displayName: string;
+  current: boolean;
+  default: boolean;
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     headers: { "Content-Type": "application/json" },
@@ -221,8 +229,14 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ title }),
     }),
+  setChatThreadModel: (id: string, model: string | null) =>
+    request<ChatThread>(`/api/chat-threads/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ model }),
+    }),
   openChatThread: (id: string) =>
     request<ChatThread>(`/api/chat-threads/${id}/open`, { method: "POST" }),
   deleteChatThread: (id: string) =>
     request<{ ok: boolean }>(`/api/chat-threads/${id}`, { method: "DELETE" }),
+  listModels: () => request<{ models: AgentModel[] }>("/api/models"),
 };

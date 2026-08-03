@@ -439,4 +439,44 @@ describe("ChatSessionRegistry — warm bridges", () => {
     expect(registry.hasWarm(threadChatSessionId("new-thread"))).toBe(true);
     expect(processes.filter((p) => !p.killed)).toHaveLength(MAX_LIVE_SESSIONS);
   });
+
+  it("replaces the warm ACP process when the pinned model changes", async () => {
+    const registry = new ChatSessionRegistry();
+    const first = new MockAcpProcess();
+    first.autoHandshake("sess-m1");
+    const second = new MockAcpProcess();
+    second.autoHandshake("sess-m2");
+    const spawnModels: Array<string | null | undefined> = [];
+
+    const spawn = (_cwd: string, options?: { model?: string | null }) => {
+      spawnModels.push(options?.model);
+      return spawnModels.length === 1 ? first : second;
+    };
+
+    const handle1 = await registry.acquire(idA, {
+      spawn,
+      cwd: "C:/repo",
+      openingPrompt: null,
+      history: [],
+      model: "composer-2.5",
+      onStatus: () => {},
+      onTranscript: () => {},
+    });
+    expect(handle1.reused).toBe(false);
+    expect(spawnModels).toEqual(["composer-2.5"]);
+
+    const handle2 = await registry.acquire(idA, {
+      spawn,
+      cwd: "C:/repo",
+      openingPrompt: null,
+      history: [],
+      model: "gpt-5.5",
+      onStatus: () => {},
+      onTranscript: () => {},
+    });
+    expect(handle2.reused).toBe(false);
+    expect(first.killed).toBe(true);
+    expect(spawnModels).toEqual(["composer-2.5", "gpt-5.5"]);
+    expect(registry.hasWarm(idA)).toBe(true);
+  });
 });

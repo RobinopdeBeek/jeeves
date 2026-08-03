@@ -72,6 +72,7 @@ export async function openChat(
     cwd: session.cwd,
     openingPrompt: session.openingPrompt,
     history,
+    model: session.model,
     interactivePermissionPolicy: session.interactivePermissionPolicy,
     onStatus: (status) => session.notifyStatus(status),
     onTranscript: (messages) => {

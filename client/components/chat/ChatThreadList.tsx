@@ -22,7 +22,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/utils";
+
+function threadLabel(thread: ChatThread): string {
+  return thread.title.trim() || "New Chat";
+}
 
 export function ChatThreadList({
   threads,
@@ -66,33 +69,31 @@ export function ChatThreadList({
         ) : (
           threads.map((thread) => {
             const active = thread.id === activeId;
+            const label = threadLabel(thread);
             return (
-              <li key={thread.id} className="group flex items-center gap-1">
-                <Link
-                  to={`/chat/${thread.id}`}
-                  className={cn(
-                    "flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-sm",
-                    active
-                      ? "bg-accent text-accent-foreground"
-                      : "hover:bg-accent/50",
-                  )}
+              <li key={thread.id} className="flex items-center gap-1">
+                <Button
+                  variant={active ? "secondary" : "ghost"}
+                  size="sm"
+                  className="min-w-0 flex-1 justify-start"
+                  asChild
                 >
-                  <IconMessage className="size-4 shrink-0" />
-                  <span className="truncate">
-                    {thread.title.trim() || "New Chat"}
-                  </span>
-                </Link>
+                  <Link to={`/chat/${thread.id}`}>
+                    <IconMessage data-icon="inline-start" />
+                    <span className="truncate">{label}</span>
+                  </Link>
+                </Button>
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon-xs"
-                  aria-label={`Rename ${thread.title}`}
+                  aria-label={`Rename ${label}`}
                   onClick={() => {
                     setRenameId(thread.id);
                     setRenameValue(thread.title);
                   }}
                 >
-                  <IconPencil />
+                  <IconPencil data-icon="inline-start" />
                 </Button>
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
@@ -100,9 +101,9 @@ export function ChatThreadList({
                       type="button"
                       variant="ghost"
                       size="icon-xs"
-                      aria-label={`Delete ${thread.title}`}
+                      aria-label={`Delete ${label}`}
                     >
-                      <IconTrash />
+                      <IconTrash data-icon="inline-start" />
                     </Button>
                   </AlertDialogTrigger>
                   <AlertDialogContent>

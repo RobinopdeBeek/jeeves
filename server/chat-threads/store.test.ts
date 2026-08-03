@@ -46,13 +46,29 @@ describe("ChatThreadStore", () => {
     expect(threads.listThreads(project.id)).toHaveLength(1);
   });
 
-  it("lists threads with most recently opened first", () => {
-    const a = threads.createOrReuseEmptyDraft(project.id);
-    // Seed a non-empty transcript so the next create is a new row.
+  it("creates a new thread when the empty draft was renamed", () => {
+    const first = threads.createOrReuseEmptyDraft(project.id);
+    threads.renameThread(first.id, "Notes");
+    const second = threads.createOrReuseEmptyDraft(project.id);
+
+    expect(second.id).not.toBe(first.id);
+    expect(threads.listThreads(project.id)).toHaveLength(2);
+  });
+
+  it("creates a new thread when the draft transcript is no longer empty", () => {
+    const first = threads.createOrReuseEmptyDraft(project.id);
     fs.writeFileSync(
-      path.join(chatRoot, a.id, "transcript.json"),
+      path.join(chatRoot, first.id, "transcript.json"),
       `${JSON.stringify([{ id: "m1", role: "user", parts: [] }], null, 2)}\n`,
     );
+    const second = threads.createOrReuseEmptyDraft(project.id);
+
+    expect(second.id).not.toBe(first.id);
+  });
+
+  it("lists threads with most recently opened first", () => {
+    const a = threads.createOrReuseEmptyDraft(project.id);
+    threads.renameThread(a.id, "First");
     const b = threads.createOrReuseEmptyDraft(project.id);
     threads.markOpened(a.id);
 
@@ -70,10 +86,7 @@ describe("ChatThreadStore", () => {
 
   it("returns the last-opened thread", () => {
     const a = threads.createOrReuseEmptyDraft(project.id);
-    fs.writeFileSync(
-      path.join(chatRoot, a.id, "transcript.json"),
-      `${JSON.stringify([{ id: "m1", role: "user", parts: [] }], null, 2)}\n`,
-    );
+    threads.renameThread(a.id, "First");
     const b = threads.createOrReuseEmptyDraft(project.id);
     threads.markOpened(a.id);
 

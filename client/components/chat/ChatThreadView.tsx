@@ -24,7 +24,7 @@ export function ChatThreadView({
         {showBack ? (
           <Button variant="ghost" size="icon-sm" asChild aria-label="Back to threads">
             <Link to="/chat">
-              <IconArrowLeft />
+              <IconArrowLeft data-icon="inline-start" />
             </Link>
           </Button>
         ) : null}

@@ -24,7 +24,7 @@ export function chatThreadRoutes(store: ChatThreadStore, project: Project) {
   });
 
   app.patch("/:id", async (c) => {
-    const body = await c.req.json<{ title?: string; model?: string | null }>();
+    const body = await c.req.json<{ title?: string }>();
     try {
       if (body.title !== undefined) {
         const thread = store.renameThread(c.req.param("id"), body.title);

@@ -131,7 +131,9 @@ export class ChatThreadStore {
 
   private findEmptyDraft(projectId: string): ChatThread | undefined {
     const candidates = this.listThreads(projectId);
-    return candidates.find((t) => this.isEmptyTranscript(t.id));
+    return candidates.find(
+      (t) => t.title === EMPTY_DRAFT_TITLE && this.isEmptyTranscript(t.id),
+    );
   }
 
   private isEmptyTranscript(threadId: string): boolean {

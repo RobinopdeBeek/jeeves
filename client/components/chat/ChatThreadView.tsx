@@ -103,7 +103,10 @@ function LiveProjectChat({
   onThreadUpdated?: (thread: ChatThread) => void;
 }) {
   const [rewindEpoch, setRewindEpoch] = useState(0);
-  const [pendingSend, setPendingSend] = useState<string | null>(null);
+  const [pendingSend, setPendingSend] = useState<{
+    text: string;
+    key: string;
+  } | null>(null);
   const [branchable, setBranchable] = useState<BranchableTranscript>(
     emptyTranscript(),
   );
@@ -143,7 +146,11 @@ function LiveProjectChat({
       onAutoSendConsumed={() => setPendingSend(null)}
       onRewound={(next, sendText) => {
         setBranchable(next.branchable);
-        setPendingSend(sendText ?? null);
+        setPendingSend(
+          sendText
+            ? { text: sendText, key: `${Date.now()}:${sendText.length}` }
+            : null,
+        );
         setRewindEpoch((n) => n + 1);
       }}
     />
@@ -163,7 +170,7 @@ function LiveProjectChatSession({
   thread: ChatThread;
   welcomeTitle: string;
   branchable: BranchableTranscript;
-  pendingSend: string | null;
+  pendingSend: { text: string; key: string } | null;
   onStreamingSettled?: () => void;
   onThreadUpdated?: (thread: ChatThread) => void;
   onAutoSendConsumed: () => void;
@@ -292,7 +299,9 @@ function LiveProjectChatSession({
         transport={chat.transport}
         messages={chat.messages}
         promptCapabilities={chat.promptCapabilities}
-        autoSendText={pendingSend}
+        autoSendText={pendingSend?.text ?? null}
+        autoSendKey={pendingSend?.key ?? null}
+        sessionOpen={chat.sessionOpen}
         onAutoSendConsumed={onAutoSendConsumed}
       >
         <GrillTransportContext.Provider value={chat.transport}>

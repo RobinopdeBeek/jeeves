@@ -12,6 +12,7 @@ import {
 } from "@/components/assistant-ui/quote";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import {
   ActionBarPrimitive,
@@ -647,8 +648,8 @@ const UserMessage: FC = () => {
             rewind.onEditMessage(messageId, text);
           }}
         >
-          <textarea
-            className="min-h-20 w-full resize-y rounded-xl border bg-background px-4 py-2 text-sm text-foreground"
+          <Textarea
+            className="min-h-20 w-full resize-y"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             disabled={rewind.disabled}
@@ -707,7 +708,7 @@ const UserMessage: FC = () => {
                 setEditing(true);
               }}
             >
-              <IconPencil />
+              <IconPencil data-icon="inline-start" />
             </TooltipIconButton>
           </div>
         ) : null}
@@ -725,10 +726,7 @@ const UserMessageBranchPicker: FC<{ messageId: string }> = ({ messageId }) => {
   if (index < 0) return null;
 
   return (
-    <div
-      className="flex items-center gap-0.5 text-muted-foreground"
-      aria-label="Message branches"
-    >
+    <div className="flex items-center gap-0.5" aria-label="Message branches">
       <TooltipIconButton
         tooltip="Previous branch"
         disabled={rewind.disabled || index <= 0}
@@ -737,9 +735,9 @@ const UserMessageBranchPicker: FC<{ messageId: string }> = ({ messageId }) => {
           if (prev) rewind.onSwitchBranch(prev);
         }}
       >
-        <IconChevronLeft />
+        <IconChevronLeft data-icon="inline-start" />
       </TooltipIconButton>
-      <span className="min-w-8 text-center text-xs tabular-nums">
+      <span className="min-w-8 text-center tabular-nums">
         {index + 1}/{branches.length}
       </span>
       <TooltipIconButton
@@ -750,7 +748,7 @@ const UserMessageBranchPicker: FC<{ messageId: string }> = ({ messageId }) => {
           if (next) rewind.onSwitchBranch(next);
         }}
       >
-        <IconChevronRight />
+        <IconChevronRight data-icon="inline-start" />
       </TooltipIconButton>
     </div>
   );

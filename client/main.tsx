@@ -31,6 +31,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             <Route element={<AppShell />}>
               <Route path="/board" element={<Board />} />
               <Route path="/chat" element={<ChatPage />} />
+              <Route path="/chat/:threadId" element={<ChatPage />} />
               <Route path="/files" element={<FilesPage />} />
             </Route>
             <Route path="/cards/:id" element={<CardView />} />

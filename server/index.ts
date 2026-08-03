@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { ArtifactStore } from "./artifacts/store.js";
 import { CardStore } from "./cards/store.js";
+import { ChatThreadStore } from "./chat-threads/store.js";
 import { openDb } from "./db/index.js";
 import { ensureProjectStore } from "./project-store.js";
 import { CursorSdkAgentRunner } from "./execution/cursor-sdk-runner.js";
@@ -20,6 +21,7 @@ import { createCreateTasks } from "./chat/create-tasks.js";
 import { createSynthesizeSpec } from "./chat/to-spec-synthesis.js";
 import { createSynthesizeTasksDraft } from "./chat/to-tasks-synthesis.js";
 import { cardRoutes } from "./routes/cards.js";
+import { chatThreadRoutes } from "./routes/chat-threads.js";
 import { eventRoutes } from "./routes/events.js";
 import { artifactRoutes } from "./routes/artifacts.js";
 import { runRoutes } from "./routes/runs.js";
@@ -40,6 +42,7 @@ const port = Number(process.env.JEEVES_PORT ?? 3939);
 const db = openDb(paths.dbPath);
 const artifacts = new ArtifactStore(db, paths.artifactRoot);
 const store = new CardStore(db, artifacts);
+const chatThreads = new ChatThreadStore(db, paths.chatRoot);
 const project = store.ensureDefaultProject(path.basename(paths.repoPath), paths.repoPath);
 
 const events = new EventBus();
@@ -71,6 +74,7 @@ const chatDeps = {
 const app = new Hono();
 
 app.get("/api/project", (c) => c.json(project));
+app.route("/api/chat-threads", chatThreadRoutes(chatThreads, project));
 app.route(
   "/api/cards",
   cardRoutes(store, project, {

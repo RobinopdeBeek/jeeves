@@ -117,6 +117,11 @@ blocker relationship can be built in parallel or reordered.
 14. **Finalize + polish.** Document and Deploy steps; browser push on entering Human Review;
     notification dots (`COUNT(*) WHERE read_at IS NULL`); session meta from `runs`;
     "Restart step" button; step-history sidebar. (Blocked by 10.)
+15. **Project Chat (thread persistence).** App shell Board|Chat|Files; `chat_threads` in the
+    project store + transcript files under `data/chat/`; REST list/create/rename/delete/
+    last-opened; desktop rail + mobile list; empty thread shell until live ACP.
+    *Demo: create and switch Chat Threads without a Card.* (Follow-ons: live ACP, model
+    picker, attachments — GitHub #33 children.)
 
 Note the inversion versus a layered plan: the review *loop* works first with a stub-quality
 evaluation (slice 9), then the evaluation's sections improve one prompt at a time (slice 11) —

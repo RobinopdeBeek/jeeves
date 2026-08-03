@@ -57,6 +57,13 @@
       "when": 1785252238729,
       "tag": "0007_striped_yellow_claw",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1785732285366,
+      "tag": "0008_reflective_omega_flight",
+      "breakpoints": true
     }
   ]
 }

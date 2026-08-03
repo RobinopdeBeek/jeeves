@@ -123,6 +123,17 @@ export type TasksDraftTip = TasksDraft & {
   versionCount: number;
 };
 
+/** Project Chat thread index row (transcript lives on disk under the project store). */
+export interface ChatThread {
+  id: string;
+  projectId: string;
+  title: string;
+  model: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lastOpenedAt: string | null;
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     headers: { "Content-Type": "application/json" },
@@ -198,4 +209,20 @@ export const api = {
     request<Card>(`/api/cards/${cardId}/steps/${stepKey}/retry`, {
       method: "POST",
     }),
+
+  listChatThreads: () => request<ChatThread[]>("/api/chat-threads"),
+  createChatThread: () =>
+    request<ChatThread>("/api/chat-threads", { method: "POST" }),
+  getChatThread: (id: string) => request<ChatThread>(`/api/chat-threads/${id}`),
+  getLastOpenedChatThread: () =>
+    request<ChatThread>("/api/chat-threads/last-opened"),
+  renameChatThread: (id: string, title: string) =>
+    request<ChatThread>(`/api/chat-threads/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title }),
+    }),
+  openChatThread: (id: string) =>
+    request<ChatThread>(`/api/chat-threads/${id}/open`, { method: "POST" }),
+  deleteChatThread: (id: string) =>
+    request<{ ok: boolean }>(`/api/chat-threads/${id}`, { method: "DELETE" }),
 };

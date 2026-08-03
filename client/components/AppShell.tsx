@@ -25,7 +25,7 @@ function ShellTabToggle({ className }: { className?: string }) {
       aria-label="App sections"
     >
       {APP_SHELL_TABS.map((tab) => (
-        <ToggleGroupItem key={tab.id} value={tab.id} className="flex-1 px-4">
+        <ToggleGroupItem key={tab.id} value={tab.id} className="flex-1">
           {tab.label}
         </ToggleGroupItem>
       ))}

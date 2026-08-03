@@ -131,9 +131,10 @@ Browser                          Server
 - **Chat:** `AcpBridge` is a long-lived push session: it owns ACP→`UIMessage` projection,
   warm attach/catch-up buffering, and seed-once resume history. The warm registry
   (`ChatSessionRegistry`: map + cap + writer slot, keyed by opaque `ChatSession` ids)
-  lives inside the AcpBridge module. At the WebSocket boundary, step chats resolve into a
-  **ChatSession** descriptor (`createStepChatSession`); `openChat` acquires the warm bridge
-  from that descriptor only — registry and bridge stay card-agnostic
+  lives inside the AcpBridge module. At the WebSocket boundary, step chats and Project Chat
+  resolve into a **ChatSession** descriptor (`createStepChatSession` /
+  `createProjectChatSession`); `openChat` acquires the warm bridge from that descriptor only
+  — registry and bridge stay card-agnostic
   ([ADR 0015](./docs/adr/0015-project-chat-threads-and-chatsession.md)). The WebSocket
   `ChatConnection` is framing-only. The client never sees ACP types. Permission requests
   render as custom message parts; responses flow back through the transport. Transcripts

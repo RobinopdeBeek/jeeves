@@ -33,11 +33,15 @@ _Avoid_: Stage, phase, "shape" (legacy id for Define)
 The ordered list of columns a card kind passes through. Defined in code per kind, not in the database.
 
 **Evaluation**:
-The generated, self-contained HTML report a review works from, pinned to the commit it evaluated. Comes in two scopes: a **Task Evaluation** (deep: diff narrative, tests, AI findings, QA checklist) and a **Feature Evaluation** (integration-focused: regression, journeys, spec criteria, refactor opportunities).
-_Avoid_: Evaluation plan, eval plan, acceptance eval, review doc
+The generated, self-contained HTML report a review works from, pinned to the commit it evaluated. Created when a card **enters the Human Review column** (not during AI Review). Comes in two scopes: a **Task Evaluation** (deep: diff narrative, tests, QA checklist) and a **Feature Evaluation** (integration-focused: regression, journeys, spec criteria, refactor opportunities).
+_Avoid_: Evaluation plan, eval plan, acceptance eval, review doc; treating AI Review output as the evaluation
+
+**AI Review** (Implement Task step):
+An autonomous `ai-execution` step after Implement: runs a dual-axis code review (Standards + Spec, same shape as `/code-review`), then **immediately reworks** the card branch from those findings. Produces an audit **review artifact** (process/evidence), not the Human Review evaluation.
+_Avoid_: Using "AI Review" for the human Review column; assuming AI Review assembles the evaluation
 
 **Review**:
-The human activity in the Review column: reading the evaluation, doing QA, and recording a decision. The AI Review step is distinct — it produces the evaluation.
+The human activity in the Review column: reading the evaluation, doing QA, and recording a decision. Distinct from the **AI Review** step, which reviews-and-reworks code before the card arrives here.
 
 **Decision**:
 The recorded outcome of a review: approved or changes requested, with a snapshot of whether QA was complete.

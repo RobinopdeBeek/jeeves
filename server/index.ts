@@ -29,6 +29,7 @@ import { runRoutes } from "./routes/runs.js";
 import { ChatSessionRegistry } from "./ws/session-registry.js";
 import { spawnAcp } from "./ws/acp-process.js";
 import { ChatConnection } from "./ws/attach.js";
+import { rewindProjectChat } from "./ws/rewind-chat.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 try {
@@ -86,6 +87,15 @@ app.route(
     },
     onThreadModelChanged: (threadId) => {
       chatSessions.close(`thread:${threadId}`, "model changed");
+    },
+    rewindThread: async (threadId, op) => {
+      const result = await rewindProjectChat(threadId, op, {
+        threads: chatThreads,
+        spawn: spawnAcp,
+        sessions: chatSessions,
+        cwd: paths.repoPath,
+      });
+      return { messages: result.history, branchable: result.branchable };
     },
   }),
 );

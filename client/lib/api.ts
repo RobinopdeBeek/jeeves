@@ -1,3 +1,15 @@
+import type { UIMessage } from "ai";
+import type {
+  BranchableTranscript,
+  RewindOp,
+} from "@shared/branchable-transcript";
+
+export type {
+  BranchableTranscript,
+  BranchNode,
+  RewindOp,
+} from "@shared/branchable-transcript";
+
 export type ColumnId = "backlog" | "define" | "implement" | "review" | "finalize";
 
 export type StepStatus =
@@ -238,5 +250,12 @@ export const api = {
     request<ChatThread>(`/api/chat-threads/${id}/open`, { method: "POST" }),
   deleteChatThread: (id: string) =>
     request<{ ok: boolean }>(`/api/chat-threads/${id}`, { method: "DELETE" }),
+  getChatThreadTranscript: (id: string) =>
+    request<BranchableTranscript>(`/api/chat-threads/${id}/transcript`),
+  rewindChatThread: (id: string, op: RewindOp) =>
+    request<{ messages: UIMessage[]; branchable: BranchableTranscript }>(
+      `/api/chat-threads/${id}/rewind`,
+      { method: "POST", body: JSON.stringify(op) },
+    ),
   listModels: () => request<{ models: AgentModel[] }>("/api/models"),
 };

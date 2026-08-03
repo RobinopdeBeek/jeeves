@@ -53,8 +53,13 @@ export type ThreadProps = {
   welcomeTitle?: string | null;
   /** Composer placeholder when session is open. */
   placeholder?: string;
-  /** Composer placeholder while the session is still opening. */
+  /** Composer placeholder while the ACP session is still opening. */
   openingPlaceholder?: string;
+  /**
+   * Disabled attach / voice stub buttons. Project Chat hides these until
+   * attachments land in a later ticket; step chats keep the stubs for now.
+   */
+  showComposerMediaStubs?: boolean;
 };
 
 const COMPOSER_SHELL =
@@ -139,6 +144,7 @@ export const Thread: FC<ThreadProps> = ({
   welcomeTitle = null,
   placeholder = "Send a message... (@ to mention, / for commands)",
   openingPlaceholder = "Agent starting — you can type…",
+  showComposerMediaStubs = true,
 }) => {
   const isEmpty = useAuiState(isEmptyThread);
 
@@ -190,6 +196,7 @@ export const Thread: FC<ThreadProps> = ({
               sessionOpen={sessionOpen}
               placeholder={placeholder}
               openingPlaceholder={openingPlaceholder}
+              showComposerMediaStubs={showComposerMediaStubs}
             />
           </ThreadPrimitive.ViewportFooter>
         </div>
@@ -201,8 +208,10 @@ export const Thread: FC<ThreadProps> = ({
 /** Visual twin of {@link Thread} while the runtime / socket is connecting. */
 export function ThreadShell({
   placeholder = "Loading…",
+  showComposerMediaStubs = true,
 }: {
   placeholder?: string;
+  showComposerMediaStubs?: boolean;
 }) {
   return (
     <div
@@ -225,29 +234,35 @@ export function ThreadShell({
                 className="max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none"
               />
               <div className="relative flex items-center justify-between">
-                <TooltipIconButton
-                  tooltip="Attach file"
-                  side="bottom"
-                  type="button"
-                  variant="ghost"
-                  size="icon-round"
-                  disabled
-                  aria-label="Attach file"
-                >
-                  <IconPaperclip />
-                </TooltipIconButton>
-                <div className="flex items-center gap-1.5">
+                {showComposerMediaStubs ? (
                   <TooltipIconButton
-                    tooltip="Voice input"
+                    tooltip="Attach file"
                     side="bottom"
                     type="button"
                     variant="ghost"
                     size="icon-round"
                     disabled
-                    aria-label="Voice input"
+                    aria-label="Attach file"
                   >
-                    <IconMicrophone />
+                    <IconPaperclip />
                   </TooltipIconButton>
+                ) : (
+                  <span />
+                )}
+                <div className="flex items-center gap-1.5">
+                  {showComposerMediaStubs ? (
+                    <TooltipIconButton
+                      tooltip="Voice input"
+                      side="bottom"
+                      type="button"
+                      variant="ghost"
+                      size="icon-round"
+                      disabled
+                      aria-label="Voice input"
+                    >
+                      <IconMicrophone />
+                    </TooltipIconButton>
+                  ) : null}
                   <Button
                     type="button"
                     variant="default"
@@ -303,7 +318,8 @@ const Composer: FC<{
   sessionOpen: boolean;
   placeholder: string;
   openingPlaceholder: string;
-}> = ({ sessionOpen, placeholder, openingPlaceholder }) => {
+  showComposerMediaStubs: boolean;
+}> = ({ sessionOpen, placeholder, openingPlaceholder, showComposerMediaStubs }) => {
   const mention = unstable_useMentionAdapter({
     includeModelContextTools: false,
     items: [
@@ -337,7 +353,10 @@ const Composer: FC<{
             className="aui-composer-input relative max-h-32 min-h-10 w-full overflow-y-auto bg-transparent px-2.5 py-1 text-base caret-primary outline-none"
             aria-label="Message input"
           />
-          <ComposerAction sessionOpen={sessionOpen} />
+          <ComposerAction
+            sessionOpen={sessionOpen}
+            showComposerMediaStubs={showComposerMediaStubs}
+          />
         </div>
 
         <ComposerTriggerPopover char="@" {...mention} />
@@ -354,32 +373,41 @@ const Composer: FC<{
   );
 };
 
-const ComposerAction: FC<{ sessionOpen: boolean }> = ({ sessionOpen }) => {
+const ComposerAction: FC<{
+  sessionOpen: boolean;
+  showComposerMediaStubs: boolean;
+}> = ({ sessionOpen, showComposerMediaStubs }) => {
   return (
     <div className="aui-composer-action-wrapper relative flex items-center justify-between">
-      <TooltipIconButton
-        tooltip="Attach file"
-        side="bottom"
-        type="button"
-        variant="ghost"
-        size="icon-round"
-        disabled
-        aria-label="Attach file"
-      >
-        <IconPaperclip />
-      </TooltipIconButton>
-      <div className="flex items-center gap-1.5">
+      {showComposerMediaStubs ? (
         <TooltipIconButton
-          tooltip="Voice input"
+          tooltip="Attach file"
           side="bottom"
           type="button"
           variant="ghost"
           size="icon-round"
           disabled
-          aria-label="Voice input"
+          aria-label="Attach file"
         >
-          <IconMicrophone />
+          <IconPaperclip />
         </TooltipIconButton>
+      ) : (
+        <span />
+      )}
+      <div className="flex items-center gap-1.5">
+        {showComposerMediaStubs ? (
+          <TooltipIconButton
+            tooltip="Voice input"
+            side="bottom"
+            type="button"
+            variant="ghost"
+            size="icon-round"
+            disabled
+            aria-label="Voice input"
+          >
+            <IconMicrophone />
+          </TooltipIconButton>
+        ) : null}
         {!sessionOpen ? (
           <Button
             type="button"

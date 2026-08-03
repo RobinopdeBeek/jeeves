@@ -1,8 +1,11 @@
 import type { WSContext } from "hono/ws";
 import { describe, expect, it } from "vitest";
-import { ChatConnection, type ChatWsDeps, type SessionKey } from "./attach.js";
+import { ChatConnection, type ChatWsDeps } from "./attach.js";
 
-const key: SessionKey = { cardId: "c1", stepKey: "grill", round: 0 };
+const stepTarget = {
+  kind: "step" as const,
+  ref: { cardId: "c1", stepKey: "grill" as const, round: 0 },
+};
 
 function harness() {
   const sent: string[] = [];
@@ -11,7 +14,7 @@ function harness() {
     close: () => {},
   } as unknown as WSContext;
   // Liveness is answered before openChat runs, so no deps are touched.
-  return { sent, conn: new ChatConnection(ws, key, {} as ChatWsDeps) };
+  return { sent, conn: new ChatConnection(ws, stepTarget, {} as ChatWsDeps) };
 }
 
 describe("ChatConnection liveness", () => {
@@ -62,5 +65,26 @@ describe("ChatConnection liveness", () => {
     await conn.onClientMessage(JSON.stringify({ type: "cancel" }));
 
     expect(cancelCalls).toEqual([1]);
+  });
+});
+
+describe("ChatConnection thread target", () => {
+  it("answers ping on a thread connection before ACP is ready", async () => {
+    const sent: string[] = [];
+    const ws = {
+      send: (data: string) => sent.push(data),
+      close: () => {},
+    } as unknown as WSContext;
+    const conn = new ChatConnection(
+      ws,
+      { kind: "thread", ref: { threadId: "t1" } },
+      {} as ChatWsDeps,
+    );
+
+    await conn.onClientMessage(JSON.stringify({ type: "ping", id: "tp" }));
+
+    expect(sent.map((s) => JSON.parse(s) as unknown)).toEqual([
+      { type: "pong", id: "tp" },
+    ]);
   });
 });

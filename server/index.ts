@@ -69,12 +69,21 @@ const chatDeps = {
   spawn: spawnAcp,
   promptsRoot: path.join(rootDir, "prompts"),
   sessions: chatSessions,
+  chatThreads,
+  projectCwd: paths.repoPath,
 };
 
 const app = new Hono();
 
 app.get("/api/project", (c) => c.json(project));
-app.route("/api/chat-threads", chatThreadRoutes(chatThreads, project));
+app.route(
+  "/api/chat-threads",
+  chatThreadRoutes(chatThreads, project, {
+    onThreadDeleted: (threadId) => {
+      chatSessions.close(`thread:${threadId}`, "thread deleted");
+    },
+  }),
+);
 app.route(
   "/api/cards",
   cardRoutes(store, project, {
@@ -113,13 +122,30 @@ app.route("/api/events", eventRoutes(events));
 app.get(
   "/ws/chat",
   upgradeWebSocket((c) => {
+    const threadId = c.req.query("threadId");
     const cardId = c.req.query("cardId");
     const stepKey = c.req.query("stepKey");
     const round = Number(c.req.query("round") ?? "0");
-    if (!cardId || !isStepKey(stepKey) || Number.isNaN(round)) {
+
+    const openTarget =
+      threadId != null && threadId !== ""
+        ? ({ kind: "thread", ref: { threadId } } as const)
+        : cardId && isStepKey(stepKey) && !Number.isNaN(round)
+          ? ({
+              kind: "step",
+              ref: { cardId, stepKey, round },
+            } as const)
+          : null;
+
+    if (!openTarget) {
       return {
         onOpen(_event, ws) {
-          ws.send(JSON.stringify({ type: "error", error: "cardId, stepKey, and round required" }));
+          ws.send(
+            JSON.stringify({
+              type: "error",
+              error: "threadId or cardId+stepKey+round required",
+            }),
+          );
           ws.close();
         },
       };
@@ -128,7 +154,7 @@ app.get(
     let connection: ChatConnection | null = null;
     return {
       onOpen(_event, ws) {
-        connection = new ChatConnection(ws, { cardId, stepKey, round }, chatDeps);
+        connection = new ChatConnection(ws, openTarget, chatDeps);
         void connection.start();
       },
       onMessage(event, _ws) {

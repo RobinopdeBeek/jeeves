@@ -5,8 +5,17 @@ import {
 } from "../chat-threads/store.js";
 import type { Project } from "../db/schema.js";
 
+export interface ChatThreadRouteHooks {
+  /** Evict warm ACP for a hard-deleted Chat Thread (opaque `thread:…` id). */
+  onThreadDeleted?: (threadId: string) => void;
+}
+
 /** Thin HTTP adapter over the ChatThreadStore seam. */
-export function chatThreadRoutes(store: ChatThreadStore, project: Project) {
+export function chatThreadRoutes(
+  store: ChatThreadStore,
+  project: Project,
+  hooks: ChatThreadRouteHooks = {},
+) {
   const app = new Hono();
 
   app.get("/", (c) => c.json(store.listThreads(project.id)));
@@ -46,7 +55,9 @@ export function chatThreadRoutes(store: ChatThreadStore, project: Project) {
   });
 
   app.delete("/:id", (c) => {
-    const ok = store.deleteThread(c.req.param("id"));
+    const id = c.req.param("id");
+    const ok = store.deleteThread(id);
+    if (ok) hooks.onThreadDeleted?.(id);
     return ok ? c.json({ ok: true }) : c.json({ error: "not found" }, 404);
   });
 

@@ -7,7 +7,7 @@ import { api, type ChatThread } from "@/lib/api";
 import { resolveBareChatDestination } from "@/lib/chat-routes";
 import { toast } from "sonner";
 
-/** Project Chat — thread rail / mobile list + empty thread shell (persistence slice). */
+/** Project Chat — thread rail / mobile list + live ACP thread view. */
 export function ChatPage() {
   const { threadId } = useParams<{ threadId?: string }>();
   const navigate = useNavigate();
@@ -16,12 +16,20 @@ export function ChatPage() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [active, setActive] = useState<ChatThread | null>(null);
+  const [railOpen, setRailOpen] = useState(true);
 
   const refresh = useCallback(async () => {
     const listed = await api.listChatThreads();
     setThreads(listed);
     return listed;
   }, []);
+
+  const refreshActiveTitle = useCallback(async () => {
+    const listed = await refresh();
+    if (!threadId) return;
+    const fromList = listed.find((t) => t.id === threadId);
+    if (fromList) setActive(fromList);
+  }, [refresh, threadId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -137,24 +145,39 @@ export function ChatPage() {
       );
     }
     return (
-      <ChatThreadView thread={active} showBack />
+      <ChatThreadView
+        thread={active}
+        showBack
+        onStreamingSettled={() => {
+          void refreshActiveTitle();
+        }}
+      />
     );
   }
 
-  // Desktop: persistent rail + thread view (empty shell until live ACP).
+  // Desktop: persistent rail + live thread (rail toggle in thread chrome).
   return (
     <div className="flex min-h-0 flex-1">
-      <aside className="flex w-64 shrink-0 flex-col border-r">
-        <ChatThreadList
-          threads={threads}
-          activeId={threadId}
-          onNewThread={handleNewThread}
-          onRename={handleRename}
-          onDelete={handleDelete}
-          creating={creating}
-        />
-      </aside>
-      <ChatThreadView thread={active} />
+      {railOpen ? (
+        <aside className="flex w-64 shrink-0 flex-col border-r">
+          <ChatThreadList
+            threads={threads}
+            activeId={threadId}
+            onNewThread={handleNewThread}
+            onRename={handleRename}
+            onDelete={handleDelete}
+            creating={creating}
+          />
+        </aside>
+      ) : null}
+      <ChatThreadView
+        thread={active}
+        railOpen={railOpen}
+        onToggleRail={() => setRailOpen((open) => !open)}
+        onStreamingSettled={() => {
+          void refreshActiveTitle();
+        }}
+      />
     </div>
   );
 }

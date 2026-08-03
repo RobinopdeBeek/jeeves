@@ -10,14 +10,17 @@ import {
 } from "./session-registry.js";
 
 export {
+  createProjectChatSession,
   createStepChatSession,
   loadGrillSession,
   loadSpecMarkdown,
   loadTranscript,
   stepChatSessionId,
   stepChatSessionIdFromRef,
+  threadChatSessionId,
   type ChatSession,
   type ChatSessionId,
+  type ProjectChatRef,
   type StepChatRef,
 } from "./chat-session.js";
 

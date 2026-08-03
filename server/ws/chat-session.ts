@@ -1,6 +1,10 @@
 import type { UIMessage } from "ai";
 import type { ArtifactStore } from "../artifacts/store.js";
 import type { CardStore } from "../cards/store.js";
+import {
+  EMPTY_DRAFT_TITLE,
+  type ChatThreadStore,
+} from "../chat-threads/store.js";
 import type { EventBus } from "../execution/events.js";
 import type { StepKey } from "../pipelines.js";
 import { resolveProjectStorePaths } from "../project-store.js";
@@ -13,7 +17,7 @@ import {
 
 /**
  * Opaque warm-registry id. Server-built only — clients send card/step/round
- * (or later thread id) and the WS boundary mints this string.
+ * (or thread id) and the WS boundary mints this string.
  */
 export type ChatSessionId = string;
 
@@ -22,6 +26,11 @@ export interface StepChatRef {
   cardId: string;
   stepKey: StepKey;
   round: number;
+}
+
+/** Client-facing Project Chat Thread coordinates resolved at the WS boundary. */
+export interface ProjectChatRef {
+  threadId: string;
 }
 
 /**
@@ -53,6 +62,11 @@ export function stepChatSessionId(
 
 export function stepChatSessionIdFromRef(ref: StepChatRef): ChatSessionId {
   return stepChatSessionId(ref.cardId, ref.stepKey, ref.round);
+}
+
+/** Server-built opaque id for a Project Chat Thread. */
+export function threadChatSessionId(threadId: string): ChatSessionId {
+  return `thread:${threadId}`;
 }
 
 export function loadTranscript(
@@ -191,6 +205,68 @@ export function createStepChatSession(
     frameUserMessage: profile.frameUserMessage,
     onTurnComplete: hooks.onTurnComplete,
   };
+}
+
+export interface CreateProjectChatSessionDeps {
+  threads: ChatThreadStore;
+  /** Main Project checkout cwd (not a worktree). */
+  cwd: string;
+}
+
+/**
+ * Resolve a Project Chat Thread into a ChatSession at the WS boundary.
+ * Null opening prompt = warm ACP with no assistant opening monologue.
+ */
+export function createProjectChatSession(
+  ref: ProjectChatRef,
+  deps: CreateProjectChatSessionDeps,
+): ChatSession {
+  const thread = deps.threads.getThread(ref.threadId);
+  if (!thread) throw new Error("thread not found");
+
+  return {
+    id: threadChatSessionId(ref.threadId),
+    cwd: deps.cwd,
+    openingPrompt: null,
+    loadTranscript: () => deps.threads.loadTranscript(ref.threadId),
+    saveTranscript: (messages) => {
+      deps.threads.saveTranscript(ref.threadId, messages);
+      maybeAutoTitleFromFirstUserMessage(deps.threads, ref.threadId, messages);
+    },
+    assertMutable: () => {
+      if (!deps.threads.getThread(ref.threadId)) {
+        throw new Error("thread not found");
+      }
+    },
+    // Project Chat has no board step status column.
+    notifyStatus: () => {},
+    interactivePermissionPolicy: "project-chat",
+  };
+}
+
+const AUTO_TITLE_MAX = 60;
+
+function maybeAutoTitleFromFirstUserMessage(
+  threads: ChatThreadStore,
+  threadId: string,
+  messages: UIMessage[],
+): void {
+  const current = threads.getThread(threadId);
+  if (!current || current.title !== EMPTY_DRAFT_TITLE) return;
+  const firstUser = messages.find((m) => m.role === "user");
+  if (!firstUser) return;
+  const text = firstUser.parts
+    .filter((p): p is { type: "text"; text: string } => p.type === "text")
+    .map((p) => p.text)
+    .join(" ")
+    .trim()
+    .replace(/\s+/g, " ");
+  if (!text) return;
+  const title =
+    text.length <= AUTO_TITLE_MAX
+      ? text
+      : `${text.slice(0, AUTO_TITLE_MAX - 1).trimEnd()}…`;
+  threads.renameThread(threadId, title);
 }
 
 /** Wire Spec/Tasks profile onTurnComplete to WS send callbacks. */

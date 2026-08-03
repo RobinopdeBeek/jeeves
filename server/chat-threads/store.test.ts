@@ -103,4 +103,28 @@ describe("ChatThreadStore", () => {
     expect(threads.getThread(thread.id)).toBeUndefined();
     expect(fs.existsSync(folder)).toBe(false);
   });
+
+  it("loads and saves a UIMessage transcript for live Project Chat", () => {
+    const thread = threads.createOrReuseEmptyDraft(project.id);
+    expect(threads.loadTranscript(thread.id)).toEqual([]);
+
+    const messages = [
+      {
+        id: "u1",
+        role: "user" as const,
+        parts: [{ type: "text" as const, text: "What does the board do?" }],
+      },
+      {
+        id: "a1",
+        role: "assistant" as const,
+        parts: [{ type: "text" as const, text: "It tracks cards." }],
+      },
+    ];
+    threads.saveTranscript(thread.id, messages);
+
+    expect(threads.loadTranscript(thread.id)).toEqual(messages);
+    expect(JSON.parse(fs.readFileSync(threads.transcriptPath(thread.id), "utf8"))).toEqual(
+      messages,
+    );
+  });
 });

@@ -564,4 +564,15 @@ describe("AcpChatTransport", () => {
       },
     ]);
   });
+
+  it("opens Project Chat with a threadId query (no card step coords)", async () => {
+    const transport = new AcpChatTransport({ threadId: "thr-1" });
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    expect(ws.url).toBe("ws://localhost:3000/ws/chat?threadId=thr-1");
+    ws.deliver({ type: "ready", messages: [], streaming: false });
+    await connectP;
+    ws.deliver({ type: "session", status: "open", streaming: false });
+    expect(transport.isSessionOpen()).toBe(true);
+  });
 });

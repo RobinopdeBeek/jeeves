@@ -131,9 +131,10 @@ Browser                          Server
 - **Chat:** `AcpBridge` is a long-lived push session: it owns ACP→`UIMessage` projection,
   warm attach/catch-up buffering, and seed-once resume history. The warm registry
   (`ChatSessionRegistry`: map + cap + writer slot, keyed by opaque `ChatSession` ids)
-  lives inside the AcpBridge module. At the WebSocket boundary, step chats resolve into a
-  **ChatSession** descriptor (`createStepChatSession`); `openChat` acquires the warm bridge
-  from that descriptor only — registry and bridge stay card-agnostic
+  lives inside the AcpBridge module. At the WebSocket boundary, step chats and Project Chat
+  resolve into a **ChatSession** descriptor (`createStepChatSession` /
+  `createProjectChatSession`); `openChat` acquires the warm bridge from that descriptor only
+  — registry and bridge stay card-agnostic
   ([ADR 0015](./docs/adr/0015-project-chat-threads-and-chatsession.md)). The WebSocket
   `ChatConnection` is framing-only. The client never sees ACP types. Permission requests
   render as custom message parts; responses flow back through the transport. Transcripts
@@ -161,7 +162,7 @@ them. Everything else (routes, React components) is a thin adapter.
 |---|---|---|---|
 | `PipelineEngine` | `server/pipelines.ts` | pipeline lookup by `(kind, hasParent)`; real `advance(card, trigger)` → patches + side-effects (`enqueue`, `close-chat`) | all column/step transition rules, auto-advance, board predicates (`canCreateSpec`), "workflow is code" |
 | `CardStore` | `server/db/` + card logic | CRUD, kind decision, fan-out, blocker edges, derived queries ("X of Y", queue candidates, Round N history); persists `advance` patches | SQLite/Drizzle, active/merged/done cards + tip drafts in ArtifactStore, every derivation rule |
-| `ChatThreadStore` | `server/chat-threads/` | list / create-or-reuse empty draft / rename / mark-opened / hard-delete; transcript path under `data/chat/` | SQLite `chat_threads` index + on-disk empty transcript files (ADR 0015) |
+| `ChatThreadStore` | `server/chat-threads/` | list / create-or-reuse empty draft / rename / mark-opened / hard-delete; load/save transcript under `data/chat/` | SQLite `chat_threads` index + on-disk UIMessage transcripts (ADR 0015) |
 | `ArtifactStore` | `server/artifacts/store.ts` + routes | `save`, `harvest(worktree, declarations)`, `list(card)`, serve-path resolution; transcript upsert is file/index only | atomic/versioned files, metadata, root containment, manifest regeneration, lineage, rounds, supersession |
 | `ExecutionEngine` | `server/execution/` (`engine.ts`, `runner.ts`, `worktree-manager.ts`, `cursor-sdk-runner.ts`, `run-store.ts`, `events.ts`) | `enqueue(card, step)` + run events; `startPreview(card, gitSha)` / `stopPreview()`; dispatches `advance` side-effects on finish | `AgentRunner`, per-run worktrees/finalization, branch strategy, host-process preview lifecycle, sequential queue, blockers, restart recovery, eval sequencing |
 | `AcpBridge` | `server/ws/chat.ts` (+ `chat-session.ts`, `open-chat.ts`, `session-registry.ts`) | push-only `openSession` / `sendMessage` + `attach`/`onChunk`; headless `runToCompletion`; warm registry acquire/reattach on opaque ids; `ChatSession` + `openChat` for adapters | spawning `agent acp`, ACP→`UIMessage` projection, permission responses (incl. headless cursor-like policy), JSON-RPC piping, warm cap/eviction, seed-once / nullable opener, disconnect/hand-off close |

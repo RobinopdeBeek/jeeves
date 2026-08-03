@@ -5,13 +5,17 @@ import type {
 } from "../../shared/chat-ws.js";
 import type { ArtifactStore } from "../artifacts/store.js";
 import type { CardStore } from "../cards/store.js";
+import type { ChatThreadStore } from "../chat-threads/store.js";
 import type { EventBus } from "../execution/events.js";
 import type { SpawnAcp } from "./chat.js";
 import {
+  createProjectChatSession,
   createStepChatSession,
   loadTranscript,
   stepChatSessionIdFromRef,
   stepChatTurnCompleteHook,
+  threadChatSessionId,
+  type ProjectChatRef,
   type StepChatRef,
 } from "./chat-session.js";
 import { openChat } from "./open-chat.js";
@@ -24,6 +28,11 @@ import {
 export type { StepChatRef as SessionKey };
 export type { WsClientMessage, WsServerMessage };
 
+/** Discriminated open target resolved from the `/ws/chat` query string. */
+export type ChatOpenTarget =
+  | { kind: "step"; ref: StepChatRef }
+  | { kind: "thread"; ref: ProjectChatRef };
+
 export interface ChatWsDeps {
   store: CardStore;
   artifacts: ArtifactStore;
@@ -31,6 +40,9 @@ export interface ChatWsDeps {
   spawn: SpawnAcp;
   promptsRoot: string;
   sessions: ChatSessionRegistry;
+  chatThreads: ChatThreadStore;
+  /** Main Project checkout for Project Chat. */
+  projectCwd: string;
 }
 
 /**
@@ -50,16 +62,27 @@ export class ChatConnection {
 
   constructor(
     private readonly ws: WSContext,
-    private readonly ref: StepChatRef,
+    private readonly target: ChatOpenTarget,
     private readonly deps: ChatWsDeps,
   ) {
-    this.sessionId = stepChatSessionIdFromRef(ref);
+    this.sessionId =
+      target.kind === "step"
+        ? stepChatSessionIdFromRef(target.ref)
+        : threadChatSessionId(target.ref.threadId);
   }
 
   async start(): Promise<void> {
     this.deps.sessions.claim(this.sessionId, this);
 
-    if (!this.deps.store.getCard(this.ref.cardId)) {
+    if (this.target.kind === "step") {
+      await this.startStep(this.target.ref);
+    } else {
+      await this.startThread(this.target.ref);
+    }
+  }
+
+  private async startStep(ref: StepChatRef): Promise<void> {
+    if (!this.deps.store.getCard(ref.cardId)) {
       this.send({ type: "error", error: "card not found" });
       this.ws.close();
       return;
@@ -75,44 +98,80 @@ export class ChatConnection {
     // Ready before openChat so frozen-transcript / spawn failures still get history first.
     this.send({
       type: "ready",
-      messages: loadTranscript(this.deps.artifacts, this.ref),
+      messages: loadTranscript(this.deps.artifacts, ref),
       streaming: this.deps.sessions.isAiWorking(this.sessionId),
     });
     if (this.closed) return;
 
     try {
-      const session = createStepChatSession(this.ref, sessionDeps, {
+      const session = createStepChatSession(ref, sessionDeps, {
         onStatusNotify: (status) => {
           if (this.closed) return;
           this.send({ type: "status", status });
         },
-        onTurnComplete: stepChatTurnCompleteHook(this.ref, sessionDeps, {
+        onTurnComplete: stepChatTurnCompleteHook(ref, sessionDeps, {
           send: (msg) => this.send(msg),
           sendError: (error) => this.send({ type: "error", error }),
           isClosed: () => this.closed,
         }),
       });
 
-      const opened = await openChat(session, {
-        spawn: this.deps.spawn,
-        sessions: this.deps.sessions,
-      });
-      if (this.closed) return;
-
-      this.handle = opened.handle;
-      this.handle.attach(this.subscriber);
-      this.send({
-        type: "session",
-        status: "open",
-        streaming: this.deps.sessions.isAiWorking(this.sessionId),
-      });
+      await this.finishOpen(session);
     } catch (err) {
-      if (this.closed) return;
-      this.send({
-        type: "error",
-        error: err instanceof Error ? err.message : String(err),
-      });
+      this.sendOpenError(err);
     }
+  }
+
+  private async startThread(ref: ProjectChatRef): Promise<void> {
+    if (!this.deps.chatThreads.getThread(ref.threadId)) {
+      this.send({ type: "error", error: "thread not found" });
+      this.ws.close();
+      return;
+    }
+
+    const session = createProjectChatSession(ref, {
+      threads: this.deps.chatThreads,
+      cwd: this.deps.projectCwd,
+    });
+
+    this.send({
+      type: "ready",
+      messages: session.loadTranscript(),
+      streaming: this.deps.sessions.isAiWorking(this.sessionId),
+    });
+    if (this.closed) return;
+
+    try {
+      await this.finishOpen(session);
+    } catch (err) {
+      this.sendOpenError(err);
+    }
+  }
+
+  private async finishOpen(
+    session: Parameters<typeof openChat>[0],
+  ): Promise<void> {
+    const opened = await openChat(session, {
+      spawn: this.deps.spawn,
+      sessions: this.deps.sessions,
+    });
+    if (this.closed) return;
+
+    this.handle = opened.handle;
+    this.handle.attach(this.subscriber);
+    this.send({
+      type: "session",
+      status: "open",
+      streaming: this.deps.sessions.isAiWorking(this.sessionId),
+    });
+  }
+
+  private sendOpenError(err: unknown): void {
+    if (this.closed) return;
+    this.send({
+      type: "error",
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   async onClientMessage(raw: string): Promise<void> {

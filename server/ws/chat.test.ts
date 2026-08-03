@@ -1119,34 +1119,79 @@ describe("decideInteractivePermission", () => {
     { optionId: "reject-once", name: "Reject", kind: "reject_once" },
   ];
 
-  it("allows reads, shell, and exchange writes", () => {
+  it("allows reads, shell, and exchange writes under cursor-like", () => {
     expect(
-      decideInteractivePermission({ title: "Read file CONTEXT.md", options }),
+      decideInteractivePermission(
+        { title: "Read file CONTEXT.md", options },
+        "cursor-like",
+      ),
     ).toEqual({ action: "allow", optionId: "allow-once" });
     expect(
-      decideInteractivePermission({ title: "Shell: npm test", options }),
+      decideInteractivePermission(
+        { title: "Shell: npm test", options },
+        "cursor-like",
+      ),
     ).toEqual({ action: "allow", optionId: "allow-once" });
     expect(
-      decideInteractivePermission({
-        title: "Write file .jeeves/exchange/c1/spec.md",
-        options,
-      }),
+      decideInteractivePermission(
+        {
+          title: "Write file .jeeves/exchange/c1/spec.md",
+          options,
+        },
+        "cursor-like",
+      ),
     ).toEqual({ action: "allow", optionId: "allow-once" });
   });
 
   it("auto-approves raw shell titles even when the command text contains Write", () => {
     expect(
-      decideInteractivePermission({
-        title:
-          'rg -n "Streaming lock|revised exchange|Smoke QA|Write|tasks-draft|exchange" "C:\\Users\\robin\\.cursor\\projects\\foo\\agent-transcripts\\x.jsonl" | Select-Object -First 40',
-        options,
-      }),
+      decideInteractivePermission(
+        {
+          title:
+            'rg -n "Streaming lock|revised exchange|Smoke QA|Write|tasks-draft|exchange" "C:\\Users\\robin\\.cursor\\projects\\foo\\agent-transcripts\\x.jsonl" | Select-Object -First 40',
+          options,
+        },
+        "cursor-like",
+      ),
     ).toEqual({ action: "allow", optionId: "allow-once" });
   });
 
-  it("prompts for non-exchange file writes", () => {
+  it("prompts for non-exchange file writes under cursor-like", () => {
     expect(
-      decideInteractivePermission({ title: "Write file src/app.ts", options }),
+      decideInteractivePermission(
+        { title: "Write file src/app.ts", options },
+        "cursor-like",
+      ),
+    ).toEqual({ action: "prompt" });
+  });
+
+  it("project-chat auto-approves reads but prompts for shell and file writes", () => {
+    expect(
+      decideInteractivePermission(
+        { title: "Read file CONTEXT.md", options },
+        "project-chat",
+      ),
+    ).toEqual({ action: "allow", optionId: "allow-once" });
+    expect(
+      decideInteractivePermission(
+        { title: "Shell: npm test", options },
+        "project-chat",
+      ),
+    ).toEqual({ action: "prompt" });
+    expect(
+      decideInteractivePermission(
+        { title: "Write file src/app.ts", options },
+        "project-chat",
+      ),
+    ).toEqual({ action: "prompt" });
+    expect(
+      decideInteractivePermission(
+        {
+          title: "Write file .jeeves/exchange/c1/spec.md",
+          options,
+        },
+        "project-chat",
+      ),
     ).toEqual({ action: "prompt" });
   });
 });

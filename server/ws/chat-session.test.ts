@@ -6,9 +6,12 @@ import { ArtifactStore } from "../artifacts/store.js";
 import { CardStore } from "../cards/store.js";
 import { openDb } from "../db/index.js";
 import { EventBus } from "../execution/events.js";
+import { ChatThreadStore } from "../chat-threads/store.js";
 import {
+  createProjectChatSession,
   createStepChatSession,
   stepChatSessionId,
+  threadChatSessionId,
 } from "./chat-session.js";
 import { MockAcpProcess, viWaitFor } from "./mock-acp-process.js";
 import { openChat } from "./open-chat.js";
@@ -21,6 +24,12 @@ describe("stepChatSessionId", () => {
     expect(stepChatSessionId("c1", "grill", 0)).toBe("card:c1:grill:0");
     expect(stepChatSessionId("c1", "spec", 2)).toBe("card:c1:spec:2");
     expect(stepChatSessionId("c1", "tasks", 0)).toBe("card:c1:tasks:0");
+  });
+});
+
+describe("threadChatSessionId", () => {
+  it("builds an opaque thread id for the shared warm pool", () => {
+    expect(threadChatSessionId("abc123")).toBe("thread:abc123");
   });
 });
 
@@ -149,5 +158,84 @@ describe("openChat via ChatSession", () => {
     await new Promise((r) => setTimeout(r, 30));
     expect(process.prompts()).toHaveLength(0);
     expect(sessions.hasWarm(userFirst.id)).toBe(true);
+  });
+});
+
+describe("createProjectChatSession", () => {
+  let db: ReturnType<typeof openDb>;
+  let store: CardStore;
+  let chatRoot: string;
+  let threads: ChatThreadStore;
+  let projectId: string;
+  let threadId: string;
+  const repoPath = "C:/target-repo";
+
+  beforeEach(() => {
+    db = openDb(":memory:");
+    store = new CardStore(db);
+    projectId = store.ensureDefaultProject("jeeves", repoPath).id;
+    chatRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-project-chat-"));
+    threads = new ChatThreadStore(db, chatRoot);
+    threadId = threads.createOrReuseEmptyDraft(projectId).id;
+  });
+
+  afterEach(() => {
+    fs.rmSync(chatRoot, { recursive: true, force: true });
+  });
+
+  it("warms Project Chat with null opener, project cwd, and project-chat policy", () => {
+    const session = createProjectChatSession(
+      { threadId },
+      { threads, cwd: repoPath },
+    );
+
+    expect(session.id).toBe(`thread:${threadId}`);
+    expect(session.cwd).toBe(repoPath);
+    expect(session.openingPrompt).toBeNull();
+    expect(session.interactivePermissionPolicy).toBe("project-chat");
+    expect(session.loadTranscript()).toEqual([]);
+    expect(() => session.assertMutable()).not.toThrow();
+  });
+
+  it("persists transcript via ChatThreadStore and auto-titles from the first user message", () => {
+    const session = createProjectChatSession(
+      { threadId },
+      { threads, cwd: repoPath },
+    );
+    const messages = [
+      {
+        id: "u1",
+        role: "user" as const,
+        parts: [{ type: "text" as const, text: "Explain the warm pool" }],
+      },
+    ];
+    session.saveTranscript(messages);
+
+    expect(threads.loadTranscript(threadId)).toEqual(messages);
+    expect(threads.getThread(threadId)?.title).toBe("Explain the warm pool");
+  });
+
+  it("rejects missing threads at the factory", () => {
+    expect(() =>
+      createProjectChatSession(
+        { threadId: "missing" },
+        { threads, cwd: repoPath },
+      ),
+    ).toThrow(/thread not found/i);
+  });
+
+  it("opens warm ACP without an opening monologue", async () => {
+    const sessions = new ChatSessionRegistry();
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-project");
+    const session = createProjectChatSession(
+      { threadId },
+      { threads, cwd: repoPath },
+    );
+
+    await openChat(session, { spawn: () => process, sessions });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(process.prompts()).toHaveLength(0);
+    expect(sessions.hasWarm(`thread:${threadId}`)).toBe(true);
   });
 });

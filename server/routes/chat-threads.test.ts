@@ -84,4 +84,21 @@ describe("chat thread routes", () => {
     const res = await app.request("http://localhost/missing", { method: "DELETE" });
     expect(res.status).toBe(404);
   });
+
+  it("notifies onThreadDeleted after a successful hard delete", async () => {
+    const deleted: string[] = [];
+    const app = chatThreadRoutes(store, project, {
+      onThreadDeleted: (id) => deleted.push(id),
+    });
+    const created = (await (
+      await app.request("http://localhost/", { method: "POST" })
+    ).json()) as { id: string };
+
+    await app.request(`http://localhost/${created.id}`, { method: "DELETE" });
+    expect(deleted).toEqual([created.id]);
+
+    deleted.length = 0;
+    await app.request("http://localhost/missing", { method: "DELETE" });
+    expect(deleted).toEqual([]);
+  });
 });

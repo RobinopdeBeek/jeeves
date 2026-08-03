@@ -12,9 +12,12 @@ export type ChatConnectionState =
   | "closed";
 
 export interface AcpChatTransportOptions {
-  cardId: string;
-  stepKey: string;
+  /** Step chat coordinates (Grill / Spec / Tasks). Mutually exclusive with threadId. */
+  cardId?: string;
+  stepKey?: string;
   round?: number;
+  /** Project Chat Thread id. Mutually exclusive with cardId/stepKey. */
+  threadId?: string;
   onDisplaced?: (reason: string) => void;
   /** Live editor/tip draft body for Define assist (framed server-side by step profile). */
   getLiveDraftBody?: () => string;
@@ -280,11 +283,14 @@ export class AcpChatTransport {
   }
 
   private url(): string {
-    const qs = new URLSearchParams({
-      cardId: this.options.cardId,
-      stepKey: this.options.stepKey,
-      round: String(this.options.round ?? 0),
-    });
+    const qs =
+      this.options.threadId != null && this.options.threadId !== ""
+        ? new URLSearchParams({ threadId: this.options.threadId })
+        : new URLSearchParams({
+            cardId: this.options.cardId ?? "",
+            stepKey: this.options.stepKey ?? "",
+            round: String(this.options.round ?? 0),
+          });
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
     return `${proto}://${window.location.host}/ws/chat?${qs}`;
   }

@@ -42,8 +42,8 @@ export interface OpenSessionOptions {
   openingPrompt: string | null;
   history?: UIMessage[];
   /**
-   * Live chat: auto-approve reads/shell/exchange writes; prompt only for
-   * non-exchange file writes.
+   * Live chat: `cursor-like` auto-approves reads/shell/exchange writes;
+   * `project-chat` auto-approves reads only (shell + file writes prompt).
    */
   interactivePermissionPolicy?: InteractivePermissionPolicy;
 }
@@ -55,8 +55,12 @@ export interface OpenSessionOptions {
  */
 export type HeadlessPermissionPolicy = "cursor-like";
 
-/** Live chat Cursor-like defaults — auto-approve routine; prompt for crucial. */
-export type InteractivePermissionPolicy = "cursor-like";
+/**
+ * Live chat permission policy:
+ * - cursor-like: auto-approve reads/shell/exchange; prompt for other file writes
+ * - project-chat: auto-approve reads only; prompt for shell and file writes
+ */
+export type InteractivePermissionPolicy = "cursor-like" | "project-chat";
 
 export interface RunToCompletionOptions {
   cwd: string;
@@ -626,7 +630,7 @@ export class AcpBridge {
     }
 
     if (this.interactivePolicy != null) {
-      const decision = decideInteractivePermission(data);
+      const decision = decideInteractivePermission(data, this.interactivePolicy);
       if (decision.action === "allow") {
         this.respondToPermission(requestId, decision.optionId);
         return;

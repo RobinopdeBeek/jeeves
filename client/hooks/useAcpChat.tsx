@@ -10,9 +10,12 @@ import {
 } from "./acp-chat-transport";
 
 export interface UseAcpChatOptions {
-  cardId: string;
-  stepKey: string;
+  /** Step chat coordinates. Mutually exclusive with threadId. */
+  cardId?: string;
+  stepKey?: string;
   round?: number;
+  /** Project Chat Thread id. Mutually exclusive with cardId/stepKey. */
+  threadId?: string;
   /** Live editor/tip draft for Define assist steps (opaque body; server frames by profile). */
   getLiveDraftBody?: () => string;
   onSpecRevised?: (markdown: string) => void;
@@ -45,7 +48,7 @@ export type AcpChatState =
   | { status: "error"; error: string };
 
 /**
- * Custom ChatTransport hook: connects Grill / Spec / Tasks ai-chat steps to AcpBridge.
+ * Custom ChatTransport hook: connects Grill / Spec / Tasks / Project Chat to AcpBridge.
  *
  * The transport heals its own socket; this hook mirrors that into UI state and
  * re-seeds the runtime from the server transcript after a reconnect.
@@ -54,6 +57,7 @@ export function useAcpChat({
   cardId,
   stepKey,
   round = 0,
+  threadId,
   getLiveDraftBody,
   onSpecRevised,
   onTasksRevised,
@@ -78,6 +82,7 @@ export function useAcpChat({
       cardId,
       stepKey,
       round,
+      threadId,
       getLiveDraftBody: injectLiveDraft
         ? () => getLiveDraftRef.current?.() ?? ""
         : undefined,
@@ -167,7 +172,7 @@ export function useAcpChat({
       // CONNECTING-safe close waits for open before closing (no setTimeout defer).
       transport.close();
     };
-  }, [cardId, stepKey, round, injectLiveDraft]);
+  }, [cardId, stepKey, round, threadId, injectLiveDraft]);
 
   return state;
 }

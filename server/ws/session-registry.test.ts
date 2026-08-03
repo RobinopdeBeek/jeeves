@@ -1,6 +1,6 @@
 import type { UIMessageChunk } from "ai";
 import { describe, expect, it } from "vitest";
-import { stepChatSessionId } from "./chat-session.js";
+import { stepChatSessionId, threadChatSessionId } from "./chat-session.js";
 import { MockAcpProcess, viWaitFor } from "./mock-acp-process.js";
 import {
   ChatSessionRegistry,
@@ -399,5 +399,44 @@ describe("ChatSessionRegistry — warm bridges", () => {
     expect(registry.get(idA)).toBeUndefined();
     expect(registry.hasWarm(idA)).toBe(false);
     expect(process.killed).toBe(true);
+  });
+
+  it("shares one warm pool across card: and thread: session ids", async () => {
+    const registry = new ChatSessionRegistry();
+    const processes: MockAcpProcess[] = [];
+
+    async function acquireIdle(id: string): Promise<void> {
+      const process = new MockAcpProcess();
+      process.autoHandshake(`sess-${id}`);
+      processes.push(process);
+      await registry.acquire(id, {
+        spawn: () => process,
+        cwd: "C:/repo",
+        openingPrompt: null,
+        history: [
+          { id: "u1", role: "user", parts: [{ type: "text", text: "x" }] },
+        ],
+        onStatus: () => {},
+        onTranscript: () => {},
+      });
+      await viWaitFor(() => registry.hasWarm(id));
+    }
+
+    // Fill the pool with a mix of step chats and Project Chat threads.
+    for (let i = 0; i < MAX_LIVE_SESSIONS - 1; i++) {
+      await acquireIdle(stepChatSessionId(`c${i}`, "grill", 0));
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    await acquireIdle(threadChatSessionId("oldest-thread"));
+    await new Promise((r) => setTimeout(r, 5));
+
+    // Oldest is c0 — admitting another thread should evict that step chat.
+    await acquireIdle(threadChatSessionId("new-thread"));
+
+    expect(processes[0]!.killed).toBe(true);
+    expect(registry.hasWarm(stepChatSessionId("c0", "grill", 0))).toBe(false);
+    expect(registry.hasWarm(threadChatSessionId("oldest-thread"))).toBe(true);
+    expect(registry.hasWarm(threadChatSessionId("new-thread"))).toBe(true);
+    expect(processes.filter((p) => !p.killed)).toHaveLength(MAX_LIVE_SESSIONS);
   });
 });

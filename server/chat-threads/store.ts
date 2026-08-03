@@ -1,4 +1,5 @@
 import { desc, eq } from "drizzle-orm";
+import type { UIMessage } from "ai";
 import fs from "node:fs";
 import path from "node:path";
 import { nanoid } from "nanoid";
@@ -98,7 +99,7 @@ export class ChatThreadStore {
 
   /**
    * Hard delete: drop the index row and the on-disk transcript folder.
-   * Warm ACP eviction is a later slice (#37).
+   * Callers that own the warm registry should evict `thread:${id}` first.
    */
   deleteThread(id: string): boolean {
     const existing = this.getThread(id);
@@ -111,6 +112,29 @@ export class ChatThreadStore {
   /** Absolute path to a thread's transcript.json (may be empty until live chat). */
   transcriptPath(threadId: string): string {
     return path.join(this.threadDir(threadId), "transcript.json");
+  }
+
+  /** Load the persisted UIMessage transcript (empty when missing/corrupt). */
+  loadTranscript(threadId: string): UIMessage[] {
+    const file = this.transcriptPath(threadId);
+    if (!fs.existsSync(file)) return [];
+    try {
+      const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+      return Array.isArray(parsed) ? (parsed as UIMessage[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Persist the live ACP transcript for resume/reload. */
+  saveTranscript(threadId: string, messages: UIMessage[]): void {
+    const dir = this.threadDir(threadId);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      this.transcriptPath(threadId),
+      `${JSON.stringify(messages, null, 2)}\n`,
+      "utf8",
+    );
   }
 
   private insertThread(projectId: string): ChatThread {

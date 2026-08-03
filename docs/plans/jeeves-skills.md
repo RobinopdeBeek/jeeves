@@ -56,21 +56,21 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
 
 | Skill | Step | Mode | Source | Priority |
 |---|---|---|---|---|
-| [`plan-implementation`](#plan-implementation) | Plan | AI Execution | From scratch | P1 |
+| [`plan-implementation`](#plan-implementation) | Plan | AI Execution | From `/implement` light planning | P1 |
 | [`implement-task`](#implement-task) | Implement | AI Execution | Adapted from `/implement` + `/tdd` | P1 |
-| [`eval-summary`](#eval-summary) | AI Review (eval pipeline) | AI Execution | From scratch | P2 |
-| [`eval-screenshots`](#eval-screenshots) | AI Review | AI Execution / host | From scratch | P2 |
-| [`eval-diff-narrative`](#eval-diff-narrative) | AI Review | AI Execution | From scratch | **P0** |
-| [`eval-tests`](#eval-tests) | AI Review | AI Execution | From scratch | P2 |
-| [`thermo-nuclear-review`](#thermo-nuclear-review) | AI Review | AI Execution | Wire existing Cursor skill | P1 |
-| [`eval-qa-plan`](#eval-qa-plan) | AI Review | AI Execution | From scratch | **P0** |
-| [`eval-assemble`](#eval-assemble) | AI Review | AI Execution | From scratch | P1 |
+| [`ai-review`](#ai-review) | AI Review | AI Execution | Adapted from `/code-review` + rework | P1 |
 
-#### Human Review (feature scope)
+#### Human Review / Prepare Eval
 
 | Skill | Step | Mode | Source | Priority |
 |---|---|---|---|---|
-| [`eval-acceptance`](#eval-acceptance) | Feature auto-advance → Review | AI Execution | From scratch (incl. refactor pass) | P1 |
+| [`eval-assemble`](#eval-assemble) | Prepare Eval | AI Execution | From scratch | P1 |
+| [`eval-summary`](#eval-summary) | Prepare Eval | AI Execution | From scratch | P2 |
+| [`eval-screenshots`](#eval-screenshots) | Prepare Eval | AI Execution / host | From scratch | P2 |
+| [`eval-diff-narrative`](#eval-diff-narrative) | Prepare Eval | AI Execution | From scratch | **P0** |
+| [`eval-tests`](#eval-tests) | Prepare Eval | AI Execution | From scratch | P2 |
+| [`eval-qa-plan`](#eval-qa-plan) | Prepare Eval | AI Execution | From scratch | **P0** |
+| [`eval-acceptance`](#eval-acceptance) | Feature Prepare Eval | AI Execution | From scratch (incl. refactor pass) | P1 |
 
 #### Finalize
 
@@ -86,6 +86,7 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
 | [`grilling`](#grilling) | `grill-with-docs` | Matt Pocock — keep as-is |
 | [`domain-modeling`](#domain-modeling) | `grill-with-docs` | Matt Pocock — keep as-is |
 | [`tdd`](#tdd) | `implement-task` | Matt Pocock — keep as-is |
+| [`code-review`](#code-review) | `ai-review` (process shape) | Matt Pocock — Standards + Spec axes inside one SDK run |
 | [`codebase-design`](#codebase-design) | `eval-acceptance` (refactor pass) | Jeeves — keep as-is |
 
 #### Meta-workflow (building Jeeves itself — not wired into the board)
@@ -93,7 +94,7 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
 | Skill | Used when | Notes |
 |---|---|---|
 | [`to-spec`](#to-spec) | Scoping a slice group before implementation | Publishes to the *human's* issue tracker, not Jeeves cards |
-| [`code-review`](#code-review) | After `/implement` on jeeves slices | Standards + Spec axes; the board uses `thermo-nuclear-review` instead for task AI Review |
+| [`code-review`](#code-review) | After `/implement` on jeeves slices (interactive) | Same dual-axis shape the board's `ai-review` step automates + reworks |
 
 ---
 
@@ -202,9 +203,10 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
 - **Inputs (injected):** card title + description (acceptance criteria inline); parent feature
   spec (child tasks); prior plan artifact on rework; `manifest.json`; module seams from spec
 - **Outputs:** `.jeeves/plan.md` → harvested plan artifact. **No source commits.**
-- **Behavior:** implementation plan for **this slice only** — files to touch, seams to test,
-  order of work, risks. Must name pre-agreed test seams. On rework, address open change
-  requests without re-planning unrelated scope.
+- **Behavior:** light planning for **this slice only** (same role as `/implement`'s planning
+  phase) — files to touch, seams to test, order of work, risks; use Context7/MCP when
+  available (non-fatal if missing). Must name pre-agreed test seams. On rework, address open
+  change requests without re-planning unrelated scope.
 - **Postconditions:** plan artifact required; git tree clean (no source changes).
 - **Workflow awareness:** plan is injected into `/implement-task`. Re-plan only when Plan step
   re-queues (not on impl-only rework).
@@ -214,19 +216,33 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
 - **Step:** Implement Task → Implement (`ai-execution`)
 - **Inputs (injected):** plan artifact; card description; on rework: consumed change-request
   document; `manifest.json`
-- **Outputs:** git commits on the card branch; clean tree at exit. Triggers the eval skill
-  sequence (same step run continues into AI Review sub-runs).
+- **Outputs:** git commits on the card branch; clean tree at exit.
 - **Behavior:** follow the plan; use `/tdd` at pre-agreed seams; run typecheck and tests;
-  commit incrementally. **Does not** run `/code-review` — the eval pipeline's
-  `thermo-nuclear-review` is the review surface. On rework, prioritise change requests while
-  preserving merged predecessor state.
-- **Postconditions:** at least one commit; clean working tree.
-- **Workflow awareness:** commits are the diff input for all `/eval-*` skills. Implement
-  failure preserves diagnostics; Retry discards the worktree from pre-run SHA.
+  commit incrementally. **Does not** run `/code-review` — that is the next step (`ai-review`).
+  On rework, prioritise change requests while preserving merged predecessor state.
+- **Postconditions:** at least one commit; clean working tree. Host then runs
+  `projects.verify_commands` (fail → `needs-user`).
+- **Workflow awareness:** commits feed AI Review and later Prepare Eval. Implement failure
+  preserves diagnostics; Retry uses `checkoutExisting` / recorded `base_sha` per
+  [ADR 0009](../adr/0009-branches-durable-worktrees-ephemeral.md).
+
+#### `ai-review`
+
+- **Step:** Implement Task → AI Review (`ai-execution`)
+- **Inputs (injected):** plan artifact; card description; `git diff` vs upstream; `manifest.json`
+- **Outputs:** `.jeeves/review.md` → harvested concise markdown overview (findings + what was
+  reworked, or an explicit clean review). **Zero or more** rework commits allowed.
+- **Behavior:** one `@cursor/sdk` run performing dual-axis Standards + Spec review (shape of
+  `/code-review`), then **immediate rework** in the same step — single pass, no verify loop.
+  Does **not** produce Evaluation HTML or eval fragments.
+- **Postconditions:** non-empty review markdown; clean tree after exchange removal. If the step
+  made commits, host runs `verify_commands` again.
+- **Workflow awareness:** on success, advance to Review column and enqueue **Prepare Eval**.
+  See [ADR 0015](../adr/0015-ai-review-reworks-eval-on-human-review-entry.md).
 
 #### `eval-summary`
 
-- **Step:** AI Review pipeline (after Implement)
+- **Step:** Prepare Eval pipeline
 - **Inputs (injected):** plan artifact; card description; `git diff` since merge-base; commit
   messages; screenshot paths if already captured
 - **Outputs:** `.jeeves/eval/fragments/summary.md`
@@ -237,7 +253,7 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
 
 #### `eval-screenshots`
 
-- **Step:** AI Review pipeline
+- **Step:** Prepare Eval pipeline
 - **Inputs (injected):** `preview_config`; evaluated `git_sha`; routes/flows from plan or QA
   plan
 - **Outputs:** `.jeeves/screenshots/*` → harvested; references embedded by `/eval-summary` or
@@ -249,7 +265,7 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
 
 #### `eval-diff-narrative`
 
-- **Step:** AI Review pipeline
+- **Step:** Prepare Eval pipeline
 - **Inputs (injected):** full `git diff` since merge-base; plan artifact; `CONTEXT.md`
 - **Outputs:** `.jeeves/eval/fragments/code-changes.md`
 - **Behavior:** reorder diff by architectural layer (schema → migrations → API → logic → UI →
@@ -261,7 +277,7 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
 
 #### `eval-tests`
 
-- **Step:** AI Review pipeline
+- **Step:** Prepare Eval pipeline
 - **Inputs (injected):** repo test commands; `git diff` for touched modules
 - **Outputs:** `.jeeves/eval/fragments/tests.md` (pass/skip/fail per suite; new tests
   highlighted; regression flags)
@@ -269,21 +285,9 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
   missing coverage on touched modules.
 - **Workflow awareness:** at feature scope, `/eval-acceptance` runs full regression instead.
 
-#### `thermo-nuclear-review`
-
-- **Step:** AI Review pipeline
-- **Inputs (injected):** `git diff` since merge-base; plan artifact
-- **Outputs:** `.jeeves/eval/fragments/ai-review.md` — categorised findings (Critical /
-  Major / Minor / Suggestion)
-- **Behavior:** wire the existing Cursor skill
-  (`thermo-nuclear-code-quality-review`); surface-everything pass, not a blocker list. Each
-  finding is pushable to "Request changes" in the UI.
-- **Workflow awareness:** **task scope only** — Feature Evaluation deliberately omits this
-  (covered per child). Findings feed the rework loop via `change_requests.source = 'ai_review'`.
-
 #### `eval-qa-plan`
 
-- **Step:** AI Review pipeline
+- **Step:** Prepare Eval pipeline
 - **Inputs (injected):** plan artifact; card description (acceptance criteria); diff summary;
   test results
 - **Outputs:** `.jeeves/eval/fragments/qa-checklist.md` — behaviour-specific checkbox items
@@ -294,23 +298,23 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
 
 #### `eval-assemble`
 
-- **Step:** AI Review pipeline (terminal)
+- **Step:** Prepare Eval (`prepeval`) — terminal skill of the eval pipeline (slice 9 stub first)
 - **Inputs (injected):** all eval fragments; per-skill notification exchange files; session meta
-  (runs aggregation: duration, tokens, model, cost); `git_sha`
+  (runs aggregation: duration, tokens, model, cost); `git_sha` of card tip after AI Review
 - **Outputs:** `.jeeves/eval.html` (self-contained HTML, sandboxed iframe) +
   `.jeeves/notifications.json` → harvested → `notifications` table rows. **No source commits.**
 - **Behavior:** combine fragments into canonical Task Evaluation sections (Summary,
-  Notifications, Code changes, Tests, AI review, QA checklist, Metadata); consolidate and
-  dedupe notifications (deviation from plan, test gap, critical review finding, unresolved
-  uncertainty). Inline CSS; sticky TOC; syntax-highlighted diffs.
+  Notifications, Code changes, Tests, QA checklist, Metadata); consolidate and dedupe
+  notifications. Inline CSS; sticky TOC; syntax-highlighted diffs. (No separate “AI review”
+  eval section — that work already happened in the AI Review step’s markdown overview.)
 - **Postconditions:** eval HTML + notifications required; git tree clean.
-- **Workflow awareness:** one assembled eval per task round; supersedes prior version within
-  the same round on partial re-run (e.g. re-run narrative + assemble only). Feature Evaluation
-  uses a parallel assemble path from `/eval-acceptance`.
+- **Workflow awareness:** on success, `prepeval → done` and human `review → needs-user`.
+  One assembled eval per task round; supersedes prior version within the same round on partial
+  re-run. Feature Evaluation uses a parallel assemble path from `/eval-acceptance`.
 
 #### `eval-acceptance`
 
-- **Step:** Feature → Human Review (after all children merged)
+- **Step:** Feature → Prepare Eval (after all children merged)
 - **Inputs (injected):** spec artifact (acceptance criteria checklist); links to each child
   Task Evaluation; feature branch `git_sha`; full regression results; holistic screenshot
   brief
@@ -352,6 +356,8 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
   `grill-with-docs`.
 - **`tdd`:** red → green at pre-agreed seams only; invoked by `implement-task` prompt, not a
   separate queue item.
+- **`code-review`:** Standards + Spec axes; process shape for the board's `ai-review` step
+  (one SDK run + immediate rework, not a separate `runs` row per axis).
 - **`codebase-design`:** module/seam vocabulary for refactor opportunities inside
   `eval-acceptance`.
 
@@ -362,24 +368,24 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
   human-authored markdown + `spec-assist`). When a Grill session artifact exists for the work,
   use it as the Q&A input — never re-derive from the raw transcript ([ADR 0012](../adr/0012-grill-session-qa-handoff.md)).
 - **`code-review`:** Standards + Spec parallel sub-agents against a fixed git point. Used when
-  building jeeves; the board's automated path uses `thermo-nuclear-review` + human Review
-  instead.
+  building jeeves interactively; the board automates the same shape in `ai-review` then reworks.
 
-### Eval pipeline sequencing
+### Prepare Eval sequencing
 
-Task AI Review is not one skill — it is a **sequence** of `runs` rows, displayed as a
-mini-pipeline in the RunLog:
+Prepare Eval is a **sequence** of `runs` rows on step `prepeval`, displayed as a mini-pipeline:
 
 ```
-implement-task  (commits)
+ai-review  (rework commits + review.md)  ← Implement Task column
       ↓
+Prepare Eval (Review column):
 eval-summary → eval-screenshots → eval-diff-narrative → eval-tests
       ↓
-thermo-nuclear-review → eval-qa-plan → eval-assemble
+eval-qa-plan → eval-assemble
 ```
 
 Each section skill can be re-run independently (new `runs` row + superseding artifact version)
 by re-queuing from the failed section onward, typically through `/eval-assemble` at minimum.
+Slice 9 ships `eval-assemble` alone as a stub; slice 11 fills the rest.
 
 ### Development priority
 
@@ -393,7 +399,7 @@ Prioritise prompt quality in this order (P0 = hardest / highest leverage):
 | P1 | `to-draft-tasks` | Determines whether child cards are truly independent slices |
 | P1 | `plan-implementation` | Bad plans waste entire Implement runs |
 | P1 | `implement-task` | Core autonomous builder |
-| P1 | `thermo-nuclear-review` | Already exists — wire and constrain scope |
+| P1 | `ai-review` | Dual-axis review + rework; quality gate before Prepare Eval |
 | P1 | `eval-assemble` | Notification consolidation is subtle; HTML contract is the review surface |
 | P1 | `eval-acceptance` | Feature-level scoping without re-reviewing slices |
 | P2 | `eval-summary`, `eval-screenshots`, `eval-tests` | Fill out the eval; slice 9 stub proves the skeleton |

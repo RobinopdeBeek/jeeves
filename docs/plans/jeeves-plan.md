@@ -153,7 +153,7 @@ See [ADR 0010](../adr/0010-self-managed-worktrees-cursor-sdk.md) for preview pol
 - Cloudflare Workers (add later if needed)
 - Parallel execution (sequential queue is enough to start)
 - Native mobile app (responsive web covers phone and tablet)
-- Custom diff renderer (eval-assemble generates HTML with inline diffs)
+- Bespoke diff engine (Implement tab uses assistant-ui DiffViewer; eval HTML may still inline diffs)
 - A `/prototype` step (dropped from the flow)
 - CopilotKit/AG-UI, LangChain/Mastra/CrewAI, AI Elements (see
   [ADR 0008](../adr/0008-ai-sdk-assistant-ui-agent-runner.md))

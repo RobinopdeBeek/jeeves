@@ -43,7 +43,7 @@ standalone task  Backlog → Implement Task → Human Review → Finalize   (no 
 | Backlog | Info · human (title + description) |
 | Define Feature | Grill · ai-chat → Spec · ai-chat → Tasks · ai-chat |
 | Implement Task | Plan · ai-execution → Implement · ai-execution → AI Review · ai-execution |
-| Human Review | Review · human |
+| Human Review | Prepare Eval · ai-execution → Review · human |
 | Finalize | Document · ai-execution → Deploy · ai-execution |
 
 ### Entry point: Backlog → decide the kind
@@ -76,19 +76,25 @@ Review**.
 
 ### Task path: Implement Task
 
-Child tasks (and standalone tasks) run three autonomous steps:
+Child tasks (and standalone tasks) run three autonomous steps — the interactive `/implement`
+flow split across three context windows ([ADR 0015](../adr/0015-ai-review-reworks-eval-on-human-review-entry.md)):
 
-1. **Plan** (`ai-execution`) — `/plan-implementation` for the slice.
-2. **Implement** (`ai-execution`) — `/implement-task`; writes code, runs tests, then triggers the
-   evaluation pipeline (see [The Evaluation](./jeeves-evaluation.md)).
-3. **AI Review** (`ai-execution`) — `/review` (`thermo-nuclear-review`): categorised findings
-   (Critical / Major / Minor / Suggestion).
+1. **Plan** (`ai-execution`) — light planning for the slice (Context7 when available).
+2. **Implement** (`ai-execution`) — `/implement-task` + `/tdd`; commits on the card branch.
+   Host runs Jeeves-owned `verify_commands` after the agent exits.
+3. **AI Review** (`ai-execution`) — dual-axis Standards + Spec review (shape of `/code-review`),
+   then **immediate rework** in the same step (one pass). Concise markdown overview artifact;
+   does **not** build the Evaluation.
 
-The task then moves to **Human Review**.
+On AI Review success the card enters **Human Review** with **Prepare Eval** queued.
 
 ### Human Review (both levels live here)
 
-Human Review is the async review surface. What it shows depends on the card kind:
+1. **Prepare Eval** (`ai-execution`, step key `prepeval`) — builds the Evaluation HTML for the
+   card tip (“Preparing interactive evaluation…”). Slice 8 stubs this; slice 9+ fills sections.
+2. **Review** (`human`) — async review surface once the Evaluation is ready.
+
+What the Evaluation shows depends on the card kind:
 
 - **task** (child or standalone) → the **Task Evaluation** (the deep review).
 - **feature** → the **Feature Evaluation** (thinner, integration-focused).

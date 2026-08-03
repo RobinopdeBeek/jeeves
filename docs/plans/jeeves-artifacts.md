@@ -10,9 +10,9 @@ there are four classes, and storage follows from the class:
 
 | Class | Examples | Primary consumer | Wants to be… |
 |---|---|---|---|
-| **Human/AI prose** | Grill session (read-only), Spec, Plan | Humans + next AI step | Diffable, greppable markdown |
+| **Human/AI prose** | Grill session (read-only), Spec, Plan, AI Review overview | Humans + next AI step | Diffable, greppable markdown |
 | **Structured state** | Tip `tasks-draft` (ArtifactStore), blockers after fan-out, change requests, rework round, decisions, session meta (tokens/cost) | The UI and the queue | Files + queryable SQLite rows |
-| **Composite review doc** | Task Evaluation, Feature Evaluation | Human review; linked from other evaluations | Self-contained HTML pinned to a commit SHA |
+| **Composite review doc** | Task Evaluation, Feature Evaluation (from **Prepare Eval**) | Human review; linked from other evaluations | Self-contained HTML pinned to a commit SHA |
 | **Media / raw** | Screenshots/GIFs, run logs, chat transcripts (`UIMessage[]`) | Occasional human, gallery | Plain files, possibly large |
 
 ### Storage: SQLite index + project store
@@ -36,6 +36,7 @@ nothing the UI renders on a card tile is trapped inside markdown/HTML. Applicati
 │               ├── grill/<artifactId>.md
 │               ├── spec/<artifactId>.md
 │               ├── plan/<artifactId>.md
+│               ├── review/<artifactId>.md
 │               ├── eval/<artifactId>.html
 │               ├── screenshots/
 │               └── runlog/<runId>.log
@@ -107,14 +108,14 @@ Two production contexts, two flows:
   it is closed and registered as an immutable `runlog` artifact. The Grill session is extracted
   from the Grill transcript on Grill → Spec ([ADR 0012](../adr/0012-grill-session-qa-handoff.md));
   a failed extract blocks the advance.
-- **Worktree-produced** (Plan, eval HTML, screenshots, structured JSON exchange files): generated
-  inside the agent's worktree via `@cursor/sdk` local. `AgentRunner` invokes an `ExecutionEngine`
-  finalization callback before cleanup; it harvests declared exchange files from the host
-  worktree path (e.g. `<worktree>/.jeeves/plan.md`, `.jeeves/eval.html`, `.jeeves/screenshots/`,
-  `.jeeves/notifications.json`, exchange `tasks-draft.json`), validates them, copies into
-  `<repo>/.jeeves/data/`, records metadata, and removes exchange files. A missing required
-  artifact fails the run and preserves diagnostics. Structured exchange files are Zod-validated before
-  DB mutations.
+- **Worktree-produced** (Plan, AI Review markdown, eval HTML, screenshots, structured JSON
+  exchange files): generated inside the agent's worktree via `@cursor/sdk` local. `AgentRunner`
+  invokes an `ExecutionEngine` finalization callback before cleanup; it harvests declared
+  exchange files from the host worktree path (e.g. `<worktree>/.jeeves/plan.md`,
+  `.jeeves/review.md`, `.jeeves/eval.html`, `.jeeves/screenshots/`, `.jeeves/notifications.json`,
+  exchange `tasks-draft.json`), validates them, copies into `<repo>/.jeeves/data/`, records
+  metadata, and removes exchange files. A missing required artifact fails the run and preserves
+  diagnostics. Structured exchange files are Zod-validated before DB mutations.
 
 ### Serving artifacts
 

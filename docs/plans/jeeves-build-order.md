@@ -83,31 +83,38 @@ blocker relationship can be built in parallel or reordered.
    harvesting exchange JSON into a new tip version. **Implement →** is host `fanOut`: freeze tip
    as `tasks-breakdown`, create **active** children with blocker edges, Tasks → `awaiting`.
    *Demo: a feature becomes child cards on the board.* (Blocked by 6.)
-8. **Full task pipeline.** Plan → Implement → AI Review sequencing inside `ExecutionEngine`;
-   each run gets a fresh worktree on the same durable card branch and receives prior artifacts
-   explicitly; blocker-aware queue rebuilt from `card_steps` on restart; orphaned `running` runs
-   marked `failed` at boot; branch strategy onto the feature branch (or configured default for
-   standalone), with step-specific postconditions.
-   *Demo: a child task runs all three steps unattended.* (Blocked by 4 and 7.)
-9. **Evaluation walking skeleton.** `eval-assemble` only — a minimal HTML evaluation (Tests +
-   QA checklist), `notifications.json` exchange file, harvested, rendered with
-   `sandbox="allow-scripts"`. Parent-owned browser storage synchronizes QA through validated
-   `postMessage` and drives the QA-gated Approve button. A preview-manager sub-slice wires
-   Start Server → readiness → Open in Browser + Stop against the evaluation's exact SHA using
-   Jeeves-owned host-process `preview_config`. *Demo: start and review a real slice from your
-   phone; the gate flips when QA completes.* (Blocked by 8.)
+8. **Full task pipeline.** Plan → Implement → AI Review as `/implement` split across three
+   context windows ([ADR 0015](../adr/0015-ai-review-reworks-eval-on-human-review-entry.md)):
+   real `plan-implementation` / `implement-task` / AI Review (code-review + rework) prompts;
+   `WorktreeManager.createFrom` vs `checkoutExisting`; `projects.default_branch` +
+   `verify_commands`; feature branch at fan-out; child/standalone branch lazy on first Plan;
+   fan-out `ensure-branch` + enqueue Plan for unblocked children only; depth-first queue
+   derived from `(position, step index)` with blocker filter, rebuilt on boot; host verify
+   after Implement and after AI Review commits; MCP/`settingSources` (Context7 non-fatal);
+   on `airev` success → Review column with **Prepare Eval** stub queued then human Review;
+   Implement tab: assistant-ui DiffViewer, lazy per-file three-dot diff vs upstream.
+   *Demo: a child task runs Plan → Implement → AI Review → Prepare Eval (stub) unattended.*
+   (Blocked by 4 and 7; assumes Project Chat / app shell #33 already landed.)
+9. **Evaluation walking skeleton.** Replace the Prepare Eval stub with real `eval-assemble`
+   (minimal HTML: Tests + QA checklist), `notifications.json` exchange file, harvested,
+   rendered with `sandbox="allow-scripts"`. Parent-owned browser storage synchronizes QA
+   through validated `postMessage` and drives the QA-gated Approve button. A preview-manager
+   sub-slice wires Start Server → readiness → Open in Browser + Stop against the evaluation's
+   exact SHA using Jeeves-owned host-process `preview_config`. *Demo: start and review a real
+   slice from your phone; the gate flips when QA completes.* (Blocked by 8.)
 10. **Approve & merge.** `decisions` rows with the `qa_complete` snapshot; child approval first
     validates a temporary merge against the current feature tip, then merges and leaves the
     board (conflict/failure returns it for rework); feature auto-advances when all children are
     merged; standalone/feature enter Finalize. *Demo: the full happy path, Backlog → merged.*
     (Blocked by 9.)
-11. **Evaluation filled out.** The remaining eval skills — `eval-summary`,
-    `eval-screenshots`, `eval-diff-narrative`, `eval-tests`, `/thermo-nuclear-review`,
-    `eval-qa-plan` — one `runs` row per invocation, plus the mini-pipeline display rendered
-    from `runs`. Each prompt is developed and validated independently (see
-    [Jeeves Skills](./jeeves-skills.md)) and wired in
-    one at a time. (Blocked by 9; each section is its own sub-slice.)
-12. **Rework loop — task.** "Request changes" panel, `+` push from AI-review findings,
+11. **Evaluation filled out.** The remaining Prepare Eval skills — `eval-summary`,
+    `eval-screenshots`, `eval-diff-narrative`, `eval-tests`, `eval-qa-plan` — one `runs` row
+    per invocation, plus the mini-pipeline display on the Prepare Eval step rendered from
+    `runs`. (AI Review's dual-axis rework is already in slice 8; it is not an eval fragment.)
+    Each prompt is developed and validated independently (see
+    [Jeeves Skills](./jeeves-skills.md)) and wired in one at a time.
+    (Blocked by 9; each section is its own sub-slice.)
+12. **Rework loop — task.** "Request changes" panel, optional `+` push from eval/notifications,
     request consumption into the rework prompt, round increment, evaluation persisted
     read-only, `changes_requested` decision row. *Demo: reject a slice, watch Round 2 arrive.*
     (Blocked by 10.)

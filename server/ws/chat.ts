@@ -27,11 +27,43 @@ export {
   decideInteractivePermission,
 } from "./acp-permissions.js";
 
+/** How the agent process ended, with whatever it said on stderr. */
+export interface AcpExit {
+  code: number | null;
+  signal: string | null;
+  /** Tail of the child's stderr — the only diagnostic a crashed CLI leaves. */
+  stderr: string;
+}
+
 /** Injected stdio boundary for `agent acp` (mocked in tests). */
 export interface AcpProcess {
   write(line: string): void;
   onLine(handler: (line: string) => void): void;
+  /** Fired when the agent exits on its own (crash, auth abort, kill). */
+  onExit?(handler: (exit: AcpExit) => void): void;
   kill(): void;
+}
+
+/**
+ * Handshake RPCs must not hang forever: a wedged CLI would otherwise strand
+ * the composer on "Starting agent session…" with nothing to report.
+ */
+const HANDSHAKE_TIMEOUT_MS = 60_000;
+/**
+ * `authenticate` starts an interactive browser login. A background server can
+ * never complete one, so cap the wait and turn it into actionable advice.
+ */
+const AUTHENTICATE_TIMEOUT_MS = 15_000;
+
+/** The agent has no usable credentials; no amount of retrying helps. */
+export class AcpAuthError extends Error {
+  constructor(detail: string) {
+    super(
+      `Cursor Agent CLI is not authenticated (${detail}). Set CURSOR_API_KEY in ` +
+        ".env or run `agent login`, then restart Jeeves.",
+    );
+    this.name = "AcpAuthError";
+  }
 }
 
 /** Optional spawn knobs — omit model to keep the CLI default. */
@@ -287,32 +319,64 @@ export class AcpBridge {
     this.interactivePolicy = options.interactivePermissionPolicy ?? null;
     this.process = await this.deps.spawn(options.cwd, { model: options.model });
     this.process.onLine((line) => this.handleLine(line));
+    this.process.onExit?.((exit) => this.handleProcessExit(exit));
 
-    const initResult = (await this.rpc("initialize", {
-      protocolVersion: 1,
-      clientCapabilities: {
-        fs: { readTextFile: false, writeTextFile: false },
-        terminal: false,
+    const initResult = (await this.rpc(
+      "initialize",
+      {
+        protocolVersion: 1,
+        clientCapabilities: {
+          fs: { readTextFile: false, writeTextFile: false },
+          terminal: false,
+        },
+        clientInfo: { name: "jeeves-acp-bridge", version: "0.1.0" },
       },
-      clientInfo: { name: "jeeves-acp-bridge", version: "0.1.0" },
-    })) as {
+      HANDSHAKE_TIMEOUT_MS,
+    )) as {
       agentCapabilities?: { promptCapabilities?: unknown };
     };
     this.promptCapabilities = normalizePromptCapabilities(
       initResult?.agentCapabilities?.promptCapabilities,
     );
-    await this.rpc("authenticate", { methodId: "cursor_login" });
-    const created = (await this.rpc("session/new", {
-      cwd: options.cwd,
-      mcpServers: [],
-    })) as { sessionId: string };
-    this.sessionId = created.sessionId;
+    this.sessionId = await this.createAcpSession(options.cwd);
 
     if (this.messages.length === 0 && options.openingPrompt !== null) {
       this.contextSeeded = true;
       // Fire-and-forget so acquire can return and the client can attach mid-turn.
       void this.runPromptTurn(options.openingPrompt, { recordUser: false });
     }
+  }
+
+  /**
+   * `session/new`, authenticating only when the agent says it must. Calling
+   * `authenticate` up front opens an interactive browser login even for an
+   * already-credentialed CLI, and that login never returns here.
+   */
+  private async createAcpSession(cwd: string): Promise<string> {
+    try {
+      return await this.newSession(cwd);
+    } catch (err) {
+      if (!isAuthRequired(err)) throw err;
+      try {
+        await this.rpc(
+          "authenticate",
+          { methodId: "cursor_login" },
+          AUTHENTICATE_TIMEOUT_MS,
+        );
+        return await this.newSession(cwd);
+      } catch {
+        throw new AcpAuthError(rpcMessage(err));
+      }
+    }
+  }
+
+  private async newSession(cwd: string): Promise<string> {
+    const created = (await this.rpc(
+      "session/new",
+      { cwd, mcpServers: [] },
+      HANDSHAKE_TIMEOUT_MS,
+    )) as { sessionId: string };
+    return created.sessionId;
   }
 
   /** Send a user message; chunks arrive via attach / onChunk buffering. */
@@ -390,9 +454,42 @@ export class AcpBridge {
     this.pendingPermissions.clear();
     this.headlessPolicy = null;
     this.headlessFail = null;
-    this.process?.kill();
+    const process = this.process;
     this.process = null;
     this.sessionId = null;
+    this.failPending(new Error("ACP session closed"));
+    process?.kill();
+  }
+
+  /**
+   * The agent died on its own. Everything waiting on it must fail now —
+   * otherwise an open handshake or turn hangs for the life of the server.
+   */
+  private handleProcessExit(exit: AcpExit): void {
+    if (!this.process) return;
+    this.process = null;
+    this.sessionId = null;
+
+    const stderr = exit.stderr.trim();
+    const how =
+      exit.signal != null ? `signal ${exit.signal}` : `code ${exit.code ?? "unknown"}`;
+    const err = new Error(
+      `Cursor Agent CLI exited (${how})${stderr ? `: ${stderr}` : ""}`,
+    );
+    this.failPending(err);
+
+    if (this.activity === "ai-working") {
+      this.pushChunk({ type: "error", errorText: err.message });
+      this.currentTextId = null;
+      this.currentAssistant = null;
+      this.endTurn();
+    }
+  }
+
+  private failPending(err: Error): void {
+    const waiters = [...this.pending.values()];
+    this.pending.clear();
+    for (const waiter of waiters) waiter.reject(err);
   }
 
   private beginTurn(): void {
@@ -577,7 +674,7 @@ export class AcpBridge {
       const waiter = this.pending.get(msg.id);
       if (!waiter) return;
       this.pending.delete(msg.id);
-      if (msg.error !== undefined) waiter.reject(msg.error);
+      if (msg.error !== undefined) waiter.reject(rpcError(msg.error));
       else waiter.resolve(msg.result);
       return;
     }
@@ -737,16 +834,72 @@ export class AcpBridge {
     return undefined;
   }
 
-  private rpc(method: string, params: unknown): Promise<unknown> {
+  /** `timeoutMs` guards the handshake; prompt turns stay unbounded. */
+  private rpc(
+    method: string,
+    params: unknown,
+    timeoutMs?: number,
+  ): Promise<unknown> {
     if (!this.process) return Promise.reject(new Error("no process"));
     const id = this.nextRpcId++;
-    this.process.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+    try {
+      this.process.write(
+        JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n",
+      );
+    } catch (err) {
+      return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+    }
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer =
+        timeoutMs == null
+          ? undefined
+          : setTimeout(() => {
+              this.pending.delete(id);
+              reject(
+                new Error(
+                  `Cursor Agent CLI did not answer ${method} within ${Math.round(
+                    timeoutMs / 1000,
+                  )}s`,
+                ),
+              );
+            }, timeoutMs);
+      this.pending.set(id, {
+        resolve: (value) => {
+          if (timer) clearTimeout(timer);
+          resolve(value);
+        },
+        reject: (err) => {
+          if (timer) clearTimeout(timer);
+          reject(err);
+        },
+      });
     });
   }
 
   private respond(id: number, result: unknown): void {
     this.process?.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
   }
+}
+
+/** JSON-RPC error payloads are plain objects; keep them readable as Errors. */
+function rpcError(raw: unknown): Error {
+  const err = new Error(rpcMessage(raw));
+  err.name = "AcpRpcError";
+  return err;
+}
+
+function rpcMessage(raw: unknown): string {
+  if (raw instanceof Error) return raw.message;
+  if (raw && typeof raw === "object") {
+    const obj = raw as { message?: unknown; data?: { message?: unknown } };
+    if (typeof obj.message === "string" && obj.message) return obj.message;
+    if (typeof obj.data?.message === "string" && obj.data.message) {
+      return obj.data.message;
+    }
+  }
+  return String(raw);
+}
+
+function isAuthRequired(err: unknown): boolean {
+  return /authenticat|unauthori|not logged in/i.test(rpcMessage(err));
 }

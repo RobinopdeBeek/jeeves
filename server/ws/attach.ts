@@ -179,11 +179,11 @@ export class ChatConnection {
   }
 
   private sendOpenError(err: unknown): void {
+    const message = err instanceof Error ? err.message : String(err);
+    // A chat that never opens is otherwise invisible in the dev terminal.
+    console.error(`chat session ${this.sessionId} failed to open: ${message}`);
     if (this.closed) return;
-    this.send({
-      type: "error",
-      error: err instanceof Error ? err.message : String(err),
-    });
+    this.send({ type: "error", error: message });
   }
 
   async onClientMessage(raw: string): Promise<void> {

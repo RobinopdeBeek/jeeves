@@ -189,6 +189,60 @@ describe("ChatSessionRegistry — warm bridges", () => {
     expect(registry.hasWarm(idA)).toBe(true);
   });
 
+  it("a second acquire during the handshake waits instead of reusing a half-open bridge", async () => {
+    let spawnCount = 0;
+    const process = new MockAcpProcess();
+    const registry = new ChatSessionRegistry();
+    // Handshake stays unanswered until we release it below.
+    const spawn = () => {
+      spawnCount += 1;
+      return process;
+    };
+    const session = () =>
+      testSession(idA, { cwd: "C:/repo", openingPrompt: null, history: [] });
+
+    const first = registry.acquire(session(), { spawn });
+    await viWaitFor(() => spawnCount === 1);
+    const second = registry.acquire(session(), { spawn });
+
+    // Nothing may be handed out while the ACP session id is still null —
+    // a "reused" handle here would let the client send into a dead session.
+    let secondSettled = false;
+    void second.then(() => {
+      secondSettled = true;
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(secondSettled).toBe(false);
+
+    process.autoHandshake("sess-race");
+    process.replayPendingHandshake();
+
+    const [handleA, handleB] = await Promise.all([first, second]);
+    expect(spawnCount).toBe(1);
+    expect(handleB.bridge).toBe(handleA.bridge);
+
+    // Provable liveness: the shared bridge prompts the real ACP session.
+    void handleB.sendMessage("hi").catch(() => undefined);
+    await viWaitFor(() => process.prompts().length === 1);
+    expect(process.prompts()[0]?.sessionId).toBe("sess-race");
+  });
+
+  it("a failed handshake kills the process and leaves no warm bridge behind", async () => {
+    const process = new MockAcpProcess();
+    process.failHandshake("session/new", "Authentication required");
+    const registry = new ChatSessionRegistry();
+
+    await expect(
+      registry.acquire(
+        testSession(idA, { cwd: "C:/repo", openingPrompt: null, history: [] }),
+        { spawn: () => process },
+      ),
+    ).rejects.toThrow(/Authentication required/);
+
+    expect(registry.hasWarm(idA)).toBe(false);
+    expect(process.killed).toBe(true);
+  });
+
   it("reacquire reuses the live bridge and delivers catch-up chunks (no second spawn)", async () => {
     let spawnCount = 0;
     const process = new MockAcpProcess();

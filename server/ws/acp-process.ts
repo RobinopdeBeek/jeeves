@@ -3,7 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
-import type { AcpProcess, SpawnAcp } from "./chat.js";
+import type { AcpExit, AcpProcess, SpawnAcp } from "./chat.js";
+
+/** Keep only the tail of stderr — enough to explain a crash, bounded in memory. */
+const STDERR_TAIL_LIMIT = 4000;
 
 export class AcpSpawnError extends Error {
   constructor(message: string) {
@@ -81,16 +84,28 @@ export async function createAcpProcess(
   await waitForSpawn(child);
 
   const lineHandlers: Array<(line: string) => void> = [];
-  const errorHandlers: Array<(err: Error) => void> = [];
+  const exitHandlers: Array<(exit: AcpExit) => void> = [];
   const rl = readline.createInterface({ input: child.stdout });
   rl.on("line", (line) => {
     for (const handler of lineHandlers) handler(line);
   });
 
-  // Keep stderr from becoming an unhandled crash path; surface later if needed.
-  child.stderr.on("data", () => {});
+  let stderrTail = "";
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderrTail = (stderrTail + chunk.toString()).slice(-STDERR_TAIL_LIMIT);
+  });
+
+  let killedByUs = false;
+  const reportExit = (code: number | null, signal: string | null) => {
+    if (killedByUs) return;
+    const exit: AcpExit = { code, signal, stderr: stderrTail };
+    for (const handler of exitHandlers) handler(exit);
+  };
+  child.on("exit", (code, signal) => reportExit(code, signal));
+  // A runtime failure (broken pipe, …) may never reach `exit`; report it too.
   child.on("error", (err) => {
-    for (const handler of errorHandlers) handler(err);
+    stderrTail = `${stderrTail}\n${err.message}`.slice(-STDERR_TAIL_LIMIT);
+    reportExit(null, null);
   });
 
   return {
@@ -100,7 +115,11 @@ export async function createAcpProcess(
     onLine(handler) {
       lineHandlers.push(handler);
     },
+    onExit(handler) {
+      exitHandlers.push(handler);
+    },
     kill() {
+      killedByUs = true;
       rl.close();
       child.kill();
     },

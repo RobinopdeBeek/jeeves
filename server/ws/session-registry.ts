@@ -41,9 +41,15 @@ export interface WarmSessionHandle {
  */
 export class ChatSessionRegistry {
   private readonly active = new Map<string, DisplaceableConnection>();
+  /** Only bridges whose ACP handshake has completed — safe to send into. */
   private readonly warm = new Map<string, AcpBridge>();
   /** Model id pinned when each warm bridge was spawned (`null` = CLI default). */
   private readonly warmModel = new Map<string, string | null>();
+  /** Handshakes in flight, so concurrent acquires wait instead of racing. */
+  private readonly opening = new Map<
+    string,
+    { bridge: AcpBridge; done: Promise<unknown> }
+  >();
   private admitChain: Promise<void> = Promise.resolve();
 
   get(id: ChatSessionId): DisplaceableConnection | undefined {
@@ -84,6 +90,13 @@ export class ChatSessionRegistry {
       this.warm.delete(id);
       this.warmModel.delete(id);
     }
+    // Abandon a handshake still in flight (e.g. model changed mid-spawn) so
+    // the next acquire starts fresh instead of waiting out the old spawn.
+    const pending = this.opening.get(id);
+    if (pending) {
+      this.opening.delete(id);
+      pending.bridge.close();
+    }
   }
 
   async acquire(
@@ -103,21 +116,29 @@ export class ChatSessionRegistry {
       frameUserMessage: session.frameUserMessage,
     });
 
-    const existing = this.warm.get(id);
-    if (existing) {
-      if (this.warmModel.get(id) !== requestedModel) {
-        this.close(id, "model changed");
-      } else {
-        existing.setLiveCallbacks(wireLive());
-        return this.handleFor(existing, true);
+    // A handshake already in flight owns this id. Wait for it rather than
+    // handing back a bridge whose ACP session id is still null — that would
+    // let the client send into a session that does not exist yet.
+    for (;;) {
+      const existing = this.warm.get(id);
+      if (existing) {
+        if (this.warmModel.get(id) === requestedModel) {
+          existing.setLiveCallbacks(wireLive());
+          return this.handleFor(existing, true);
+        }
+        this.discardWarm(id);
+        break;
       }
+      const inFlight = this.opening.get(id);
+      if (!inFlight) break;
+      await inFlight.done.catch(() => undefined);
     }
 
     return this.withAdmitLock(async () => {
       const again = this.warm.get(id);
       if (again) {
         if (this.warmModel.get(id) !== requestedModel) {
-          this.close(id, "model changed");
+          this.discardWarm(id);
         } else {
           again.setLiveCallbacks(wireLive());
           return this.handleFor(again, true);
@@ -132,25 +153,43 @@ export class ChatSessionRegistry {
         onTurnComplete: live.onTurnComplete,
         frameUserMessage: live.frameUserMessage,
       });
-      this.warm.set(id, bridge);
-      this.warmModel.set(id, requestedModel);
-      try {
-        session.assertMutable();
-        const history = session.loadTranscript();
-        await bridge.openSession({
+      session.assertMutable();
+      const history = session.loadTranscript();
+      const entry = {
+        bridge,
+        done: bridge.openSession({
           cwd: session.cwd,
           openingPrompt: session.openingPrompt,
           history,
           interactivePermissionPolicy: session.interactivePermissionPolicy,
           model: requestedModel,
-        });
+        }),
+      };
+      this.opening.set(id, entry);
+      try {
+        await entry.done;
       } catch (err) {
-        this.warm.delete(id);
-        this.warmModel.delete(id);
+        // Never leave an orphaned `agent acp` behind on a failed handshake.
+        bridge.close();
         throw err;
+      } finally {
+        if (this.opening.get(id) === entry) this.opening.delete(id);
       }
+      this.warm.set(id, bridge);
+      this.warmModel.set(id, requestedModel);
       return this.handleFor(bridge, false);
     });
+  }
+
+  /**
+   * Retire a warm bridge without displacing anyone. The connection asking for
+   * a different model is the active one, so `close` here would kick it out of
+   * the session it is in the middle of opening.
+   */
+  private discardWarm(id: string): void {
+    this.warm.get(id)?.close();
+    this.warm.delete(id);
+    this.warmModel.delete(id);
   }
 
   private handleFor(bridge: AcpBridge, reused: boolean): WarmSessionHandle {

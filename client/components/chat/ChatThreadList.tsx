@@ -48,30 +48,30 @@ export function ChatThreadList({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2">
-        <h2 className="text-sm font-medium">Threads</h2>
+      <div className="flex shrink-0 items-center justify-between gap-2 px-3 py-2">
+        <h2 className="text-sm font-medium">Chats</h2>
         <Button
           size="sm"
           onClick={onNewThread}
           disabled={creating}
-          aria-label="New Thread"
+          aria-label="New Chat"
         >
           <IconPlus data-icon="inline-start" />
-          New Thread
+          New Chat
         </Button>
       </div>
 
       <ul className="min-h-0 flex-1 overflow-y-auto p-2">
         {threads.length === 0 ? (
           <li className="px-2 py-6 text-center text-sm text-muted-foreground">
-            No threads yet
+            No chats yet
           </li>
         ) : (
           threads.map((thread) => {
             const active = thread.id === activeId;
             const label = threadLabel(thread);
             return (
-              <li key={thread.id} className="flex items-center gap-1">
+              <li key={thread.id} className="group flex items-center gap-1">
                 <Button
                   variant={active ? "secondary" : "ghost"}
                   size="sm"
@@ -87,6 +87,7 @@ export function ChatThreadList({
                   type="button"
                   variant="ghost"
                   size="icon-xs"
+                  className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 group-focus-within:opacity-100"
                   aria-label={`Rename ${label}`}
                   onClick={() => {
                     setRenameId(thread.id);
@@ -101,6 +102,7 @@ export function ChatThreadList({
                       type="button"
                       variant="ghost"
                       size="icon-xs"
+                      className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 group-focus-within:opacity-100"
                       aria-label={`Delete ${label}`}
                     >
                       <IconTrash data-icon="inline-start" />

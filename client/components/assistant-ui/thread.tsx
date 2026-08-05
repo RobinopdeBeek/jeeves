@@ -78,8 +78,9 @@ export type ThreadProps = {
    */
   attachmentsEnabled?: boolean;
   /**
-   * Optional leading composer chrome (e.g. Project Chat model picker).
-   * Shown alongside the attach control when both are present.
+   * Pre-flight composer chrome (Project Chat model picker), shown only while
+   * the thread is still empty. The model pins the agent process at spawn, so
+   * it stops being changeable once the first message has been sent.
    */
   composerLeading?: ReactNode;
   /**
@@ -227,7 +228,7 @@ export const Thread: FC<ThreadProps> = ({
               placeholder={placeholder}
               openingPlaceholder={openingPlaceholder}
               attachmentsEnabled={attachmentsEnabled}
-              composerLeading={composerLeading}
+              composerLeading={isEmpty ? composerLeading : undefined}
             />
           </ThreadPrimitive.ViewportFooter>
         </div>
@@ -274,9 +275,6 @@ export function ThreadShell({
               />
               <div className="relative flex items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-1.5">
-                  {composerLeading ? (
-                    <div className="min-w-0">{composerLeading}</div>
-                  ) : null}
                   {attachmentsEnabled ? (
                     <TooltipIconButton
                       tooltip="Attach file"
@@ -289,6 +287,9 @@ export function ThreadShell({
                     >
                       <IconPaperclip />
                     </TooltipIconButton>
+                  ) : null}
+                  {composerLeading ? (
+                    <div className="min-w-0">{composerLeading}</div>
                   ) : null}
                   {!composerLeading && !attachmentsEnabled ? <span /> : null}
                 </div>
@@ -385,7 +386,14 @@ const Composer: FC<{
 
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
-      <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
+      <ComposerPrimitive.Root
+        className="aui-composer-root relative flex w-full flex-col"
+        // Typing while the agent warms up is fine; sending into a session that
+        // is not open yet is not. Enter is gated via submitMode below.
+        onSubmit={(event) => {
+          if (!sessionOpen) event.preventDefault();
+        }}
+      >
         <div data-slot="aui_composer-shell" className={COMPOSER_SHELL}>
           <ComposerQuotePreview />
           {attachmentsEnabled ? (
@@ -397,6 +405,7 @@ const Composer: FC<{
           ) : null}
           <LexicalComposerInput
             placeholder={sessionOpen ? placeholder : openingPlaceholder}
+            submitMode={sessionOpen ? "enter" : "none"}
             autoFocus
             directiveChip={ComposerDirectiveChip}
             className="aui-composer-input relative max-h-32 min-h-10 w-full overflow-y-auto bg-transparent px-2.5 py-1 text-base caret-primary outline-none"
@@ -465,9 +474,6 @@ const ComposerAction: FC<{
   return (
     <div className="aui-composer-action-wrapper relative flex items-center justify-between gap-2">
       <div className="flex min-w-0 items-center gap-1.5">
-        {composerLeading ? (
-          <div className="min-w-0">{composerLeading}</div>
-        ) : null}
         {attachmentsEnabled ? (
           <ComposerPrimitive.AddAttachment asChild>
             <TooltipIconButton
@@ -483,6 +489,9 @@ const ComposerAction: FC<{
               <IconPaperclip />
             </TooltipIconButton>
           </ComposerPrimitive.AddAttachment>
+        ) : null}
+        {composerLeading ? (
+          <div className="min-w-0">{composerLeading}</div>
         ) : null}
         {!composerLeading && !attachmentsEnabled ? <span /> : null}
       </div>

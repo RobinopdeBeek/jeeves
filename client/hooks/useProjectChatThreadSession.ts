@@ -1,7 +1,7 @@
 import type { ExternalThreadBranchAdapter } from "@assistant-ui/react";
 import type { BranchableTranscript, RewindOp } from "@shared/branchable-transcript";
 import { emptyTranscript } from "@shared/branchable-transcript";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useAcpChat, type AcpChatState } from "@/hooks/useAcpChat";
 import { api, type ChatThread } from "@/lib/api";
 import {
@@ -9,7 +9,7 @@ import {
   switchOpForBranch,
   truncateOpForEdit,
 } from "@/lib/project-chat-rewind";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 
 export type ProjectChatThreadSession = {
   chat: AcpChatState;
@@ -24,8 +24,9 @@ export type ProjectChatThreadSession = {
 };
 
 /**
- * Project Chat thread controller: soft-reattach on Rewind, remount-by-key
- * on model pin change (caller keys on `thread.id:thread.model`).
+ * Project Chat thread controller: soft-reattach on Rewind. Model changes apply
+ * to the live session (`session/set_config_option`), so they neither remount
+ * nor displace anything.
  */
 export function useProjectChatThreadSession({
   thread,
@@ -55,22 +56,6 @@ export function useProjectChatThreadSession({
       if (!streaming) onStreamingSettled?.();
     },
   });
-
-  useEffect(() => {
-    if (chat.status !== "displaced" || chat.reason !== "model changed") return;
-    let cancelled = false;
-    void api
-      .getChatThread(thread.id)
-      .then((updated) => {
-        if (!cancelled) onThreadUpdated?.(updated);
-      })
-      .catch(() => {
-        /* keep shell until parent refreshes */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [chat, onThreadUpdated, thread.id]);
 
   async function handleModelChange(model: string | null) {
     try {

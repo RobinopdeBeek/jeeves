@@ -6,6 +6,7 @@ import {
   type ChatThreadStore,
 } from "../chat-threads/store.js";
 import type { EventBus } from "../execution/events.js";
+import { AUTO_MODEL_VALUE } from "../models/list-models.js";
 import type { StepKey } from "../pipelines.js";
 import { resolveProjectStorePaths } from "../project-store.js";
 import type { AcpLiveCallbacks, InteractivePermissionPolicy } from "./chat.js";
@@ -43,8 +44,9 @@ export interface ChatSession {
   /** Null = warm without auto agent turn (Project Chat). */
   openingPrompt: string | null;
   /**
-   * Pin via `agent --model <id> acp` for Project Chat; omit/null = CLI default
-   * (board step chats).
+   * Pinned model for Project Chat, applied to the live session via
+   * `session/set_config_option`; omit/null = the agent's Auto (board step chats).
+   * May hold a legacy bare id — resolved against the agent's option list.
    */
   model?: string | null;
   loadTranscript(): UIMessage[];
@@ -54,6 +56,8 @@ export interface ChatSession {
   interactivePermissionPolicy?: InteractivePermissionPolicy;
   frameUserMessage?: AcpLiveCallbacks["frameUserMessage"];
   onTurnComplete?: AcpLiveCallbacks["onTurnComplete"];
+  /** The agent switched model itself — persist so the picker follows. */
+  onModelChanged?: AcpLiveCallbacks["onModelChanged"];
 }
 
 /** Server-built opaque id for a card step chat. */
@@ -246,6 +250,13 @@ export function createProjectChatSession(
     // Project Chat has no board step status column.
     notifyStatus: () => {},
     interactivePermissionPolicy: "project-chat",
+    onModelChanged: (value) => {
+      // Auto is stored as an unpinned thread, not as the literal config value.
+      deps.threads.setModel(
+        ref.threadId,
+        value === AUTO_MODEL_VALUE ? null : value,
+      );
+    },
     onTurnComplete: () => {
       maybeAutoTitleFromFirstUserMessage(
         deps.threads,

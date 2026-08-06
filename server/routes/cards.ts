@@ -16,6 +16,7 @@ import type { EventBus } from "../execution/events.js";
 import type { RunStore } from "../execution/run-store.js";
 import type { ArtifactStore } from "../artifacts/store.js";
 import type { ChatSessionRegistry } from "../ws/session-registry.js";
+import type { SpawnAcp } from "../ws/chat.js";
 import { artifactRoutes } from "./artifacts.js";
 
 function isKindPath(value: unknown): value is KindPath {
@@ -28,6 +29,7 @@ export interface CardRouteDeps {
   events: EventBus;
   artifacts: ArtifactStore;
   sessions: ChatSessionRegistry;
+  spawn: SpawnAcp;
   createSpec: CreateSpec;
   createTasks: CreateTasks;
   promptsRoot: string;
@@ -47,7 +49,14 @@ export function cardRoutes(
 
   app.get("/:id", (c) => {
     const card = store.getCard(c.req.param("id"));
-    return card ? c.json(card) : c.json({ error: "not found" }, 404);
+    if (!card) return c.json({ error: "not found" }, 404);
+    // Card open: warm a spare for this worktree so Grill / assist open instantly.
+    try {
+      deps.sessions.prewarm(store.getRepoPath(card.id), deps.spawn);
+    } catch {
+      // Speculative only — a card without a worktree yet must still load.
+    }
+    return c.json(card);
   });
 
   app.patch("/:id", async (c) => {

@@ -1,55 +1,116 @@
-import { describe, expect, it } from "vitest";
-import { parseAgentModelsOutput } from "./list-models.js";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  AUTO_MODEL_VALUE,
+  ListModelsError,
+  listAgentModels,
+  modelsFromConfigOption,
+  recordModelCatalog,
+  resetModelCatalog,
+  resolveModelValue,
+} from "./list-models.js";
+import type { AcpSessionConfigOption } from "../ws/chat.js";
 
-describe("parseAgentModelsOutput", () => {
-  it("parses agent models / --list-models text lines", () => {
-    const stdout = [
-      "Available models",
-      "",
-      "gpt-5.5-extra-high-fast - GPT-5.5 Extra High Fast (current)",
-      "composer-2-fast - Composer 2 Fast (default)",
-      "claude-opus-4-8 - Claude Opus 4.8",
-      "",
-    ].join("\n");
+const option: AcpSessionConfigOption = {
+  id: "model",
+  name: "Model",
+  category: "model",
+  type: "select",
+  currentValue: "composer-2.5[fast=true]",
+  options: [
+    { value: AUTO_MODEL_VALUE, name: "Auto" },
+    { value: "composer-2.5[fast=true]", name: "Composer 2.5 Fast" },
+    { value: "claude-opus-5[thinking=true,effort=high]", name: "Claude Opus 5" },
+  ],
+};
 
-    expect(parseAgentModelsOutput(stdout)).toEqual([
+afterEach(() => {
+  resetModelCatalog();
+});
+
+describe("modelsFromConfigOption", () => {
+  it("maps config values to picker rows and drops Auto", () => {
+    expect(modelsFromConfigOption(option)).toEqual([
       {
-        id: "gpt-5.5-extra-high-fast",
-        displayName: "GPT-5.5 Extra High Fast",
+        id: "composer-2.5[fast=true]",
+        displayName: "Composer 2.5 Fast",
         current: true,
         default: false,
       },
       {
-        id: "composer-2-fast",
-        displayName: "Composer 2 Fast",
-        current: false,
-        default: true,
-      },
-      {
-        id: "claude-opus-4-8",
-        displayName: "Claude Opus 4.8",
+        id: "claude-opus-5[thinking=true,effort=high]",
+        displayName: "Claude Opus 5",
         current: false,
         default: false,
       },
     ]);
   });
 
-  it("strips ANSI color codes from CLI output", () => {
-    const stdout =
-      "\u001b[36mcomposer-2.5\u001b[39m \u001b[2m- Composer 2.5\u001b[22m\n";
-    expect(parseAgentModelsOutput(stdout)).toEqual([
+  it("falls back to the bare id when the agent sends no display name", () => {
+    const models = modelsFromConfigOption({
+      ...option,
+      options: [{ value: "gpt-5.5[effort=high]", name: "" }],
+    });
+    expect(models).toEqual([
       {
-        id: "composer-2.5",
-        displayName: "Composer 2.5",
+        id: "gpt-5.5[effort=high]",
+        displayName: "gpt-5.5",
         current: false,
         default: false,
       },
     ]);
   });
 
-  it("returns empty when the account has no models", () => {
-    expect(parseAgentModelsOutput("No models available for this account.")).toEqual(
-      [],
+  it("returns empty for a session with no model selector", () => {
+    expect(modelsFromConfigOption(null)).toEqual([]);
+  });
+});
+
+describe("resolveModelValue", () => {
+  const values = (option.options ?? []).map((o) => o.value);
+
+  it("passes through a value the account still offers", () => {
+    expect(resolveModelValue("composer-2.5[fast=true]", values)).toBe(
+      "composer-2.5[fast=true]",
+    );
+  });
+
+  it("migrates a legacy bare id onto its variant string", () => {
+    expect(resolveModelValue("composer-2.5", values)).toBe(
+      "composer-2.5[fast=true]",
+    );
+  });
+
+  it("falls back to Auto for an unknown or unpinned model", () => {
+    expect(resolveModelValue("gpt-4", values)).toBe(AUTO_MODEL_VALUE);
+    expect(resolveModelValue(null, values)).toBe(AUTO_MODEL_VALUE);
+    expect(resolveModelValue("  ", values)).toBe(AUTO_MODEL_VALUE);
+  });
+
+  it("resolves to null when the session offers no Auto option", () => {
+    expect(resolveModelValue("gpt-4", ["composer-2.5[fast=true]"])).toBeNull();
+  });
+});
+
+describe("listAgentModels", () => {
+  it("serves the catalog recorded by the first handshake", async () => {
+    recordModelCatalog(option);
+    await expect(listAgentModels()).resolves.toHaveLength(2);
+  });
+
+  it("ignores a handshake that carried no model options", async () => {
+    recordModelCatalog(null);
+    await expect(listAgentModels(10)).rejects.toBeInstanceOf(ListModelsError);
+  });
+
+  it("waits for a handshake that is still in flight", async () => {
+    const pending = listAgentModels(1_000);
+    recordModelCatalog(option);
+    await expect(pending).resolves.toHaveLength(2);
+  });
+
+  it("fails when no session starts within the budget", async () => {
+    await expect(listAgentModels(10)).rejects.toThrow(
+      /no agent session has started/,
     );
   });
 });

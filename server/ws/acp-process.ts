@@ -53,27 +53,19 @@ export function resolveAgentLaunch(options: AgentResolutionOptions = {}): AgentL
   );
 }
 
-/** Assemble `agent [--model <id>] acp` argv after the resolved binary. */
-export function buildAcpSpawnArgs(
-  launchArgs: string[],
-  model?: string | null,
-): string[] {
-  const args = [...launchArgs];
-  const trimmed = model?.trim();
-  if (trimmed) {
-    args.push("--model", trimmed);
-  }
-  args.push("acp");
-  return args;
+/**
+ * Assemble `agent acp` argv after the resolved binary. No `--model`: the model
+ * is a session config option, switched in place via `session/set_config_option`,
+ * which keeps every process model-agnostic (and reusable as a warm spare).
+ */
+export function buildAcpSpawnArgs(launchArgs: string[]): string[] {
+  return [...launchArgs, "acp"];
 }
 
 /** Real `agent acp` subprocess over newline-delimited JSON-RPC stdio. */
-export async function createAcpProcess(
-  cwd: string,
-  options?: { model?: string | null },
-): Promise<AcpProcess> {
+export async function createAcpProcess(cwd: string): Promise<AcpProcess> {
   const launch = resolveAgentLaunch();
-  const child = spawn(launch.command, buildAcpSpawnArgs(launch.args, options?.model), {
+  const child = spawn(launch.command, buildAcpSpawnArgs(launch.args), {
     cwd,
     stdio: ["pipe", "pipe", "pipe"],
     env: process.env,
@@ -126,7 +118,7 @@ export async function createAcpProcess(
   };
 }
 
-export const spawnAcp: SpawnAcp = (cwd, options) => createAcpProcess(cwd, options);
+export const spawnAcp: SpawnAcp = (cwd) => createAcpProcess(cwd);
 
 function waitForSpawn(child: ChildProcessWithoutNullStreams): Promise<void> {
   return new Promise((resolve, reject) => {

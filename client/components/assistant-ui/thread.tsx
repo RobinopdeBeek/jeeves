@@ -61,26 +61,23 @@ import {
 import { type FC, type FormEvent, type ReactNode, useState } from "react";
 
 export type ThreadProps = {
-  /** ACP (or other) session ready — send is enabled. */
-  sessionOpen?: boolean;
   /**
    * Empty-thread welcome heading. Pass `null` to skip the welcome (e.g. Grill,
    * which auto-starts with an opening turn).
    */
   welcomeTitle?: string | null;
-  /** Composer placeholder when session is open. */
+  /** Composer placeholder. */
   placeholder?: string;
-  /** Composer placeholder while the ACP session is still opening. */
-  openingPlaceholder?: string;
   /**
-   * Show the capability-gated attach control. False while connecting or when
-   * the agent advertises no prompt attachment kinds.
+   * Show the capability-gated attach control. Defaults optimistic (true) so the
+   * paperclip is usable before `promptCapabilities` arrive; callers pass the
+   * real value once caps land.
    */
   attachmentsEnabled?: boolean;
   /**
-   * Pre-flight composer chrome (Project Chat model picker), shown only while
-   * the thread is still empty. The model pins the agent process at spawn, so
-   * it stops being changeable once the first message has been sent.
+   * Composer chrome (Project Chat model picker). Stays available for the whole
+   * conversation — the model is switched in place on the live ACP session, so
+   * it is no longer pinned by the spawned process.
    */
   composerLeading?: ReactNode;
   /**
@@ -169,16 +166,12 @@ const UserDirectiveText = createDirectiveText(unstable_defaultDirectiveFormatter
  * No in-app mic/dictation — use OS STT tools instead.
  */
 export const Thread: FC<ThreadProps> = ({
-  sessionOpen = true,
   welcomeTitle = null,
   placeholder = "Send a message... (@ to mention, / for commands)",
-  openingPlaceholder = "Agent starting — you can type…",
-  attachmentsEnabled = false,
+  attachmentsEnabled = true,
   composerLeading,
   rewind = null,
 }) => {
-  const isEmpty = useAuiState(isEmptyThread);
-
   const tree = (
     <ThreadPrimitive.Root
       className="aui-root aui-thread-root flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-background @container"
@@ -192,18 +185,8 @@ export const Thread: FC<ThreadProps> = ({
         <div className="mx-auto flex min-h-full w-full max-w-(--thread-max-width) flex-1 flex-col px-4 pt-4">
           {welcomeTitle != null && (
             <AuiIf condition={isEmptyThread}>
-              <ThreadWelcome title={welcomeTitle} sessionOpen={sessionOpen} />
+              <ThreadWelcome title={welcomeTitle} />
             </AuiIf>
-          )}
-
-          {/* Keep status up until the first streamed message — sessionOpen can
-              flip true a second before the opening turn produces tokens. */}
-          {welcomeTitle == null && isEmpty && (
-            <div className="mb-6 flex flex-col items-center px-4 pt-8 text-center">
-              <p className="text-sm text-muted-foreground">
-                Starting agent session…
-              </p>
-            </div>
           )}
 
           <div
@@ -224,11 +207,9 @@ export const Thread: FC<ThreadProps> = ({
           <ThreadPrimitive.ViewportFooter className="aui-thread-viewport-footer sticky bottom-0 mt-auto flex flex-col gap-4 overflow-visible rounded-t-(--composer-radius) bg-background pb-4 md:pb-6">
             <ThreadScrollToBottom />
             <Composer
-              sessionOpen={sessionOpen}
               placeholder={placeholder}
-              openingPlaceholder={openingPlaceholder}
               attachmentsEnabled={attachmentsEnabled}
-              composerLeading={isEmpty ? composerLeading : undefined}
+              composerLeading={composerLeading}
             />
           </ThreadPrimitive.ViewportFooter>
         </div>
@@ -243,7 +224,7 @@ export const Thread: FC<ThreadProps> = ({
   );
 };
 
-/** Visual twin of {@link Thread} while the runtime / socket is connecting. */
+/** Visual twin of {@link Thread} for genuine no-transport states (displaced, rewinding). */
 export function ThreadShell({
   placeholder = "Loading…",
   attachmentsEnabled = false,
@@ -260,11 +241,6 @@ export function ThreadShell({
     >
       <div className="relative flex min-h-0 flex-1 flex-col overflow-y-scroll">
         <div className="mx-auto flex min-h-full w-full max-w-(--thread-max-width) flex-1 flex-col px-4 pt-4">
-          <div className="mb-6 flex flex-col items-center px-4 pt-8 text-center">
-            <p className="text-sm text-muted-foreground">
-              Starting agent session…
-            </p>
-          </div>
           <div className="sticky bottom-0 mt-auto flex flex-col gap-4 overflow-visible rounded-t-(--composer-radius) bg-background pb-4 md:pb-6">
             <div className={cn(COMPOSER_SHELL, "opacity-70")}>
               <textarea
@@ -299,7 +275,7 @@ export function ThreadShell({
                     variant="default"
                     size="icon-round"
                     disabled
-                    aria-label="Starting session"
+                    aria-label="Unavailable"
                   >
                     <IconLoader2 className="animate-spin" />
                   </Button>
@@ -327,37 +303,21 @@ const ThreadScrollToBottom: FC = () => {
   );
 };
 
-const ThreadWelcome: FC<{ title: string; sessionOpen: boolean }> = ({
-  title,
-  sessionOpen,
-}) => {
+const ThreadWelcome: FC<{ title: string }> = ({ title }) => {
   return (
     <div className="aui-thread-welcome-root mb-6 flex flex-col items-center px-4 text-center">
       <h1 className="aui-thread-welcome-message-inner fade-in slide-in-from-bottom-1 animate-in fill-mode-both text-2xl font-semibold duration-200">
         {title}
       </h1>
-      {!sessionOpen && (
-        <p className="mt-2 text-sm text-muted-foreground">
-          Starting agent session…
-        </p>
-      )}
     </div>
   );
 };
 
 const Composer: FC<{
-  sessionOpen: boolean;
   placeholder: string;
-  openingPlaceholder: string;
   attachmentsEnabled: boolean;
   composerLeading?: ReactNode;
-}> = ({
-  sessionOpen,
-  placeholder,
-  openingPlaceholder,
-  attachmentsEnabled,
-  composerLeading,
-}) => {
+}> = ({ placeholder, attachmentsEnabled, composerLeading }) => {
   const mention = unstable_useMentionAdapter({
     includeModelContextTools: false,
     items: [
@@ -386,14 +346,7 @@ const Composer: FC<{
 
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
-      <ComposerPrimitive.Root
-        className="aui-composer-root relative flex w-full flex-col"
-        // Typing while the agent warms up is fine; sending into a session that
-        // is not open yet is not. Enter is gated via submitMode below.
-        onSubmit={(event) => {
-          if (!sessionOpen) event.preventDefault();
-        }}
-      >
+      <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
         <div data-slot="aui_composer-shell" className={COMPOSER_SHELL}>
           <ComposerQuotePreview />
           {attachmentsEnabled ? (
@@ -404,8 +357,8 @@ const Composer: FC<{
             </div>
           ) : null}
           <LexicalComposerInput
-            placeholder={sessionOpen ? placeholder : openingPlaceholder}
-            submitMode={sessionOpen ? "enter" : "none"}
+            placeholder={placeholder}
+            submitMode="enter"
             autoFocus
             directiveChip={ComposerDirectiveChip}
             className="aui-composer-input relative max-h-32 min-h-10 w-full overflow-y-auto bg-transparent px-2.5 py-1 text-base caret-primary outline-none"
@@ -417,7 +370,6 @@ const Composer: FC<{
             </p>
           ) : null}
           <ComposerAction
-            sessionOpen={sessionOpen}
             attachmentsEnabled={attachmentsEnabled}
             composerLeading={composerLeading}
             onClearAttachmentError={() => setAttachmentError(null)}
@@ -461,16 +413,10 @@ const ComposerAttachmentChip: FC = () => {
 };
 
 const ComposerAction: FC<{
-  sessionOpen: boolean;
   attachmentsEnabled: boolean;
   composerLeading?: ReactNode;
   onClearAttachmentError: () => void;
-}> = ({
-  sessionOpen,
-  attachmentsEnabled,
-  composerLeading,
-  onClearAttachmentError,
-}) => {
+}> = ({ attachmentsEnabled, composerLeading, onClearAttachmentError }) => {
   return (
     <div className="aui-composer-action-wrapper relative flex items-center justify-between gap-2">
       <div className="flex min-w-0 items-center gap-1.5">
@@ -482,7 +428,6 @@ const ComposerAction: FC<{
               type="button"
               variant="ghost"
               size="icon-round"
-              disabled={!sessionOpen}
               aria-label="Attach file"
               onClick={onClearAttachmentError}
             >
@@ -496,49 +441,34 @@ const ComposerAction: FC<{
         {!composerLeading && !attachmentsEnabled ? <span /> : null}
       </div>
       <div className="flex items-center gap-1.5">
-        {!sessionOpen ? (
-          <Button
-            type="button"
-            variant="default"
-            size="icon-round"
-            disabled
-            aria-label="Starting session"
-            title="Starting session…"
-          >
-            <IconLoader2 className="animate-spin" />
-          </Button>
-        ) : (
-          <>
-            <AuiIf condition={(s) => !s.thread.isRunning}>
-              <ComposerPrimitive.Send asChild>
-                <TooltipIconButton
-                  tooltip="Send message"
-                  side="bottom"
-                  type="button"
-                  variant="default"
-                  size="icon-round"
-                  className="aui-composer-send"
-                  aria-label="Send message"
-                >
-                  <IconArrowUp />
-                </TooltipIconButton>
-              </ComposerPrimitive.Send>
-            </AuiIf>
-            <AuiIf condition={(s) => s.thread.isRunning}>
-              <ComposerPrimitive.Cancel asChild>
-                <Button
-                  type="button"
-                  variant="default"
-                  size="icon-round"
-                  className="aui-composer-cancel"
-                  aria-label="Stop generating"
-                >
-                  <IconSquare className="fill-current" />
-                </Button>
-              </ComposerPrimitive.Cancel>
-            </AuiIf>
-          </>
-        )}
+        <AuiIf condition={(s) => !s.thread.isRunning}>
+          <ComposerPrimitive.Send asChild>
+            <TooltipIconButton
+              tooltip="Send message"
+              side="bottom"
+              type="button"
+              variant="default"
+              size="icon-round"
+              className="aui-composer-send"
+              aria-label="Send message"
+            >
+              <IconArrowUp />
+            </TooltipIconButton>
+          </ComposerPrimitive.Send>
+        </AuiIf>
+        <AuiIf condition={(s) => s.thread.isRunning}>
+          <ComposerPrimitive.Cancel asChild>
+            <Button
+              type="button"
+              variant="default"
+              size="icon-round"
+              className="aui-composer-cancel"
+              aria-label="Stop generating"
+            >
+              <IconSquare className="fill-current" />
+            </Button>
+          </ComposerPrimitive.Cancel>
+        </AuiIf>
       </div>
     </div>
   );

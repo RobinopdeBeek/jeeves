@@ -7,9 +7,17 @@ interface HandshakeConfig {
     audio?: boolean;
     embeddedContext?: boolean;
   };
+  /** `session/new` model selector; omit for an agent that advertises none. */
+  models?: { currentValue: string; values: string[] };
   /** Method that answers with a JSON-RPC error instead of a result. */
   fail?: { method: string; message: string };
 }
+
+/** Model selector shape used by tests that exercise live model switching. */
+export const MOCK_MODEL_OPTION = {
+  currentValue: "default[]",
+  values: ["default[]", "composer-2.5[fast=true]", "gpt-5.5[]"],
+};
 
 /** In-memory ACP stdio stand-in for bridge and registry tests. */
 export class MockAcpProcess implements AcpProcess {
@@ -64,6 +72,7 @@ export class MockAcpProcess implements AcpProcess {
     sessionId = "sess-test",
     opts?: {
       promptCapabilities?: HandshakeConfig["promptCapabilities"];
+      models?: HandshakeConfig["models"];
     },
   ): void {
     this.answered.clear();
@@ -72,8 +81,25 @@ export class MockAcpProcess implements AcpProcess {
       ...(opts?.promptCapabilities
         ? { promptCapabilities: opts.promptCapabilities }
         : {}),
+      ...(opts?.models ? { models: opts.models } : {}),
       ...(this.handshake?.fail ? { fail: this.handshake.fail } : {}),
     };
+  }
+
+  /** Model value last accepted through `session/set_config_option`. */
+  currentModel(): string | null {
+    return this.handshake?.models?.currentValue ?? null;
+  }
+
+  /** Every `session/set_config_option` value the bridge asked for, in order. */
+  modelRequests(): string[] {
+    return this.written
+      .filter(
+        (m): m is { method: string; params: { configId: string; value: string } } =>
+          (m as { method?: string }).method === "session/set_config_option",
+      )
+      .filter((m) => m.params.configId === "model")
+      .map((m) => m.params.value);
   }
 
   /** Make one handshake method answer with a JSON-RPC error. */
@@ -94,7 +120,11 @@ export class MockAcpProcess implements AcpProcess {
     }
   }
 
-  private answerHandshake(message: { id?: number; method?: string }): void {
+  private answerHandshake(message: {
+    id?: number;
+    method?: string;
+    params?: { configId?: string; value?: string };
+  }): void {
     const config = this.handshake;
     if (!config) return;
     const { id, method } = message;
@@ -121,13 +151,37 @@ export class MockAcpProcess implements AcpProcess {
           : {}),
       };
     } else if (method === "authenticate") result = {};
-    else if (method === "session/new") result = { sessionId: config.sessionId };
-    else return;
+    else if (method === "session/new") {
+      result = {
+        sessionId: config.sessionId,
+        ...(config.models ? { configOptions: [this.modelConfigOption()] } : {}),
+      };
+    } else if (method === "session/set_config_option") {
+      if (!config.models || message.params?.configId !== "model") return;
+      const value = message.params.value;
+      if (typeof value !== "string" || !config.models.values.includes(value)) {
+        return;
+      }
+      config.models = { ...config.models, currentValue: value };
+      result = { configOptions: [this.modelConfigOption()] };
+    } else return;
 
     this.answered.add(id);
     queueMicrotask(() => {
       this.emit({ jsonrpc: "2.0", id, result });
     });
+  }
+
+  private modelConfigOption(): unknown {
+    const models = this.handshake!.models!;
+    return {
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue: models.currentValue,
+      options: models.values.map((value) => ({ value, name: value })),
+    };
   }
 
   prompts(): Array<{ sessionId: string; prompt: unknown }> {

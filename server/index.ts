@@ -94,6 +94,7 @@ app.route(
     events,
     artifacts,
     sessions: chatSessions,
+    spawn: spawnAcp,
     createSpec: createCreateSpec({
       store,
       artifacts,

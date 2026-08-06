@@ -43,6 +43,12 @@ export interface AcpChatTransportOptions {
   /** Socket health changed (reconnect banner, composer gating). */
   onConnectionChange?: (state: ChatConnectionState) => void;
   /**
+   * The agent session failed before it ever opened (spawn/auth/handshake).
+   * Surfaced as a recoverable banner + failed turn — never by unmounting the
+   * composer, which would throw away whatever the user had typed.
+   */
+  onSessionError?: (error: string) => void;
+  /**
    * A dropped socket came back. The `ready` transcript is authoritative — the
    * hook remounts the chat runtime with it rather than splicing streams.
    */
@@ -71,8 +77,14 @@ const PING_TIMEOUT_MS = 2000;
 const LIVENESS_FRESH_MS = 3000;
 /** Silent stretch during a turn before we probe the socket. */
 const TURN_LIVENESS_INTERVAL_MS = 8000;
-/** How long a send waits for a healthy session before failing loudly. */
+/** How long a reconnecting send waits for a healthy session before failing. */
 const ENSURE_LIVE_TIMEOUT_MS = 8000;
+/**
+ * First open is different: the agent handshake takes seconds, so a prompt sent
+ * into a starting session is parked, not refused. Matches the server's own
+ * handshake ceiling, which fails first with a real diagnostic.
+ */
+const INITIAL_SESSION_TIMEOUT_MS = 60_000;
 
 function closedStream(): ReadableStream<UIMessageChunk> {
   return new ReadableStream({ start: (c) => c.close() });
@@ -103,9 +115,15 @@ export class AcpChatTransport {
   };
   /** Set by close() — no reconnects after the hook tears us down. */
   private closedByUs = false;
-  /** Server rejected this session (bad card, …) — retrying cannot help. */
-  private fatal = false;
+  /**
+   * The agent session failed before it opened. Suspends reconnect backoff (a
+   * loop cannot help) but is cleared by the next send, which is what makes the
+   * transcript's Retry actually retry.
+   */
+  private sessionError: string | null = null;
   private hasConnected = false;
+  /** True once an ACP session has opened on any socket for this transport. */
+  private hasOpenedSession = false;
   private lastHistory: UIMessage[] = [];
   private lastServerMessageAt = 0;
   private reconnectAttempt = 0;
@@ -160,7 +178,7 @@ export class AcpChatTransport {
 
   /** Ensures a socket is up (opening or reconnecting as needed). */
   async connect(): Promise<UIMessage[]> {
-    if (this.closedByUs) throw new Error("chat transport is closed");
+    if (this.closedByUs) this.revive();
     this.bindWakeListeners();
     if (this.isSocketUsable() && this.readyD.settled) return this.lastHistory;
     if (!this.socket) {
@@ -296,6 +314,25 @@ export class AcpChatTransport {
     }
   }
 
+  /**
+   * Re-open a transport that close() tore down. React StrictMode mounts, tears
+   * down and re-mounts the same effect in dev, and the hook holds one transport
+   * per chat identity — so connect() after close() must start clean, not throw.
+   */
+  private revive(): void {
+    this.closedByUs = false;
+    this.sessionError = null;
+    this.displaced = false;
+    this.sessionOpen = false;
+    this.hasConnected = false;
+    this.hasOpenedSession = false;
+    this.reconnectAttempt = 0;
+    this.resumeConsumed = false;
+    this.chunkBuffer = [];
+    this.readyD = deferred();
+    this.sessionD = deferred();
+  }
+
   private isSocketUsable(): boolean {
     return this.socket != null && this.socket.readyState === WebSocket.OPEN;
   }
@@ -314,7 +351,7 @@ export class AcpChatTransport {
   }
 
   private openSocket(): void {
-    if (this.closedByUs || this.displaced || this.fatal) return;
+    if (this.closedByUs || this.displaced || this.sessionError != null) return;
 
     this.generation += 1;
     const gen = this.generation;
@@ -348,7 +385,7 @@ export class AcpChatTransport {
   /** Socket is gone (or provably dead): unlock the UI and start recovery. */
   private handleSocketDown(gen: number): void {
     if (gen !== this.generation) return;
-    if (this.closedByUs || this.displaced || this.fatal) return;
+    if (this.closedByUs || this.displaced || this.sessionError != null) return;
 
     this.socket = null;
     this.sessionOpen = false;
@@ -367,7 +404,7 @@ export class AcpChatTransport {
 
   private scheduleReconnect(): void {
     if (this.reconnectTimer != null) return;
-    if (this.closedByUs || this.displaced || this.fatal) return;
+    if (this.closedByUs || this.displaced || this.sessionError != null) return;
 
     if (!this.hasConnected && this.reconnectAttempt >= MAX_INITIAL_ATTEMPTS) {
       const err = new Error("could not reach the chat session");
@@ -390,7 +427,7 @@ export class AcpChatTransport {
 
   /** Reconnect immediately (tab focus, network back, dead socket on send). */
   private reconnectNow(): void {
-    if (this.closedByUs || this.displaced || this.fatal) return;
+    if (this.closedByUs || this.displaced || this.sessionError != null) return;
     if (this.isSocketUsable()) return;
     // A handshake already in flight will resolve or fail on its own.
     if (this.socket?.readyState === WebSocket.CONNECTING) return;
@@ -405,6 +442,10 @@ export class AcpChatTransport {
   /**
    * Health check with repair. Resolves only when a usable socket has an open
    * ACP session; throws when that cannot be reached in time.
+   *
+   * A prompt sent during the very first handshake is parked here rather than
+   * refused, on the server's own 60s budget. Reconnects keep the short budget:
+   * there the session provably worked a moment ago.
    */
   private async ensureLive(): Promise<void> {
     if (this.closedByUs) throw new Error("chat session is closed");
@@ -416,13 +457,25 @@ export class AcpChatTransport {
       this.dropDeadSocket();
     }
 
+    // Sending after a failed startup *is* the retry — un-suspend and try again.
+    // The server leaves the socket open after a setup failure, so that socket
+    // has to go: nothing will ever open a session on it.
+    const retrying = this.sessionError != null;
+    this.sessionError = null;
+    if (retrying && this.isSocketUsable()) this.dropDeadSocket();
+    // No-op while the initial socket is healthy and the handshake is in flight.
     this.reconnectNow();
 
-    const deadline = Date.now() + ENSURE_LIVE_TIMEOUT_MS;
+    const deadline =
+      Date.now() +
+      (this.hasOpenedSession
+        ? ENSURE_LIVE_TIMEOUT_MS
+        : INITIAL_SESSION_TIMEOUT_MS);
     while (Date.now() < deadline) {
       if (this.closedByUs) throw new Error("chat session is closed");
       if (this.displaced) return;
       if (this.isSocketUsable() && this.sessionOpen) return;
+      if (this.sessionError != null) throw new Error(this.sessionError);
       await Promise.race([
         this.sessionD.promise.catch(() => undefined),
         sleep(100),
@@ -669,9 +722,8 @@ export class AcpChatTransport {
     this.streamController = null;
   }
 
-  private failConnect(err: Error): void {
-    this.readyD.reject(err);
-    this.sessionD.reject(err);
+  /** Surface a failure as a failed turn in the transcript (retryable). */
+  private failTurn(err: Error): void {
     try {
       this.streamController?.error(err);
     } catch {
@@ -699,12 +751,14 @@ export class AcpChatTransport {
         this.chunkBuffer = [];
         this.resumeConsumed = false;
         this.turnDone = false;
-        // Empty history or mid-stream warm reattach ⇒ expect chunks (or a
-        // second resume after Chat recreation cancels the first stream).
-        this.expectOpeningStream =
-          msg.messages.length === 0 || Boolean(msg.streaming);
-        // Non-empty history ⇒ opening is done unless warm reattach is mid-stream.
-        if (msg.messages.length > 0 && !msg.streaming) {
+        // Step chats (Grill / assist) fire an opening turn on empty history;
+        // Project Chat does not — empty + idle means idle. Mid-stream warm
+        // reattach always expects chunks.
+        const stepChatOpening =
+          msg.messages.length === 0 && this.options.threadId == null;
+        this.expectOpeningStream = stepChatOpening || Boolean(msg.streaming);
+        // Idle non-opening sessions: close the resume stream so Send is live.
+        if (!msg.streaming && !this.expectOpeningStream) {
           this.markTurnDone();
         }
         if (msg.branchable) {
@@ -722,6 +776,7 @@ export class AcpChatTransport {
       case "session":
         if (msg.status === "open") {
           this.sessionOpen = true;
+          this.hasOpenedSession = true;
           this.promptCapabilities = normalizePromptCapabilities(
             msg.promptCapabilities,
           );
@@ -781,22 +836,20 @@ export class AcpChatTransport {
         break;
       }
       case "error": {
-        // Before session open ⇒ setup failure (bad card, spawn failed):
+        // Before session open ⇒ setup failure (spawn/auth/handshake):
         // reconnecting would just loop. After ⇒ a turn failed; keep the socket.
         const setupFailure = !this.sessionOpen;
         if (setupFailure) {
-          this.fatal = true;
+          this.sessionError = msg.error;
           this.clearReconnectTimer();
           this.setConnectionState("closed");
-          this.failConnect(new Error(msg.error));
-        } else {
-          try {
-            this.streamController?.error(new Error(msg.error));
-          } catch {
-            // already closed
-          }
-          this.streamController = null;
+          // Hand the caller a live (if agent-less) chat rather than an error
+          // screen: the composer stays mounted and the typed text survives.
+          this.readyD.resolve(this.lastHistory);
+          this.sessionD.reject(new Error(msg.error));
+          this.options.onSessionError?.(msg.error);
         }
+        this.failTurn(new Error(msg.error));
         this.markTurnDone();
         break;
       }

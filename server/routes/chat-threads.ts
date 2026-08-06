@@ -17,7 +17,11 @@ export function chatThreadRoutes(
 ) {
   const app = new Hono();
 
-  app.get("/", (c) => c.json(store.listThreads(project.id)));
+  app.get("/", (c) => {
+    // Chat page load: start a spare handshake now so the first open is instant.
+    projectChat.prewarm();
+    return c.json(store.listThreads(project.id));
+  });
 
   app.post("/", (c) => c.json(store.createOrReuseEmptyDraft(project.id), 201));
 
@@ -84,7 +88,7 @@ export function chatThreadRoutes(
     try {
       const id = c.req.param("id");
       if (body.model !== undefined) {
-        const thread = projectChat.setModel(id, body.model);
+        const thread = await projectChat.setModel(id, body.model);
         return thread ? c.json(thread) : c.json({ error: "not found" }, 404);
       }
       if (body.title !== undefined) {

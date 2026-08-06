@@ -27,6 +27,23 @@ export const EMPTY_PROMPT_CAPABILITIES: PromptCapabilities = {
   embeddedContext: false,
 };
 
+/**
+ * Assumed before the ACP handshake reports real capabilities, so the composer
+ * paperclip is usable while the agent is still starting. Images only — every
+ * Cursor Agent session observed advertises `image`, and the rest stay fail-closed.
+ * Superseded by negotiated capabilities the moment they arrive.
+ */
+export const OPTIMISTIC_PROMPT_CAPABILITIES: PromptCapabilities = {
+  image: true,
+  audio: false,
+  embeddedContext: false,
+};
+
+/** True when nothing has been negotiated yet (all kinds still fail-closed). */
+export function hasNoPromptCapabilities(caps: PromptCapabilities): boolean {
+  return !caps.image && !caps.audio && !caps.embeddedContext;
+}
+
 /** Normalize an ACP initialize `agentCapabilities.promptCapabilities` object. */
 export function normalizePromptCapabilities(
   raw: unknown,

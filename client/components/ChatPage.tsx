@@ -5,7 +5,7 @@ import { ChatThreadView } from "@/components/chat/ChatThreadView";
 import { useIsMd } from "@/hooks/use-is-md";
 import { api, type ChatThread } from "@/lib/api";
 import { resolveBareChatDestination } from "@/lib/chat-routes";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 
 /** Project Chat — thread rail / mobile list + live ACP thread view. */
 export function ChatPage() {
@@ -14,7 +14,6 @@ export function ChatPage() {
   const isDesktop = useIsMd();
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
   const [active, setActive] = useState<ChatThread | null>(null);
   const [railOpen, setRailOpen] = useState(true);
 
@@ -82,15 +81,22 @@ export function ChatPage() {
   }, [threadId, isDesktop, navigate, refresh]);
 
   async function handleNewThread() {
-    setCreating(true);
     try {
       const thread = await api.createChatThread();
-      await refresh();
+      // Splice locally so navigation is not blocked on a full list refetch.
+      // Server may reuse an existing empty "New Chat" draft — update in place.
+      setThreads((prev) => {
+        const idx = prev.findIndex((t) => t.id === thread.id);
+        if (idx >= 0) {
+          const next = [...prev];
+          next.splice(idx, 1);
+          return [thread, ...next];
+        }
+        return [thread, ...prev];
+      });
       navigate(`/chat/${thread.id}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not create thread");
-    } finally {
-      setCreating(false);
     }
   }
 
@@ -144,7 +150,7 @@ export function ChatPage() {
             onNewThread={handleNewThread}
             onRename={handleRename}
             onDelete={handleDelete}
-            creating={creating}
+            creating={false}
           />
         </div>
       );
@@ -172,7 +178,7 @@ export function ChatPage() {
             onNewThread={handleNewThread}
             onRename={handleRename}
             onDelete={handleDelete}
-            creating={creating}
+            creating={false}
           />
         </aside>
       ) : null}

@@ -16,7 +16,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { toastError } from "@/components/ui/sonner";
+import { toast } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
 import { Logo } from "./Logo";
 import { STEP_PANELS } from "./step-panels";
@@ -105,7 +105,7 @@ export function CardView() {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setCreateSpecError(message);
-      toastError(message);
+      toast.error(message);
     } finally {
       setCreatingSpec(false);
     }
@@ -124,14 +124,14 @@ export function CardView() {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setCreateTasksError(message);
-      toastError(message);
+      toast.error(message);
     } finally {
       setCreatingTasks(false);
     }
   }
 
   useEffect(() => {
-    if (tasksFooter?.error) toastError(tasksFooter.error);
+    if (tasksFooter?.error) toast.error(tasksFooter.error);
   }, [tasksFooter?.error]);
 
   if (missing) {

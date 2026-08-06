@@ -13,7 +13,11 @@ import {
   stepChatSessionId,
   threadChatSessionId,
 } from "./chat-session.js";
-import { MockAcpProcess, viWaitFor } from "./mock-acp-process.js";
+import {
+  MOCK_MODEL_OPTION,
+  MockAcpProcess,
+  viWaitFor,
+} from "./mock-acp-process.js";
 import { openChat } from "./open-chat.js";
 import { ChatSessionRegistry } from "./session-registry.js";
 
@@ -207,27 +211,43 @@ describe("createProjectChatSession", () => {
     expect(session.model).toBe("composer-2.5");
   });
 
-  it("opens Project Chat ACP with --model via spawn options", async () => {
+  it("applies the thread's pinned model to the session, not the spawn", async () => {
     threads.setModel(threadId, "composer-2.5");
     const sessions = new ChatSessionRegistry();
     const process = new MockAcpProcess();
-    process.autoHandshake("sess-model");
-    const spawnCalls: Array<{ cwd: string; model?: string | null }> = [];
+    process.autoHandshake("sess-model", { models: MOCK_MODEL_OPTION });
+    const spawnCalls: string[] = [];
     const session = createProjectChatSession(
       { threadId },
       { threads, cwd: repoPath },
     );
 
     await openChat(session, {
-      spawn: (cwd, options) => {
-        spawnCalls.push({ cwd, model: options?.model });
+      spawn: (cwd) => {
+        spawnCalls.push(cwd);
         return process;
       },
       sessions,
     });
 
-    expect(spawnCalls).toEqual([{ cwd: repoPath, model: "composer-2.5" }]);
+    expect(spawnCalls).toEqual([repoPath]);
+    // Legacy bare id migrated onto the agent's variant string.
+    expect(process.modelRequests()).toEqual(["composer-2.5[fast=true]"]);
     expect(sessions.hasWarm(`thread:${threadId}`)).toBe(true);
+  });
+
+  it("leaves the session on Auto for an unpinned thread", async () => {
+    const sessions = new ChatSessionRegistry();
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-auto", { models: MOCK_MODEL_OPTION });
+    const session = createProjectChatSession(
+      { threadId },
+      { threads, cwd: repoPath },
+    );
+
+    await openChat(session, { spawn: () => process, sessions });
+
+    expect(process.modelRequests()).toEqual([]);
   });
 
   it("persists transcript via ChatThreadStore and auto-titles on turn complete", () => {

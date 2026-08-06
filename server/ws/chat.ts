@@ -54,6 +54,8 @@ const HANDSHAKE_TIMEOUT_MS = 60_000;
  * never complete one, so cap the wait and turn it into actionable advice.
  */
 const AUTHENTICATE_TIMEOUT_MS = 15_000;
+/** Measured ~850ms against the real CLI; generous headroom, still bounded. */
+const SET_CONFIG_OPTION_TIMEOUT_MS = 30_000;
 
 /** The agent has no usable credentials; no amount of retrying helps. */
 export class AcpAuthError extends Error {
@@ -66,15 +68,17 @@ export class AcpAuthError extends Error {
   }
 }
 
-/** Optional spawn knobs — omit model to keep the CLI default. */
-export interface SpawnAcpOptions {
-  model?: string | null;
-}
+export type SpawnAcp = (cwd: string) => AcpProcess | Promise<AcpProcess>;
 
-export type SpawnAcp = (
-  cwd: string,
-  options?: SpawnAcpOptions,
-) => AcpProcess | Promise<AcpProcess>;
+/** ACP session config option (`session/new` → `configOptions`). */
+export interface AcpSessionConfigOption {
+  id: string;
+  name?: string;
+  category?: string;
+  type?: string;
+  currentValue?: string | null;
+  options?: Array<{ value: string; name?: string; description?: string }>;
+}
 
 export interface AcpLiveCallbacks {
   onStatus: (status: "ai-working" | "needs-user") => void;
@@ -83,10 +87,15 @@ export interface AcpLiveCallbacks {
   onTurnComplete?: () => void;
   /** Profile-owned framing for live draft body → agent prompt. */
   frameUserMessage?: (userText: string, liveDraftBody: string) => string;
+  /** The agent switched model on its own (rate limit, fallback). */
+  onModelChanged?: (value: string) => void;
 }
 
-export interface OpenSessionOptions {
-  cwd: string;
+/**
+ * Session-scoped state a real chat needs on top of the ACP handshake.
+ * Applied by {@link AcpBridge.adopt}, so a pre-warmed spare can be claimed.
+ */
+export interface AdoptSessionOptions {
   /**
    * Injected when history is empty — drives the agent's opening question.
    * Null skips the auto turn (Project Chat warm-and-user-first).
@@ -98,8 +107,10 @@ export interface OpenSessionOptions {
    * `project-chat` auto-approves reads only (shell + file writes prompt).
    */
   interactivePermissionPolicy?: InteractivePermissionPolicy;
-  /** Pin via `agent --model <id> acp`; omit/null = CLI default. */
-  model?: string | null;
+}
+
+export interface OpenSessionOptions extends AdoptSessionOptions {
+  cwd: string;
 }
 
 /**
@@ -204,6 +215,8 @@ export class AcpBridge {
   private promptCapabilities: PromptCapabilities = {
     ...EMPTY_PROMPT_CAPABILITIES,
   };
+  /** `session/new` config options; the `model` selector drives live switching. */
+  private modelOption: AcpSessionConfigOption | null = null;
 
   constructor(
     private readonly deps: { spawn: SpawnAcp } & Partial<AcpLiveCallbacks>,
@@ -213,6 +226,7 @@ export class AcpBridge {
       onTranscript: deps.onTranscript ?? (() => {}),
       onTurnComplete: deps.onTurnComplete,
       frameUserMessage: deps.frameUserMessage,
+      onModelChanged: deps.onModelChanged,
     };
   }
 
@@ -226,6 +240,40 @@ export class AcpBridge {
 
   getPromptCapabilities(): PromptCapabilities {
     return this.promptCapabilities;
+  }
+
+  /** The agent's `model` config selector, or null when it advertises none. */
+  getModelOption(): AcpSessionConfigOption | null {
+    return this.modelOption;
+  }
+
+  getCurrentModelValue(): string | null {
+    return this.modelOption?.currentValue ?? null;
+  }
+
+  /**
+   * Switch model in place via `session/set_config_option` (~850ms, keeps the
+   * conversation). No-op when the session is already on `value`.
+   */
+  async setModelValue(value: string): Promise<void> {
+    const option = this.modelOption;
+    if (!option) throw new Error("agent does not advertise a model selector");
+    if (option.currentValue === value) return;
+    if (!this.sessionId) throw new Error("session not open");
+    const result = (await this.rpc(
+      "session/set_config_option",
+      { sessionId: this.sessionId, configId: option.id, value },
+      SET_CONFIG_OPTION_TIMEOUT_MS,
+    )) as { configOptions?: unknown } | undefined;
+    // The agent answers with the complete config state; fall back to the
+    // requested value when it answers with nothing useful.
+    const updated = findModelConfigOption(result?.configOptions);
+    this.modelOption = updated ?? { ...option, currentValue: value };
+  }
+
+  /** True while the handshaked session still has a living process behind it. */
+  hasOpenSession(): boolean {
+    return this.sessionId != null && this.process != null;
   }
 
   getPendingPermissionIds(): string[] {
@@ -309,15 +357,12 @@ export class AcpBridge {
   }
 
   /**
-   * Start an ACP session. Empty history + non-null openingPrompt runs that turn.
-   * Empty history + null openingPrompt warms ACP with no auto agent message.
-   * Non-empty history loads messages and waits for the first user send (seed-once).
+   * Spawn `agent acp` and run the handshake, then {@link adopt} the session
+   * state. The process is model-agnostic — the model is a session config
+   * option, applied after the handshake.
    */
   async openSession(options: OpenSessionOptions): Promise<void> {
-    this.messages = options.history ? [...options.history] : [];
-    this.contextSeeded = this.messages.length === 0;
-    this.interactivePolicy = options.interactivePermissionPolicy ?? null;
-    this.process = await this.deps.spawn(options.cwd, { model: options.model });
+    this.process = await this.deps.spawn(options.cwd);
     this.process.onLine((line) => this.handleLine(line));
     this.process.onExit?.((exit) => this.handleProcessExit(exit));
 
@@ -328,6 +373,8 @@ export class AcpBridge {
         clientCapabilities: {
           fs: { readTextFile: false, writeTextFile: false },
           terminal: false,
+          // Required before the agent will advertise session config options.
+          session: { configOptions: { boolean: {} } },
         },
         clientInfo: { name: "jeeves-acp-bridge", version: "0.1.0" },
       },
@@ -339,6 +386,24 @@ export class AcpBridge {
       initResult?.agentCapabilities?.promptCapabilities,
     );
     this.sessionId = await this.createAcpSession(options.cwd);
+
+    this.adopt(options);
+  }
+
+  /**
+   * Bind a handshaked session to one chat. Empty history + non-null
+   * openingPrompt runs that turn; empty history + null openingPrompt stays
+   * warm with no auto agent message; non-empty history loads messages and waits
+   * for the first user send (seed-once).
+   *
+   * Touches no ACP state, so a pre-warmed spare can be claimed with this after
+   * its handshake has already completed.
+   */
+  adopt(options: AdoptSessionOptions): void {
+    if (!this.sessionId) throw new Error("session not open");
+    this.messages = options.history ? [...options.history] : [];
+    this.contextSeeded = this.messages.length === 0;
+    this.interactivePolicy = options.interactivePermissionPolicy ?? null;
 
     if (this.messages.length === 0 && options.openingPrompt !== null) {
       this.contextSeeded = true;
@@ -375,7 +440,8 @@ export class AcpBridge {
       "session/new",
       { cwd, mcpServers: [] },
       HANDSHAKE_TIMEOUT_MS,
-    )) as { sessionId: string };
+    )) as { sessionId: string; configOptions?: unknown };
+    this.modelOption = findModelConfigOption(created.configOptions);
     return created.sessionId;
   }
 
@@ -659,6 +725,7 @@ export class AcpBridge {
         update?: {
           sessionUpdate?: string;
           content?: { type?: string; text?: string };
+          configOptions?: unknown;
         };
         toolCall?: { toolCallId?: string; title?: string };
         options?: Array<{ optionId?: string; name?: string; kind?: string }>;
@@ -699,6 +766,9 @@ export class AcpBridge {
           id: this.currentTextId,
           delta,
         });
+      } else if (update?.sessionUpdate === "config_option_update") {
+        // The agent may switch model on its own (rate limit, fallback).
+        this.applyConfigOptionUpdate(update.configOptions);
       } else if (
         this.currentTextId &&
         (update?.sessionUpdate === "tool_call" ||
@@ -716,6 +786,15 @@ export class AcpBridge {
       if (this.currentTextId) this.textInterrupted = true;
       this.projectPermissionRequest(msg.id, msg.params);
     }
+  }
+
+  private applyConfigOptionUpdate(configOptions: unknown): void {
+    const updated = findModelConfigOption(configOptions);
+    if (!updated) return;
+    const before = this.modelOption?.currentValue ?? null;
+    this.modelOption = updated;
+    const after = updated.currentValue ?? null;
+    if (after != null && after !== before) this.live.onModelChanged?.(after);
   }
 
   private projectPermissionRequest(
@@ -879,6 +958,25 @@ export class AcpBridge {
   private respond(id: number, result: unknown): void {
     this.process?.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
   }
+}
+
+/**
+ * Pick the model selector out of an ACP `configOptions` array. The spec keys it
+ * by `category`; fall back to a literal `model` id for agents that omit it.
+ */
+export function findModelConfigOption(
+  configOptions: unknown,
+): AcpSessionConfigOption | null {
+  if (!Array.isArray(configOptions)) return null;
+  const candidates = configOptions.filter(
+    (o): o is AcpSessionConfigOption =>
+      o != null && typeof o === "object" && typeof (o as { id?: unknown }).id === "string",
+  );
+  return (
+    candidates.find((o) => o.category === "model") ??
+    candidates.find((o) => o.id === "model") ??
+    null
+  );
 }
 
 /** JSON-RPC error payloads are plain objects; keep them readable as Errors. */

@@ -1,48 +1,28 @@
 /**
- * Parse `agent models` / `agent --list-models` human-readable stdout into
- * picker rows. Format (from Cursor Agent CLI):
- *   <id> - <display name> [(current[, ]default)]
+ * Model catalog for the Project Chat picker, sourced from the ACP handshake's
+ * `configOptions` model selector (`session/new`) rather than `agent models`
+ * stdout — same list the agent will actually accept, already ordered by its own
+ * preference, and no extra `execFile`.
+ *
+ * The catalog is account- and CLI-version-scoped, not session-scoped, so it is
+ * cached per process: whichever bridge handshakes first fills it, and every
+ * later picker load is instant.
  */
 
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { resolveAgentLaunch } from "../ws/acp-process.js";
-
-const execFileAsync = promisify(execFile);
+import type { AcpSessionConfigOption } from "../ws/chat.js";
 
 export interface AgentModel {
+  /** ACP config option value — a variant string like `composer-2.5[fast=true]`. */
   id: string;
   displayName: string;
+  /** Matches the reporting session's current model. */
   current: boolean;
+  /** The agent's own automatic pick (`default[]`). */
   default: boolean;
 }
 
-const ANSI_RE = /\u001b\[[0-9;]*m/g;
-const MODEL_LINE_RE =
-  /^(\S+)\s+-\s+(.+?)(?:\s+\(([^)]+)\))?\s*$/;
-
-/** Strip ANSI + parse model lines; ignore headers/blank/errors. */
-export function parseAgentModelsOutput(stdout: string): AgentModel[] {
-  const models: AgentModel[] = [];
-  for (const raw of stdout.split(/\r?\n/)) {
-    const line = raw.replace(ANSI_RE, "").trim();
-    if (!line) continue;
-    if (/^available models$/i.test(line)) continue;
-    if (/^no models available/i.test(line)) continue;
-    const match = MODEL_LINE_RE.exec(line);
-    if (!match) continue;
-    const id = match[1]!;
-    const displayName = match[2]!.trim();
-    const markers = (match[3] ?? "").toLowerCase();
-    models.push({
-      id,
-      displayName,
-      current: markers.includes("current"),
-      default: markers.includes("default"),
-    });
-  }
-  return models;
-}
+/** Config value meaning "let the agent choose" (Auto). */
+export const AUTO_MODEL_VALUE = "default[]";
 
 export class ListModelsError extends Error {
   constructor(message: string) {
@@ -51,41 +31,82 @@ export class ListModelsError extends Error {
   }
 }
 
-export type RunAgentModels = () => Promise<string>;
-
-/** Default host wrapper: `agent models` via the resolved Agent CLI. */
-export async function runAgentModelsCli(): Promise<string> {
-  const launch = resolveAgentLaunch();
-  try {
-    const { stdout } = await execFileAsync(
-      launch.command,
-      [...launch.args, "models"],
-      {
-        env: process.env,
-        shell: launch.shell,
-        windowsHide: true,
-        maxBuffer: 2 * 1024 * 1024,
-      },
-    );
-    return typeof stdout === "string" ? stdout : String(stdout);
-  } catch (err) {
-    const message =
-      err instanceof Error ? err.message : "failed to list models";
-    throw new ListModelsError(message);
-  }
+/** Bare id before the variant suffix: `composer-2.5[fast=true]` → `composer-2.5`. */
+function bareModelId(value: string): string {
+  const bracket = value.indexOf("[");
+  return bracket === -1 ? value : value.slice(0, bracket);
 }
 
-/** List models for the Project Chat picker (injectable for CI). */
-export async function listAgentModels(
-  run: RunAgentModels = runAgentModelsCli,
-): Promise<AgentModel[]> {
-  try {
-    const stdout = await run();
-    return parseAgentModelsOutput(stdout);
-  } catch (err) {
-    if (err instanceof ListModelsError) throw err;
-    const message =
-      err instanceof Error ? err.message : "failed to list models";
-    throw new ListModelsError(message);
-  }
+/**
+ * Resolve a stored `thread.model` onto a live config option value.
+ *
+ * Rows written before models moved to config options hold **bare** ids
+ * (`composer-2.5`), so match those against each value's prefix. `null` (and
+ * anything the account no longer offers) means Auto.
+ */
+export function resolveModelValue(
+  stored: string | null | undefined,
+  values: readonly string[],
+): string | null {
+  const auto = values.includes(AUTO_MODEL_VALUE) ? AUTO_MODEL_VALUE : null;
+  const trimmed = stored?.trim();
+  if (!trimmed) return auto;
+  if (values.includes(trimmed)) return trimmed;
+  return values.find((value) => bareModelId(value) === trimmed) ?? auto;
+}
+
+/** Picker rows from a `model` config option (Auto is the picker's own row). */
+export function modelsFromConfigOption(
+  option: AcpSessionConfigOption | null,
+): AgentModel[] {
+  return (option?.options ?? [])
+    .filter((o) => typeof o?.value === "string" && o.value !== AUTO_MODEL_VALUE)
+    .map((o) => ({
+      id: o.value,
+      displayName: o.name?.trim() || bareModelId(o.value),
+      current: o.value === option?.currentValue,
+      default: false,
+    }));
+}
+
+let catalog: AgentModel[] | null = null;
+let waiters: Array<(models: AgentModel[]) => void> = [];
+
+/** Called by the session registry whenever an ACP handshake completes. */
+export function recordModelCatalog(option: AcpSessionConfigOption | null): void {
+  const models = modelsFromConfigOption(option);
+  if (models.length === 0) return;
+  catalog = models;
+  const pending = waiters;
+  waiters = [];
+  for (const resolve of pending) resolve(models);
+}
+
+export function resetModelCatalog(): void {
+  catalog = null;
+  waiters = [];
+}
+
+/**
+ * Models for the picker. Waits for the first handshake to land when the catalog
+ * is still empty — the Chat page pre-warms a spare on load, so this is the
+ * same "picker fills in a moment" wait the CLI scrape used to cost.
+ */
+export function listAgentModels(timeoutMs = 20_000): Promise<AgentModel[]> {
+  if (catalog) return Promise.resolve(catalog);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      waiters = waiters.filter((w) => w !== onCatalog);
+      reject(
+        new ListModelsError(
+          "no agent session has started yet — model list unavailable",
+        ),
+      );
+    }, timeoutMs);
+    const onCatalog = (models: AgentModel[]) => {
+      clearTimeout(timer);
+      resolve(models);
+    };
+    waiters.push(onCatalog);
+  });
 }

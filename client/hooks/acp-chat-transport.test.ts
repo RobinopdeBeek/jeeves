@@ -281,6 +281,25 @@ describe("AcpChatTransport", () => {
     ]);
   });
 
+  it("does not leave Project Chat waiting on an opening stream that never comes", async () => {
+    // Project Chat is user-first (openingPrompt: null). An empty idle ready
+    // must close the resume stream so the composer shows Send, not Stop.
+    const transport = new AcpChatTransport({ threadId: "t1" });
+
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({ type: "ready", messages: [], streaming: false });
+    await connectP;
+
+    const resume = await transport.reconnectToStream();
+    expect(resume).not.toBeNull();
+    const chunks = await readAll(resume!);
+    expect(chunks).toEqual([]);
+
+    ws.deliver({ type: "session", status: "open", streaming: false });
+    expect(transport.isSessionOpen()).toBe(true);
+  });
+
   it("sends Spec markdown as background context, not in the visible user text", async () => {
     const transport = new AcpChatTransport({
       cardId: "c1",
@@ -745,5 +764,199 @@ describe("AcpChatTransport", () => {
         { mediaType: "image/png", filename: "dot.png", url: TINY_PNG },
       ],
     });
+  });
+});
+
+/**
+ * The composer is live from the first frame, so a prompt can be typed and sent
+ * while the ~5.5s agent handshake is still running. Those sends wait for the
+ * session instead of being refused.
+ */
+describe("AcpChatTransport — parked prompts", () => {
+  beforeEach(() => {
+    FakeWebSocket.install();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("parks a send made during the first handshake and delivers it on open", async () => {
+    const transport = new AcpChatTransport({ threadId: "t1" });
+
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({ type: "ready", messages: [], streaming: false });
+    await connectP;
+
+    // No session/open yet — the agent is still starting.
+    expect(transport.isSessionOpen()).toBe(false);
+    const sendP = transport.sendMessages({
+      messages: [userMessage("while it boots")],
+    } as Parameters<AcpChatTransport["sendMessages"]>[0]);
+
+    await Promise.resolve();
+    expect(ws.sent.map((s) => JSON.parse(s) as { type: string })).not.toContainEqual(
+      expect.objectContaining({ type: "user-message" }),
+    );
+    // Parking must not churn sockets while the first handshake is in flight.
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    ws.deliver({ type: "session", status: "open", streaming: false });
+
+    const stream = await sendP;
+    void readAll(stream);
+    expect(ws.sent.map((s) => JSON.parse(s) as unknown)).toContainEqual({
+      type: "user-message",
+      text: "while it boots",
+    });
+  });
+
+  it("waits well past the reconnect budget for a first handshake", async () => {
+    vi.useFakeTimers();
+    const transport = new AcpChatTransport({ threadId: "t1" });
+
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({ type: "ready", messages: [], streaming: false });
+    await connectP;
+
+    const sendP = transport.sendMessages({
+      messages: [userMessage("slow agent")],
+    } as Parameters<AcpChatTransport["sendMessages"]>[0]);
+    const settled = vi.fn();
+    void sendP.then(settled, settled);
+
+    // A reconnecting send would have given up at 8s.
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(settled).not.toHaveBeenCalled();
+
+    ws.deliver({ type: "session", status: "open", streaming: false });
+    await sendP;
+    expect(ws.sent.map((s) => JSON.parse(s) as unknown)).toContainEqual({
+      type: "user-message",
+      text: "slow agent",
+    });
+  });
+
+  it("keeps the short budget for a reconnecting send once a session has opened", async () => {
+    vi.useFakeTimers();
+    const transport = new AcpChatTransport({ threadId: "t1" });
+
+    const connectP = transport.connect();
+    const first = FakeWebSocket.instances[0]!;
+    first.deliver({ type: "ready", messages: [], streaming: false });
+    await connectP;
+    first.deliver({ type: "session", status: "open", streaming: false });
+
+    first.readyState = FakeWebSocket.CLOSED;
+    first.onclose?.();
+
+    const outcome = transport
+      .sendMessages({
+        messages: [userMessage("after the blip")],
+      } as Parameters<AcpChatTransport["sendMessages"]>[0])
+      .then(
+        () => "sent",
+        (err: Error) => err.message,
+      );
+
+    await vi.advanceTimersByTimeAsync(9_000);
+    await expect(outcome).resolves.toMatch(/not connected/i);
+  });
+});
+
+/**
+ * A handshake failure must never unmount the composer: it lands as a failed
+ * turn plus a recoverable banner, and the next send is the retry.
+ */
+describe("AcpChatTransport — failed handshake", () => {
+  beforeEach(() => {
+    FakeWebSocket.install();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("resolves connect and reports a session error instead of rejecting", async () => {
+    const errors: string[] = [];
+    const states: ChatConnectionState[] = [];
+    const transport = new AcpChatTransport({
+      threadId: "t1",
+      onSessionError: (error) => errors.push(error),
+      onConnectionChange: (state) => states.push(state),
+    });
+
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    const history: UIMessage[] = [
+      { id: "a1", role: "assistant", parts: [{ type: "text", text: "earlier" }] },
+    ];
+    ws.deliver({ type: "ready", messages: history, streaming: false });
+    ws.deliver({ type: "error", error: "agent not found on PATH" });
+
+    // Callers get a live (agent-less) chat with its history, not a rejection.
+    await expect(connectP).resolves.toEqual(history);
+    expect(errors).toEqual(["agent not found on PATH"]);
+    expect(states.at(-1)).toBe("closed");
+    await expect(transport.whenSessionOpen()).rejects.toThrow(/agent not found/);
+  });
+
+  it("fails the in-flight turn stream rather than the whole transport", async () => {
+    const streaming: boolean[] = [];
+    const transport = new AcpChatTransport({
+      threadId: "t1",
+      onStreamingChange: (s) => streaming.push(s),
+    });
+
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({ type: "ready", messages: [], streaming: false });
+    await connectP;
+    ws.deliver({ type: "session", status: "open", streaming: false });
+
+    const stream = await transport.sendMessages({
+      messages: [userMessage("hi")],
+    } as Parameters<AcpChatTransport["sendMessages"]>[0]);
+    const readP = readAll(stream);
+
+    ws.deliver({ type: "error", error: "agent crashed mid-turn" });
+
+    await expect(readP).rejects.toThrow(/agent crashed mid-turn/);
+    // Composer unlocked, so the user can retry.
+    expect(streaming.at(-1)).toBe(false);
+  });
+
+  it("retries on the next send by reconnecting the abandoned socket", async () => {
+    vi.useFakeTimers();
+    const transport = new AcpChatTransport({ threadId: "t1" });
+
+    const connectP = transport.connect();
+    const failed = FakeWebSocket.instances[0]!;
+    failed.deliver({ type: "ready", messages: [], streaming: false });
+    failed.deliver({ type: "error", error: "spawn failed" });
+    await connectP;
+
+    const sendP = transport.sendMessages({
+      messages: [userMessage("try again")],
+    } as Parameters<AcpChatTransport["sendMessages"]>[0]);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The dead-but-open socket is replaced rather than reused.
+    const retry = FakeWebSocket.instances[1]!;
+    expect(retry).toBeDefined();
+    retry.deliver({ type: "ready", messages: [], streaming: false });
+    retry.deliver({ type: "session", status: "open", streaming: false });
+
+    const stream = await sendP;
+    void readAll(stream);
+    expect(retry.sent.map((s) => JSON.parse(s) as unknown)).toContainEqual({
+      type: "user-message",
+      text: "try again",
+    });
+    expect(failed.sent).toEqual([]);
   });
 });

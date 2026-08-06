@@ -5,7 +5,11 @@ import {
   stepChatSessionId,
   threadChatSessionId,
 } from "./chat-session.js";
-import { MockAcpProcess, viWaitFor } from "./mock-acp-process.js";
+import {
+  MOCK_MODEL_OPTION,
+  MockAcpProcess,
+  viWaitFor,
+} from "./mock-acp-process.js";
 import {
   ChatSessionRegistry,
   MAX_LIVE_SESSIONS,
@@ -54,6 +58,7 @@ function testSession(
     interactivePermissionPolicy: overrides.interactivePermissionPolicy,
     frameUserMessage: overrides.frameUserMessage,
     onTurnComplete: overrides.onTurnComplete,
+    onModelChanged: overrides.onModelChanged,
   };
 }
 
@@ -547,47 +552,284 @@ describe("ChatSessionRegistry — warm bridges", () => {
     expect(processes.filter((p) => !p.killed)).toHaveLength(MAX_LIVE_SESSIONS);
   });
 
-  it("replaces the warm ACP process when the pinned model changes", async () => {
+  it("pins the session's model on the live process instead of respawning", async () => {
     const registry = new ChatSessionRegistry();
-    const first = new MockAcpProcess();
-    first.autoHandshake("sess-m1");
-    const second = new MockAcpProcess();
-    second.autoHandshake("sess-m2");
-    const spawnModels: Array<string | null | undefined> = [];
-
-    const spawn = (_cwd: string, options?: { model?: string | null }) => {
-      spawnModels.push(options?.model);
-      return spawnModels.length === 1 ? first : second;
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-m1", { models: MOCK_MODEL_OPTION });
+    let spawns = 0;
+    const spawn = () => {
+      spawns++;
+      return process;
     };
 
-    const handle1 = await registry.acquire(
-      testSession(idA, {
-        cwd: "C:/repo",
-        openingPrompt: null,
-        history: [],
-        model: "composer-2.5",
-        onStatus: () => {},
-        onTranscript: () => {},
-      }),
+    await registry.acquire(
+      testSession(idA, { cwd: "C:/repo", model: "composer-2.5[fast=true]" }),
       { spawn },
     );
-    expect(handle1.reused).toBe(false);
-    expect(spawnModels).toEqual(["composer-2.5"]);
+    expect(process.modelRequests()).toEqual(["composer-2.5[fast=true]"]);
 
-    const handle2 = await registry.acquire(
-      testSession(idA, {
-        cwd: "C:/repo",
-        openingPrompt: null,
-        history: [],
-        model: "gpt-5.5",
-        onStatus: () => {},
-        onTranscript: () => {},
-      }),
-      { spawn },
-    );
-    expect(handle2.reused).toBe(false);
-    expect(first.killed).toBe(true);
-    expect(spawnModels).toEqual(["composer-2.5", "gpt-5.5"]);
+    await registry.setModel(idA, "gpt-5.5[]");
+
+    expect(spawns).toBe(1);
+    expect(process.killed).toBe(false);
+    expect(process.currentModel()).toBe("gpt-5.5[]");
     expect(registry.hasWarm(idA)).toBe(true);
   });
+
+  it("migrates a legacy bare model id onto the agent's variant string", async () => {
+    const registry = new ChatSessionRegistry();
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-m2", { models: MOCK_MODEL_OPTION });
+
+    await registry.acquire(testSession(idA, { model: "composer-2.5" }), {
+      spawn: () => process,
+    });
+
+    expect(process.currentModel()).toBe("composer-2.5[fast=true]");
+  });
+
+  it("leaves the agent on its own default when the thread is on Auto", async () => {
+    const registry = new ChatSessionRegistry();
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-m3", { models: MOCK_MODEL_OPTION });
+
+    await registry.acquire(testSession(idA, { model: null }), {
+      spawn: () => process,
+    });
+
+    expect(process.modelRequests()).toEqual([]);
+  });
+
+  it("survives an agent that advertises no model selector", async () => {
+    const registry = new ChatSessionRegistry();
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-m4");
+
+    const handle = await registry.acquire(
+      testSession(idA, { model: "composer-2.5" }),
+      { spawn: () => process },
+    );
+
+    expect(handle.reused).toBe(false);
+    expect(process.modelRequests()).toEqual([]);
+    await expect(registry.setModel(idA, "gpt-5.5[]")).resolves.toBeUndefined();
+  });
+
+  it("reports an agent-initiated model change to the session", async () => {
+    const registry = new ChatSessionRegistry();
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-m5", { models: MOCK_MODEL_OPTION });
+    const changes: string[] = [];
+
+    await registry.acquire(
+      testSession(idA, { onModelChanged: (value) => changes.push(value) }),
+      { spawn: () => process },
+    );
+
+    process.emit({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "sess-m5",
+        update: {
+          sessionUpdate: "config_option_update",
+          configOptions: [
+            {
+              id: "model",
+              category: "model",
+              type: "select",
+              currentValue: "gpt-5.5[]",
+              options: MOCK_MODEL_OPTION.values.map((value) => ({
+                value,
+                name: value,
+              })),
+            },
+          ],
+        },
+      },
+    });
+
+    await viWaitFor(() => changes.length > 0);
+    expect(changes).toEqual(["gpt-5.5[]"]);
+  });
 });
+
+describe("ChatSessionRegistry — spare pool", () => {
+  const cwd = "C:/repo";
+
+  it("hands a pre-warmed process to the first acquire, with no new spawn", async () => {
+    const registry = new ChatSessionRegistry();
+    const spare = new MockAcpProcess();
+    spare.autoHandshake("sess-spare");
+    const spawned: MockAcpProcess[] = [];
+    const spawn = () => {
+      const next = spawned.length === 0 ? spare : freshProcess(spawned.length);
+      spawned.push(next);
+      return next;
+    };
+
+    registry.prewarm(cwd, spawn);
+    await viWaitFor(() => registry.hasSpare(cwd));
+
+    const handle = await registry.acquire(testSession(idA, { cwd }), { spawn });
+
+    expect(handle.bridge.getMessages()).toEqual([]);
+    expect(registry.hasWarm(idA)).toBe(true);
+    expect(spare.killed).toBe(false);
+    // One process for the adopted session, one to top the spare back up.
+    expect(spawned).toHaveLength(2);
+    expect(registry.hasSpare(cwd)).toBe(true);
+    registry.closeSpares();
+  });
+
+  it("is idempotent per cwd, so a StrictMode double-mount warms one process", async () => {
+    const registry = new ChatSessionRegistry();
+    let spawns = 0;
+    const spawn = () => {
+      spawns++;
+      return freshProcess(spawns);
+    };
+
+    registry.prewarm(cwd, spawn);
+    registry.prewarm(cwd, spawn);
+    await viWaitFor(() => registry.hasSpare(cwd));
+
+    expect(spawns).toBe(1);
+    registry.closeSpares();
+  });
+
+  it("adopts the session's history and opening prompt onto the spare", async () => {
+    const registry = new ChatSessionRegistry();
+    const spare = new MockAcpProcess();
+    spare.autoHandshake("sess-adopt");
+    const history: UIMessage[] = [
+      { id: "u1", role: "user", parts: [{ type: "text", text: "earlier" }] },
+    ];
+
+    registry.prewarm(cwd, () => spare);
+    await viWaitFor(() => registry.hasSpare(cwd));
+
+    const handle = await registry.acquire(testSession(idA, { cwd, history }), {
+      spawn: () => freshProcess(99),
+    });
+
+    expect(handle.bridge.getMessages()).toEqual(history);
+    registry.closeSpares();
+  });
+
+  it("never evicts a live session to make room for a spare", async () => {
+    const registry = new ChatSessionRegistry();
+    const spawn = () => freshProcess(Math.random());
+
+    for (let i = 0; i < MAX_LIVE_SESSIONS; i++) {
+      await registry.acquire(
+        testSession(stepChatSessionId(`c${i}`, "grill", 0), { cwd }),
+        { spawn },
+      );
+    }
+
+    registry.prewarm(cwd, spawn);
+
+    expect(registry.hasSpare(cwd)).toBe(false);
+    for (let i = 0; i < MAX_LIVE_SESSIONS; i++) {
+      expect(registry.hasWarm(stepChatSessionId(`c${i}`, "grill", 0))).toBe(true);
+    }
+  });
+
+  it("evicts a spare for capacity only when it is the stalest process", async () => {
+    const registry = new ChatSessionRegistry();
+    const spawn = () => freshProcess(Math.random());
+
+    // Spare first, so it is the least-recently-used candidate.
+    registry.prewarm(cwd, spawn);
+    await viWaitFor(() => registry.hasSpare(cwd));
+    await new Promise((r) => setTimeout(r, 5));
+
+    for (let i = 0; i < MAX_LIVE_SESSIONS; i++) {
+      await registry.acquire(
+        // A different cwd, so these cold-spawn instead of claiming the spare.
+        testSession(stepChatSessionId(`c${i}`, "grill", 0), { cwd: "C:/other" }),
+        { spawn },
+      );
+      await new Promise((r) => setTimeout(r, 5));
+    }
+
+    // The spare was the stalest, so it went first and every session survived.
+    expect(registry.hasSpare(cwd)).toBe(false);
+    for (let i = 0; i < MAX_LIVE_SESSIONS; i++) {
+      expect(registry.hasWarm(stepChatSessionId(`c${i}`, "grill", 0))).toBe(true);
+    }
+  });
+
+  it("kills a spare whose handshake fails and does not hand it out", async () => {
+    const registry = new ChatSessionRegistry();
+    const failing = new MockAcpProcess();
+    failing.failHandshake("session/new", "auth required");
+    const replacement = new MockAcpProcess();
+    replacement.autoHandshake("sess-ok");
+    const spawns: MockAcpProcess[] = [];
+    const spawn = () => {
+      const next = spawns.length === 0 ? failing : replacement;
+      spawns.push(next);
+      return next;
+    };
+
+    registry.prewarm(cwd, spawn);
+    await viWaitFor(() => failing.killed);
+    expect(registry.hasSpare(cwd)).toBe(false);
+
+    // The next acquire cold-spawns rather than inheriting the dead spare.
+    const handle = await registry.acquire(testSession(idA, { cwd }), { spawn });
+    expect(handle.reused).toBe(false);
+    expect(registry.hasWarm(idA)).toBe(true);
+    registry.closeSpares();
+  });
+
+  it("cold-spawns instead of adopting a spare that died while it waited", async () => {
+    const registry = new ChatSessionRegistry();
+    const spare = new MockAcpProcess();
+    spare.autoHandshake("sess-dead");
+    const replacement = new MockAcpProcess();
+    replacement.autoHandshake("sess-live");
+    const spawns: MockAcpProcess[] = [];
+    const spawn = () => {
+      const next = spawns.length === 0 ? spare : replacement;
+      spawns.push(next);
+      return next;
+    };
+
+    registry.prewarm(cwd, spawn);
+    await viWaitFor(() => registry.hasSpare(cwd));
+
+    // Nobody is watching a spare, so its death has to be noticed at claim time.
+    spare.exit({ code: 1, stderr: "agent crashed" });
+
+    const handle = await registry.acquire(testSession(idA, { cwd }), { spawn });
+
+    expect(handle.bridge.hasOpenSession()).toBe(true);
+    expect(spawns).toEqual([spare, replacement]);
+    expect(registry.hasWarm(idA)).toBe(true);
+    registry.closeSpares();
+  });
+
+  it("kills every spare on shutdown so no orphan agent survives", async () => {
+    const registry = new ChatSessionRegistry();
+    const spare = new MockAcpProcess();
+    spare.autoHandshake("sess-shutdown");
+
+    registry.prewarm(cwd, () => spare);
+    await viWaitFor(() => registry.hasSpare(cwd));
+
+    registry.closeSpares();
+
+    expect(spare.killed).toBe(true);
+    expect(registry.hasSpare(cwd)).toBe(false);
+  });
+});
+
+let spareSeq = 0;
+function freshProcess(_tag: number | string): MockAcpProcess {
+  const process = new MockAcpProcess();
+  process.autoHandshake(`sess-auto-${spareSeq++}`);
+  return process;
+}

@@ -44,16 +44,42 @@ export interface ProjectChatRewindResult {
 export class ProjectChat {
   constructor(private readonly deps: ProjectChatDeps) {}
 
-  /** Pin model, then close warm ACP so the next open respawns with `--model`. */
-  setModel(threadId: string, model: string | null): ChatThread | undefined {
+  /**
+   * Pin the model and switch the live session in place via
+   * `session/set_config_option` — no respawn, no displacement, conversation
+   * preserved. A failed switch leaves the durable pin standing; it is applied
+   * the next time the session opens.
+   */
+  async setModel(
+    threadId: string,
+    model: string | null,
+  ): Promise<ChatThread | undefined> {
     const before = this.deps.threads.getThread(threadId);
     if (!before) return undefined;
     const thread = this.deps.threads.setModel(threadId, model);
     if (!thread) return undefined;
     if (before.model !== thread.model) {
-      this.deps.sessions.close(threadChatSessionId(threadId), "model changed");
+      try {
+        await this.deps.sessions.setModel(
+          threadChatSessionId(threadId),
+          thread.model,
+        );
+      } catch (e) {
+        console.error(
+          `chat thread ${threadId} model switch failed: ` +
+            (e instanceof Error ? e.message : String(e)),
+        );
+      }
     }
     return thread;
+  }
+
+  /**
+   * Warm a spare `agent acp` for the Project checkout. Every thread shares that
+   * cwd, so one spare covers the whole Chat page.
+   */
+  prewarm(): void {
+    this.deps.sessions.prewarm(this.deps.cwd, this.deps.spawn);
   }
 
   /** Evict warm ACP, then hard-delete the Chat Thread index + files. */

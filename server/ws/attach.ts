@@ -55,6 +55,8 @@ export class ChatConnection {
   private closed = false;
   private sending = false;
   private displaced = false;
+  /** Single-slot buffer for a user-message that arrives before ACP is open. */
+  private pendingUserMessage: WsClientMessage | null = null;
   private readonly sessionId: string;
   private readonly subscriber: ChunkSubscriber = {
     onChunk: (chunk) => this.send({ type: "chunk", chunk }),
@@ -176,6 +178,7 @@ export class ChatConnection {
       streaming: this.deps.sessions.isAiWorking(this.sessionId),
       promptCapabilities: this.handle.getPromptCapabilities(),
     });
+    await this.flushPendingUserMessage();
   }
 
   private sendOpenError(err: unknown): void {
@@ -204,7 +207,13 @@ export class ChatConnection {
       return;
     }
 
-    if (!this.handle) return;
+    if (!this.handle) {
+      // Park one early prompt; flushed at the end of finishOpen().
+      if (msg.type === "user-message") {
+        this.pendingUserMessage = msg;
+      }
+      return;
+    }
 
     if (msg.type === "permission-response") {
       if (typeof msg.requestId !== "string" || typeof msg.optionId !== "string") {
@@ -228,7 +237,23 @@ export class ChatConnection {
       return;
     }
 
-    if (this.sending) return;
+    if (msg.type !== "user-message") {
+      this.send({ type: "error", error: "unsupported message" });
+      return;
+    }
+
+    await this.deliverUserMessage(msg);
+  }
+
+  private async flushPendingUserMessage(): Promise<void> {
+    const pending = this.pendingUserMessage;
+    this.pendingUserMessage = null;
+    if (!pending || this.closed || !this.handle) return;
+    await this.deliverUserMessage(pending);
+  }
+
+  private async deliverUserMessage(msg: WsClientMessage): Promise<void> {
+    if (!this.handle || this.sending) return;
     if (msg.type !== "user-message" || typeof msg.text !== "string") {
       this.send({ type: "error", error: "unsupported message" });
       return;
@@ -288,6 +313,7 @@ export class ChatConnection {
   private shutdown(opts: { releaseSlot: boolean }): void {
     if (this.closed) return;
     this.closed = true;
+    this.pendingUserMessage = null;
     this.handle?.detach(this.subscriber);
     this.handle = null;
     if (opts.releaseSlot) {

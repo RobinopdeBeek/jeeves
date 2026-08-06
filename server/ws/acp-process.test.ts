@@ -9,25 +9,20 @@ import {
 } from "./acp-process.js";
 
 describe("buildAcpSpawnArgs", () => {
-  it("launches agent acp with no model flag by default", () => {
-    expect(buildAcpSpawnArgs([])).toEqual(["acp"]);
-  });
-
-  it("pins --model before acp when a model id is set", () => {
-    expect(buildAcpSpawnArgs([], "composer-2.5")).toEqual([
-      "--model",
-      "composer-2.5",
-      "acp",
-    ]);
-  });
-
-  it("treats null/blank model as CLI default (no --model)", () => {
-    expect(buildAcpSpawnArgs(["--api-key", "x"], null)).toEqual([
+  it("appends the acp subcommand to the launch args", () => {
+    expect(buildAcpSpawnArgs(["--api-key", "x"])).toEqual([
       "--api-key",
       "x",
       "acp",
     ]);
-    expect(buildAcpSpawnArgs([], "  ")).toEqual(["acp"]);
+  });
+
+  /**
+   * Processes are model-agnostic so a warm spare can serve any thread; the model
+   * is set per session over `session/set_config_option` instead.
+   */
+  it("never pins a model at spawn", () => {
+    expect(buildAcpSpawnArgs([])).toEqual(["acp"]);
   });
 });
 

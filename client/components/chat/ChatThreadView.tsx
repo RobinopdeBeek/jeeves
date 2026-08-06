@@ -7,6 +7,7 @@ import { Link } from "react-router-dom";
 import { Thread, ThreadShell } from "@/components/assistant-ui/thread";
 import { ChatModelPicker } from "@/components/chat/ChatModelPicker";
 import { ReconnectingBanner } from "@/components/chat/ReconnectingBanner";
+import { SessionErrorBanner } from "@/components/chat/SessionErrorBanner";
 import { FrozenTranscriptView } from "@/components/grill/ReadOnlyTranscript";
 import { PermissionDataUI } from "@/components/grill/PermissionPartView";
 import { GrillTransportContext } from "@/components/grill/transport-context";
@@ -70,8 +71,8 @@ export function ChatThreadView({
       </div>
       {thread ? (
         <LiveProjectChat
-          // Remount on model pin change (spawn identity); soft-reattach on Rewind.
-          key={`${thread.id}:${thread.model ?? ""}`}
+          // Model changes switch in place now, so only the thread is identity.
+          key={thread.id}
           thread={thread}
           welcomeTitle={thread.title.trim() || "New Chat"}
           onStreamingSettled={onStreamingSettled}
@@ -108,7 +109,7 @@ function LiveProjectChat({
     <ChatModelPicker
       model={thread.model}
       onModelChange={session.handleModelChange}
-      disabled={chat.status === "connecting" || session.rewinding}
+      disabled={session.rewinding}
     />
   );
 
@@ -121,14 +122,11 @@ function LiveProjectChat({
     );
   }
 
-  if (chat.status === "connecting" || session.rewinding) {
+  if (session.rewinding) {
     return <ThreadShell composerLeading={modelPicker} />;
   }
 
   if (chat.status === "displaced") {
-    if (chat.reason === "model changed") {
-      return <ThreadShell composerLeading={modelPicker} />;
-    }
     return (
       <DisplacedProjectChat reason={chat.reason} messages={chat.messages} />
     );
@@ -137,6 +135,9 @@ function LiveProjectChat({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {chat.connection === "reconnecting" ? <ReconnectingBanner /> : null}
+      {chat.sessionError ? (
+        <SessionErrorBanner error={chat.sessionError} />
+      ) : null}
       <AcpChatProvider
         key={`${chat.epoch}:${chat.attachmentsEnabled ? "att" : "plain"}`}
         transport={chat.transport}
@@ -150,10 +151,8 @@ function LiveProjectChat({
         <GrillTransportContext.Provider value={chat.transport}>
           <PermissionDataUI />
           <Thread
-            sessionOpen={chat.sessionOpen && !session.rewinding}
             welcomeTitle={welcomeTitle}
             attachmentsEnabled={chat.attachmentsEnabled}
-            openingPlaceholder="Warming agent — you can type…"
             composerLeading={modelPicker}
             rewind={{
               getBranches: (id) => session.branchAdapter.getBranches(id),

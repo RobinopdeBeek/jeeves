@@ -1,10 +1,33 @@
 import type { WSContext } from "hono/ws";
 import { describe, expect, it } from "vitest";
+import type { WsClientMessage } from "../../shared/chat-ws.js";
 import { ChatConnection, type ChatWsDeps } from "./attach.js";
 
 const stepTarget = {
   kind: "step" as const,
   ref: { cardId: "c1", stepKey: "grill" as const, round: 0 },
+};
+
+type ConnInternals = {
+  handle: {
+    cancelTurn: () => void;
+    sendMessage: (
+      text: string,
+      opts?: { liveDraftBody?: string; attachments?: unknown },
+    ) => Promise<void>;
+    respondToPermission: () => void;
+    attach: () => void;
+    detach: () => void;
+    getPendingPermissionIds: () => string[];
+    getPromptCapabilities: () => {
+      image: boolean;
+      audio: boolean;
+      embeddedContext: boolean;
+    };
+  } | null;
+  sending: boolean;
+  pendingUserMessage: WsClientMessage | null;
+  flushPendingUserMessage: () => Promise<void>;
 };
 
 function harness() {
@@ -13,8 +36,47 @@ function harness() {
     send: (data: string) => sent.push(data),
     close: () => {},
   } as unknown as WSContext;
-  // Liveness is answered before openChat runs, so no deps are touched.
-  return { sent, conn: new ChatConnection(ws, stepTarget, {} as ChatWsDeps) };
+  // Minimal sessions stub so close()/displace() can release the writer slot.
+  const deps = {
+    sessions: {
+      claim: () => {},
+      release: () => {},
+      isAiWorking: () => false,
+    },
+  } as unknown as ChatWsDeps;
+  return { sent, conn: new ChatConnection(ws, stepTarget, deps) };
+}
+
+function injectHandle(
+  conn: ChatConnection,
+  overrides: Partial<NonNullable<ConnInternals["handle"]>> = {},
+): {
+  sends: Array<{
+    text: string;
+    opts?: { liveDraftBody?: string; attachments?: unknown };
+  }>;
+} {
+  const sends: Array<{
+    text: string;
+    opts?: { liveDraftBody?: string; attachments?: unknown };
+  }> = [];
+  (conn as unknown as ConnInternals).handle = {
+    cancelTurn: () => {},
+    sendMessage: async (text, opts) => {
+      sends.push({ text, opts });
+    },
+    respondToPermission: () => {},
+    attach: () => {},
+    detach: () => {},
+    getPendingPermissionIds: () => [],
+    getPromptCapabilities: () => ({
+      image: false,
+      audio: false,
+      embeddedContext: false,
+    }),
+    ...overrides,
+  };
+  return { sends };
 }
 
 describe("ChatConnection liveness", () => {
@@ -28,39 +90,75 @@ describe("ChatConnection liveness", () => {
     ]);
   });
 
-  it("ignores user turns until a session handle is attached", async () => {
+  it("buffers a user-message until the session handle is attached, then delivers once", async () => {
     const { sent, conn } = harness();
+    const internals = conn as unknown as ConnInternals;
 
-    await conn.onClientMessage(JSON.stringify({ type: "user-message", text: "hi" }));
-
+    await conn.onClientMessage(
+      JSON.stringify({ type: "user-message", text: "hi" }),
+    );
     expect(sent).toEqual([]);
+    expect(internals.pendingUserMessage).toEqual({
+      type: "user-message",
+      text: "hi",
+    });
+
+    const { sends } = injectHandle(conn);
+    await internals.flushPendingUserMessage();
+
+    expect(sends).toEqual([{ text: "hi", opts: {} }]);
+    expect(internals.pendingUserMessage).toBeNull();
+
+    // Second flush is a no-op — delivered exactly once.
+    await internals.flushPendingUserMessage();
+    expect(sends).toHaveLength(1);
+  });
+
+  it("drops a buffered user-message without error when the connection closes before open", async () => {
+    const { sent, conn } = harness();
+    const internals = conn as unknown as ConnInternals;
+
+    await conn.onClientMessage(
+      JSON.stringify({ type: "user-message", text: "hi" }),
+    );
+    expect(internals.pendingUserMessage).not.toBeNull();
+
+    conn.close();
+    expect(internals.pendingUserMessage).toBeNull();
+    expect(sent).toEqual([]);
+
+    const { sends } = injectHandle(conn);
+    await internals.flushPendingUserMessage();
+    expect(sends).toEqual([]);
+  });
+
+  it("keeps only the latest pending user-message (single slot)", async () => {
+    const { conn } = harness();
+    const internals = conn as unknown as ConnInternals;
+
+    await conn.onClientMessage(
+      JSON.stringify({ type: "user-message", text: "first" }),
+    );
+    await conn.onClientMessage(
+      JSON.stringify({ type: "user-message", text: "second" }),
+    );
+    expect(internals.pendingUserMessage).toEqual({
+      type: "user-message",
+      text: "second",
+    });
+
+    const { sends } = injectHandle(conn);
+    await internals.flushPendingUserMessage();
+    expect(sends).toEqual([{ text: "second", opts: {} }]);
   });
 
   it("forwards cancel mid-turn even while sending is latched", async () => {
     const cancelCalls: number[] = [];
     const { conn } = harness();
-    // Inject a handle the way start() would after openChat.
-    (
-      conn as unknown as {
-        handle: {
-          cancelTurn: () => void;
-          sendMessage: () => Promise<void>;
-          respondToPermission: () => void;
-          attach: () => void;
-          detach: () => void;
-          getPendingPermissionIds: () => string[];
-        };
-        sending: boolean;
-      }
-    ).handle = {
+    injectHandle(conn, {
       cancelTurn: () => cancelCalls.push(1),
-      sendMessage: async () => {},
-      respondToPermission: () => {},
-      attach: () => {},
-      detach: () => {},
-      getPendingPermissionIds: () => [],
-    };
-    (conn as unknown as { sending: boolean }).sending = true;
+    });
+    (conn as unknown as ConnInternals).sending = true;
 
     await conn.onClientMessage(JSON.stringify({ type: "cancel" }));
 
@@ -82,45 +180,14 @@ describe("ChatConnection attachments", () => {
       send: (data: string) => sent.push(data),
       close: () => {},
     } as unknown as WSContext;
-    const sends: Array<{
-      text: string;
-      opts?: { liveDraftBody?: string; attachments?: unknown };
-    }> = [];
     const conn = new ChatConnection(ws, stepTarget, {} as ChatWsDeps);
-    (
-      conn as unknown as {
-        handle: {
-          cancelTurn: () => void;
-          sendMessage: (
-            text: string,
-            opts?: { liveDraftBody?: string; attachments?: unknown },
-          ) => Promise<void>;
-          respondToPermission: () => void;
-          attach: () => void;
-          detach: () => void;
-          getPendingPermissionIds: () => string[];
-          getPromptCapabilities: () => {
-            image: boolean;
-            audio: boolean;
-            embeddedContext: boolean;
-          };
-        };
-      }
-    ).handle = {
-      cancelTurn: () => {},
-      sendMessage: async (text, opts) => {
-        sends.push({ text, opts });
-      },
-      respondToPermission: () => {},
-      attach: () => {},
-      detach: () => {},
-      getPendingPermissionIds: () => [],
+    const { sends } = injectHandle(conn, {
       getPromptCapabilities: () => ({
         image: caps.image === true,
         audio: caps.audio === true,
         embeddedContext: caps.embeddedContext === true,
       }),
-    };
+    });
     return { sent, sends, conn };
   }
 

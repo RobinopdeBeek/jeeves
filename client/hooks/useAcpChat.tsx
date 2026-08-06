@@ -1,13 +1,15 @@
 import { useChat } from "@ai-sdk/react";
 import { useAISDKRuntime } from "@assistant-ui/react-ai-sdk";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ChatTransport, UIMessage } from "ai";
 import type { PromptCapabilities } from "@shared/chat-ws";
 import type { BranchableTranscript } from "@shared/branchable-transcript";
 import {
   attachmentAcceptFor,
+  hasNoPromptCapabilities,
   EMPTY_PROMPT_CAPABILITIES,
+  OPTIMISTIC_PROMPT_CAPABILITIES,
 } from "@shared/prompt-capabilities";
 import type { TasksDraftTip } from "@/lib/api";
 import { createAcpAttachmentAdapter } from "./acp-attachment-adapter";
@@ -20,7 +22,13 @@ function capsFromTransport(transport: AcpChatTransport): {
   promptCapabilities: PromptCapabilities;
   attachmentsEnabled: boolean;
 } {
-  const promptCapabilities = transport.getPromptCapabilities();
+  const negotiated = transport.getPromptCapabilities();
+  // Before the handshake reports anything, assume images so the paperclip is
+  // live from the first paint. Also keeps `attachmentsEnabled` from flipping
+  // once real caps land, which would remount the chat runtime mid-typing.
+  const promptCapabilities = hasNoPromptCapabilities(negotiated)
+    ? OPTIMISTIC_PROMPT_CAPABILITIES
+    : negotiated;
   return {
     promptCapabilities,
     attachmentsEnabled: attachmentAcceptFor(promptCapabilities).length > 0,
@@ -49,12 +57,11 @@ export interface UseAcpChatOptions {
 }
 
 export type AcpChatState =
-  | { status: "connecting" }
   | {
       status: "ready";
       transport: AcpChatTransport;
       messages: UIMessage[];
-      /** ACP handshake done — composer send is allowed. */
+      /** ACP handshake done. Sends are parked (not refused) until then. */
       sessionOpen: boolean;
       /** Socket health; "reconnecting" drives the recovery hint. */
       connection: ChatConnectionState;
@@ -67,6 +74,11 @@ export type AcpChatState =
       promptCapabilities: PromptCapabilities;
       /** True when the session advertises at least one attachable kind. */
       attachmentsEnabled: boolean;
+      /**
+       * The agent failed to start. The composer stays live and the next send
+       * retries — never an error screen that discards the typed message.
+       */
+      sessionError: string | null;
     }
   | {
       status: "displaced";
@@ -75,6 +87,23 @@ export type AcpChatState =
       messages: UIMessage[];
     }
   | { status: "error"; error: string };
+
+/**
+ * Live from the first frame: the transport is already there, history is empty
+ * and `sessionOpen` is false. No caller ever swaps components during startup.
+ */
+function liveState(transport: AcpChatTransport): AcpChatState {
+  return {
+    status: "ready",
+    transport,
+    messages: [],
+    sessionOpen: transport.isSessionOpen(),
+    connection: transport.getConnectionState(),
+    epoch: 0,
+    sessionError: null,
+    ...capsFromTransport(transport),
+  };
+}
 
 /**
  * Custom ChatTransport hook: connects Grill / Spec / Tasks / Project Chat to AcpBridge.
@@ -94,7 +123,7 @@ export function useAcpChat({
   softDisplaceReasons = [],
   onBranchable,
 }: UseAcpChatOptions): AcpChatState {
-  const [state, setState] = useState<AcpChatState>({ status: "connecting" });
+  const [state, setState] = useState<AcpChatState | null>(null);
   const getLiveDraftRef = useRef(getLiveDraftBody);
   getLiveDraftRef.current = getLiveDraftBody;
   const onRevisedRef = useRef(onSpecRevised);
@@ -108,12 +137,29 @@ export function useAcpChat({
   const softDisplaceRef = useRef(softDisplaceReasons);
   softDisplaceRef.current = softDisplaceReasons;
   const injectLiveDraft = getLiveDraftBody != null;
+  const identity = [
+    cardId ?? "",
+    stepKey ?? "",
+    String(round),
+    threadId ?? "",
+    injectLiveDraft ? "draft" : "",
+  ].join("|");
 
-  useEffect(() => {
-    let cancelled = false;
-    setState({ status: "connecting" });
+  /** Ignore updates from a transport that a chat identity change superseded. */
+  const liveTransport = useRef<AcpChatTransport | null>(null);
+  function apply(
+    transport: AcpChatTransport,
+    next: (prev: AcpChatState) => AcpChatState,
+  ): void {
+    if (liveTransport.current !== transport) return;
+    setState((prev) => next(prev ?? liveState(transport)));
+  }
 
-    const transport = new AcpChatTransport({
+  // Constructing a transport opens nothing (connect() does), so it is safe to
+  // build during render — which is what lets the very first paint carry a live
+  // composer instead of a startup shell.
+  function buildTransport(): AcpChatTransport {
+    const transport: AcpChatTransport = new AcpChatTransport({
       cardId,
       stepKey,
       round,
@@ -126,12 +172,16 @@ export function useAcpChat({
       onStreamingChange: (streaming) => onStreamingRef.current?.(streaming),
       onBranchable: (branchable) => onBranchableRef.current?.(branchable),
       softDisplaceReasons: softDisplaceRef.current,
+      onSessionError: (error) => {
+        apply(transport, (prev) =>
+          prev.status === "ready" ? { ...prev, sessionError: error } : prev,
+        );
+      },
       onConnectionChange: (connection) => {
-        if (cancelled) return;
-        setState((prev) => {
+        apply(transport, (prev) => {
           if (prev.status !== "ready") return prev;
           // Keep sessionOpen across reconnect so Stop stays visible mid-turn.
-          // Only a hard close hides Send/Cancel (spinner).
+          // Only a hard close hides Send/Cancel.
           const sessionOpen =
             connection === "closed"
               ? false
@@ -142,33 +192,31 @@ export function useAcpChat({
             ...prev,
             connection,
             sessionOpen,
+            // Any fresh attempt clears the last startup failure.
+            sessionError: connection === "closed" ? prev.sessionError : null,
             ...capsFromTransport(transport),
           };
         });
       },
       onReconnected: (history, opts) => {
-        if (cancelled) return;
         if (opts.branchable) onBranchableRef.current?.(opts.branchable);
-        setState((prev) =>
-          prev.status === "ready" || prev.status === "connecting"
+        apply(transport, (prev) =>
+          prev.status === "ready"
             ? {
-                status: "ready",
-                transport,
+                ...prev,
                 messages: history,
                 sessionOpen: transport.isSessionOpen(),
                 connection: transport.getConnectionState(),
-                epoch:
-                  prev.status === "ready" ? prev.epoch + 1 : Date.now(),
+                epoch: prev.epoch + 1,
                 ...capsFromTransport(transport),
               }
             : prev,
         );
       },
       onDisplaced: (reason) => {
-        if (cancelled) return;
         if (softDisplaceRef.current.includes(reason)) {
           // Soft path: transport already reconnecting; mirror reconnecting UI.
-          setState((prev) =>
+          apply(transport, (prev) =>
             prev.status === "ready"
               ? {
                   ...prev,
@@ -180,73 +228,93 @@ export function useAcpChat({
           );
           return;
         }
-        setState((prev) => ({
+        apply(transport, (prev) => ({
           status: "displaced",
           reason,
           messages: prev.status === "ready" ? prev.messages : [],
         }));
       },
     });
+    return transport;
+  }
 
+  const [entry, setEntry] = useState(() => ({
+    identity,
+    transport: buildTransport(),
+  }));
+  let current = entry;
+  let currentState = state;
+  if (entry.identity !== identity) {
+    current = { identity, transport: buildTransport() };
+    currentState = null;
+    setEntry(current);
+    setState(null);
+  }
+  liveTransport.current = current.transport;
+  const transport = current.transport;
+  const startupState = useMemo(() => liveState(transport), [transport]);
+
+  useEffect(() => {
     void transport
       .connect()
       .then((history) => {
-        if (cancelled) return;
-        setState({
-          status: "ready",
-          transport,
-          messages: history,
-          sessionOpen: transport.isSessionOpen(),
-          connection: transport.getConnectionState(),
-          epoch: 0,
-          ...capsFromTransport(transport),
+        apply(transport, (prev) => {
+          if (prev.status !== "ready") return prev;
+          const synced = {
+            ...prev,
+            sessionOpen: transport.isSessionOpen(),
+            connection: transport.getConnectionState(),
+            ...capsFromTransport(transport),
+          };
+          // Re-seeding remounts the chat runtime, so only pay for it when there
+          // is history to seed — a brand-new chat never remounts.
+          return history.length > 0
+            ? { ...synced, messages: history, epoch: prev.epoch + 1 }
+            : synced;
         });
         void transport
           .whenSessionOpen()
           .then(() => {
-            if (cancelled) return;
-            setState((prev) =>
+            apply(transport, (prev) =>
               prev.status === "ready"
                 ? {
                     ...prev,
                     sessionOpen: true,
                     connection: "open",
+                    sessionError: null,
                     ...capsFromTransport(transport),
                   }
                 : prev,
             );
           })
           .catch((err: unknown) => {
-            if (cancelled) return;
-            setState((prev) => {
-              if (prev.status === "displaced") return prev;
-              return {
-                status: "error",
-                error: err instanceof Error ? err.message : String(err),
-              };
-            });
+            apply(transport, (prev) =>
+              prev.status === "ready"
+                ? { ...prev, sessionError: errorText(err) }
+                : prev,
+            );
           });
       })
       .catch((err: unknown) => {
-        if (!cancelled) {
-          setState((prev) => {
-            if (prev.status === "displaced") return prev;
-            return {
-              status: "error",
-              error: err instanceof Error ? err.message : String(err),
-            };
-          });
-        }
+        // The socket itself is unreachable — there is no chat to keep live.
+        apply(transport, (prev) =>
+          prev.status === "displaced"
+            ? prev
+            : { status: "error", error: errorText(err) },
+        );
       });
 
     return () => {
-      cancelled = true;
       // CONNECTING-safe close waits for open before closing (no setTimeout defer).
       transport.close();
     };
-  }, [cardId, stepKey, round, threadId, injectLiveDraft]);
+  }, [transport]);
 
-  return state;
+  return currentState ?? startupState;
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /**

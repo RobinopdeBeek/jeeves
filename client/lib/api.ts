@@ -146,8 +146,9 @@ export interface ChatThread {
   lastOpenedAt: string | null;
 }
 
-/** Cursor Agent CLI model row for the Project Chat picker. */
+/** Agent model row for the Project Chat picker (ACP session config option). */
 export interface AgentModel {
+  /** ACP config value — a variant string like `composer-2.5[fast=true]`. */
   id: string;
   displayName: string;
   current: boolean;

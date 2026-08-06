@@ -8,7 +8,11 @@ import {
   decideInteractivePermission,
   type ChunkSubscriber,
 } from "./chat.js";
-import { MockAcpProcess, viWaitFor } from "./mock-acp-process.js";
+import {
+  MOCK_MODEL_OPTION,
+  MockAcpProcess,
+  viWaitFor,
+} from "./mock-acp-process.js";
 
 function collectingSubscriber(): ChunkSubscriber & { chunks: UIMessageChunk[] } {
   const chunks: UIMessageChunk[] = [];
@@ -1286,6 +1290,208 @@ describe("AcpBridge", () => {
       result: { stopReason: "end_turn" },
     });
     await replyPromise;
+  });
+});
+
+/**
+ * `adopt` is what lets a pre-warmed spare be handed to a chat: everything after
+ * the handshake, with no ACP traffic of its own.
+ */
+describe("AcpBridge.adopt", () => {
+  async function warmBridge(sessionId: string) {
+    const process = new MockAcpProcess();
+    process.autoHandshake(sessionId, { models: MOCK_MODEL_OPTION });
+    const bridge = new AcpBridge({ spawn: () => process });
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: null,
+      history: [],
+    });
+    return { bridge, process };
+  }
+
+  it("binds history onto a handshaked session without touching the process", async () => {
+    const { bridge, process } = await warmBridge("sess-adopt-history");
+    const history: UIMessage[] = [
+      { id: "a1", role: "assistant", parts: [{ type: "text", text: "hi" }] },
+    ];
+
+    bridge.adopt({ openingPrompt: "should not be sent", history });
+
+    expect(bridge.getMessages()).toEqual(history);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(process.prompts()).toHaveLength(0);
+  });
+
+  it("fires the opening turn when adopted with empty history", async () => {
+    const { bridge, process } = await warmBridge("sess-adopt-opener");
+
+    bridge.adopt({ openingPrompt: "Grill me", history: [] });
+
+    await viWaitFor(() => process.prompts().length === 1);
+    expect(promptText(process)).toBe("Grill me");
+  });
+
+  it("routes callbacks rewired after the handshake to the adopting chat", async () => {
+    const { bridge, process } = await warmBridge("sess-adopt-callbacks");
+    const statuses: Array<"ai-working" | "needs-user"> = [];
+    bridge.setLiveCallbacks({
+      onStatus: (status) => statuses.push(status),
+      onTranscript: () => {},
+    });
+
+    bridge.adopt({ openingPrompt: "Go", history: [] });
+
+    await viWaitFor(() => statuses.length > 0);
+    expect(statuses[0]).toBe("ai-working");
+    expect(process.prompts()).toHaveLength(1);
+  });
+
+  it("refuses to adopt before the handshake has landed", () => {
+    const bridge = new AcpBridge({ spawn: () => new MockAcpProcess() });
+    expect(() => bridge.adopt({ openingPrompt: null, history: [] })).toThrow(
+      /session not open/i,
+    );
+  });
+});
+
+describe("AcpBridge model config option", () => {
+  it("captures the model selector from session/new", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-model-opt", { models: MOCK_MODEL_OPTION });
+    const bridge = new AcpBridge({ spawn: () => process });
+
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    expect(bridge.getModelOption()?.id).toBe("model");
+    expect(bridge.getCurrentModelValue()).toBe("default[]");
+  });
+
+  it("switches model in place and adopts the agent's echoed config state", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-model-set", { models: MOCK_MODEL_OPTION });
+    const bridge = new AcpBridge({ spawn: () => process });
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    await bridge.setModelValue("gpt-5.5[]");
+
+    expect(bridge.getCurrentModelValue()).toBe("gpt-5.5[]");
+    expect(process.currentModel()).toBe("gpt-5.5[]");
+    expect(process.killed).toBe(false);
+  });
+
+  it("skips the RPC when the session is already on that model", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-model-noop", { models: MOCK_MODEL_OPTION });
+    const bridge = new AcpBridge({ spawn: () => process });
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    await bridge.setModelValue("default[]");
+
+    expect(process.modelRequests()).toEqual([]);
+  });
+
+  it("throws for an agent that advertises no model selector", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-no-models");
+    const bridge = new AcpBridge({ spawn: () => process });
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    expect(bridge.getModelOption()).toBeNull();
+    await expect(bridge.setModelValue("gpt-5.5[]")).rejects.toThrow(
+      /model selector/i,
+    );
+  });
+
+  it("reports an agent-initiated switch via config_option_update", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-model-notify", { models: MOCK_MODEL_OPTION });
+    const changes: string[] = [];
+    const bridge = new AcpBridge({
+      spawn: () => process,
+      onModelChanged: (value) => changes.push(value),
+    });
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    process.emit({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "sess-model-notify",
+        update: {
+          sessionUpdate: "config_option_update",
+          configOptions: [
+            {
+              id: "model",
+              category: "model",
+              type: "select",
+              currentValue: "composer-2.5[fast=true]",
+              options: MOCK_MODEL_OPTION.values.map((value) => ({
+                value,
+                name: value,
+              })),
+            },
+          ],
+        },
+      },
+    });
+
+    await viWaitFor(() => changes.length > 0);
+    expect(changes).toEqual(["composer-2.5[fast=true]"]);
+    expect(bridge.getCurrentModelValue()).toBe("composer-2.5[fast=true]");
+  });
+
+  it("ignores a config_option_update that does not move the model", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-model-same", { models: MOCK_MODEL_OPTION });
+    const changes: string[] = [];
+    const bridge = new AcpBridge({
+      spawn: () => process,
+      onModelChanged: (value) => changes.push(value),
+    });
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    process.emit({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "sess-model-same",
+        update: {
+          sessionUpdate: "config_option_update",
+          configOptions: [
+            { id: "mode", category: "mode", type: "select", currentValue: "plan" },
+          ],
+        },
+      },
+    });
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(changes).toEqual([]);
+    expect(bridge.getCurrentModelValue()).toBe("default[]");
   });
 });
 

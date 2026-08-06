@@ -65,6 +65,48 @@ describe("buildPromptContentBlocks", () => {
       }),
     ).toThrow(/not supported|does not accept image/i);
   });
+
+  it("builds resource.text for markdown when embeddedContext is false", () => {
+    const md = `data:text/markdown;base64,${Buffer.from("# secret\n", "utf8").toString("base64")}`;
+    const blocks = buildPromptContentBlocks({
+      text: "read this",
+      attachments: [
+        { mediaType: "text/markdown", filename: "notes.md", url: md },
+      ],
+      caps: { ...EMPTY_PROMPT_CAPABILITIES, image: true },
+    });
+    expect(blocks[1]).toEqual({
+      type: "resource",
+      resource: {
+        uri: "attachment://notes.md",
+        mimeType: "text/markdown",
+        text: "# secret\n",
+      },
+    });
+  });
+
+  it("resolves sidecar pointers via resolveBytes", () => {
+    const blocks = buildPromptContentBlocks({
+      text: "img",
+      attachments: [
+        {
+          mediaType: "image/png",
+          filename: "dot.png",
+          url: "jeeves-attachment://chat/tid/aid",
+        },
+      ],
+      caps: imageCaps,
+      resolveBytes: () => ({
+        mimeType: "image/png",
+        data: "abc",
+      }),
+    });
+    expect(blocks[1]).toMatchObject({
+      type: "image",
+      mimeType: "image/png",
+      data: "abc",
+    });
+  });
 });
 
 describe("buildSeedPromptContentBlocks", () => {

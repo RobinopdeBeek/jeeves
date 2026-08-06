@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { formatChatAttachmentPointer } from "./attachment-refs.js";
 import {
   assertAttachmentsAllowed,
   attachmentAcceptFor,
@@ -32,17 +33,25 @@ describe("normalizePromptCapabilities", () => {
 });
 
 describe("attachmentAcceptFor", () => {
-  it("returns empty when nothing is enabled", () => {
-    expect(attachmentAcceptFor(EMPTY_PROMPT_CAPABILITIES)).toBe("");
+  it("always offers the text allowlist (Cursor resource override)", () => {
+    const accept = attachmentAcceptFor(EMPTY_PROMPT_CAPABILITIES);
+    expect(accept).toContain("text/*");
+    expect(accept).toContain("application/json");
+    expect(accept).toContain(".md");
+    expect(accept).not.toContain("application/pdf");
+    expect(accept).not.toContain("octet-stream");
   });
 
   it("offers image/* when image capability is true", () => {
-    expect(
-      attachmentAcceptFor({ ...EMPTY_PROMPT_CAPABILITIES, image: true }),
-    ).toBe("image/*");
+    const accept = attachmentAcceptFor({
+      ...EMPTY_PROMPT_CAPABILITIES,
+      image: true,
+    });
+    expect(accept).toContain("image/*");
+    expect(accept).toContain("text/*");
   });
 
-  it("joins enabled kinds", () => {
+  it("joins enabled media kinds with the text allowlist", () => {
     const accept = attachmentAcceptFor({
       image: true,
       audio: true,
@@ -50,6 +59,7 @@ describe("attachmentAcceptFor", () => {
     });
     expect(accept).toContain("image/*");
     expect(accept).toContain("audio/*");
+    expect(accept).toContain("text/*");
   });
 });
 
@@ -59,6 +69,10 @@ describe("classifyAttachmentKind", () => {
     expect(classifyAttachmentKind("AUDIO/mpeg")).toBe("audio");
     expect(classifyAttachmentKind("application/pdf")).toBe("resource");
     expect(classifyAttachmentKind("")).toBe("unsupported");
+  });
+
+  it("classifies empty MIME + text extension as resource", () => {
+    expect(classifyAttachmentKind("", "notes.md")).toBe("resource");
   });
 });
 
@@ -84,13 +98,43 @@ describe("assertAttachmentsAllowed", () => {
     ).toThrow(/not supported|does not accept image/i);
   });
 
-  it("rejects non-data URLs", () => {
+  it("allows markdown via Cursor text override when embeddedContext is false", () => {
+    expect(() =>
+      assertAttachmentsAllowed(
+        [
+          {
+            mediaType: "text/markdown",
+            filename: "notes.md",
+            url: "data:text/markdown;base64,YQ==",
+          },
+        ],
+        { ...EMPTY_PROMPT_CAPABILITIES, image: true },
+      ),
+    ).not.toThrow();
+  });
+
+  it("allows jeeves-attachment pointers", () => {
+    expect(() =>
+      assertAttachmentsAllowed(
+        [
+          {
+            mediaType: "image/png",
+            filename: "a.png",
+            url: formatChatAttachmentPointer("tid", "aid"),
+          },
+        ],
+        { ...EMPTY_PROMPT_CAPABILITIES, image: true },
+      ),
+    ).not.toThrow();
+  });
+
+  it("rejects non-data non-pointer URLs", () => {
     expect(() =>
       assertAttachmentsAllowed(
         [{ ...png, url: "https://example.com/a.png" }],
         { ...EMPTY_PROMPT_CAPABILITIES, image: true },
       ),
-    ).toThrow(/data URL/i);
+    ).toThrow(/data URL|jeeves-attachment/i);
   });
 
   it("rejects mediaType that disagrees with the data URL MIME", () => {
@@ -106,6 +150,21 @@ describe("assertAttachmentsAllowed", () => {
         { ...EMPTY_PROMPT_CAPABILITIES, image: true },
       ),
     ).toThrow(/media type mismatch/i);
+  });
+
+  it("rejects PDF when embeddedContext is false", () => {
+    expect(() =>
+      assertAttachmentsAllowed(
+        [
+          {
+            mediaType: "application/pdf",
+            filename: "a.pdf",
+            url: "data:application/pdf;base64,aa==",
+          },
+        ],
+        { ...EMPTY_PROMPT_CAPABILITIES, image: true },
+      ),
+    ).toThrow(/does not accept resource|Supported:/i);
   });
 });
 

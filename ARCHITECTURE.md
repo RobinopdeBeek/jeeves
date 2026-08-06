@@ -51,7 +51,10 @@ Laptop (always on)
 │     └── .jeeves/  — per-project store (created on first use)
 │           ├── jeeves.db
 │           ├── data/cards/<cardId>/<round>/   ← artifact folder
+│           ├── data/cards/<cardId>/attachments/  ← card Info library (SQL+bytes)
+│           ├── data/cards/<cardId>/chat-attachments/<stepKey>/  ← step-chat turn files
 │           ├── data/chat/<threadId>/          ← Project Chat transcripts
+│           │     └── attachments/             ← Project Chat turn files (sidecars)
 │           └── worktrees/<cardId>/            ← ephemeral agent checkouts
 └── Tailscale — phone/tablet/other machines reach the board privately
 ```
@@ -166,10 +169,11 @@ them. Everything else (routes, React components) is a thin adapter.
 |---|---|---|---|
 | `PipelineEngine` | `server/pipelines.ts` | pipeline lookup by `(kind, hasParent)`; real `advance(card, trigger)` → patches + side-effects (`enqueue`, `close-chat`) | all column/step transition rules, auto-advance, board predicates (`canCreateSpec`), "workflow is code" |
 | `CardStore` | `server/db/` + card logic | CRUD, kind decision, fan-out, blocker edges, derived queries ("X of Y", queue candidates, Round N history); persists `advance` patches | SQLite/Drizzle, active/merged/done cards + tip drafts in ArtifactStore, every derivation rule |
-| `ChatThreadStore` | `server/chat-threads/` | list / create-or-reuse empty draft / rename / set-model / mark-opened / hard-delete; load/save branchable transcript under `data/chat/`; truncate/switch rewind ops | SQLite `chat_threads` index (incl. per-thread model pin) + on-disk branch-aware transcripts (ADR 0015, ADR 0016) |
+| `ChatThreadStore` | `server/chat-threads/` | list / create-or-reuse empty draft / rename / set-model / mark-opened / hard-delete; load/save branchable transcript under `data/chat/`; truncate/switch rewind ops | SQLite `chat_threads` index (incl. per-thread model pin) + on-disk branch-aware transcripts (ADR 0015, ADR 0016); turn attachment sidecars under `attachments/` (ADR 0017) |
 | `ArtifactStore` | `server/artifacts/store.ts` + routes | `save`, `harvest(worktree, declarations)`, `list(card)`, serve-path resolution; transcript upsert is file/index only | atomic/versioned files, metadata, root containment, manifest regeneration, lineage, rounds, supersession |
+| `CardAttachmentStore` | `server/attachments/card-library.ts` + `routes/card-attachments.ts` | list / add / updateInstruction / delete / absolutePath for card Info library | SQLite `card_attachments` (incl. per-file instruction) + bytes under `data/cards/<cardId>/attachments/`; distinct from chat-turn sidecars (ADR 0017) |
 | `ExecutionEngine` | `server/execution/` (`engine.ts`, `runner.ts`, `worktree-manager.ts`, `cursor-sdk-runner.ts`, `run-store.ts`, `events.ts`) | `enqueue(card, step)` + run events; `startPreview(card, gitSha)` / `stopPreview()`; dispatches `advance` side-effects on finish | `AgentRunner`, per-run worktrees/finalization, branch strategy, host-process preview lifecycle, sequential queue, blockers, restart recovery, eval sequencing |
-| `AcpBridge` | `server/ws/chat.ts` (+ `chat-session.ts`, `open-chat.ts`, `project-chat.ts`, `session-registry.ts`) | push-only `openSession` / `sendMessage` + `attach`/`onChunk`; headless `runToCompletion`; warm registry acquire/reattach on opaque ids; `ChatSession` + `openChat` / `ProjectChat` lifecycle (setModel / delete / rewind with explicit warm outcome) for adapters | spawning `agent acp`, ACP→`UIMessage` projection, permission responses (incl. headless cursor-like policy), JSON-RPC piping, warm cap/eviction, seed-once / nullable opener, disconnect/hand-off close, edit/branch rewind (truncate→close→respawn→reseed; durable rewind stands if warm fails) |
+| `AcpBridge` | `server/ws/chat.ts` (+ `chat-session.ts`, `open-chat.ts`, `project-chat.ts`, `session-registry.ts`) | push-only `openSession` / `sendMessage` + `attach`/`onChunk`; headless `runToCompletion`; warm registry acquire/reattach on opaque ids; `ChatSession` + `openChat` / `ProjectChat` lifecycle (setModel / delete / rewind with explicit warm outcome) for adapters | spawning `agent acp`, ACP→`UIMessage` projection, permission responses (incl. headless cursor-like policy), JSON-RPC piping, warm cap/eviction, seed-once / nullable opener, disconnect/hand-off close, edit/branch rewind (truncate→close→respawn→reseed; durable rewind stands if warm fails); attachment sidecar materialize/resolve (ADR 0017) |
 
 The AI-execution skill prompts live in `prompts/execution/` and are self-describing; the
 `ExecutionEngine` decides which skill runs when.
@@ -202,6 +206,12 @@ Entity definitions live in [`CONTEXT.md`](./CONTEXT.md); columns live in
   impl → eval).
   Evaluations are not committed to git; `git_sha` on the artifact row remains the link to the
   reviewed diff ([ADR 0011](./docs/adr/0011-project-store-in-target-repo-gitignored.md)).
+- A card may also own **card library attachments** (Info / Backlog inputs): SQLite
+  `card_attachments` rows (filename, media type, path, per-file instruction, origin step)
+  with bytes at `<repo>/.jeeves/data/cards/<cardId>/attachments/<id>-<safeName>`. Served at
+  `/api/cards/:id/attachments`. Hard-delete of the card cascades SQL and `removeCardFolder`
+  removes the directory. Not chat-turn sidecars and not `jeeves-attachment://` pointers
+  ([ADR 0017](./docs/adr/0017-chat-attachment-sidecars.md)).
 
 ---
 

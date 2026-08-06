@@ -76,6 +76,14 @@ A file produced by a step, stored in the project store's artifact folder and ind
 The mutable chat log for an AI chat step or Chat Thread, stored so the session can resume and be reviewed. Step transcripts are artifacts under a card (flat `UIMessage[]`). Project Chat transcripts are branch-aware (message tree + active head) under the project store's chat data area (`data/chat/<threadId>/`); the active path is what the agent sees. Not the Grill hand-off document Spec consumes.
 _Avoid_: Using "transcript" to mean the durable Grill Q&A artifact
 
+**Chat attachment**:
+A user-attached file on one Project Chat or step-chat turn. Bytes live as sidecars on disk; the transcript file part stores a `jeeves-attachment://` pointer ([ADR 0017](docs/adr/0017-chat-attachment-sidecars.md)). Distinct from execution failure diagnostic artifacts (`kind: "attachment"`) and from Card attachments.
+_Avoid_: Calling these "artifacts" without qualification; reusing the diagnostic `attachment` kind; using `jeeves-attachment://` for Card attachments
+
+**Card attachment**:
+A first-class file on a Card (Info / Backlog), with optional per-file instruction for downstream steps. Metadata in SQLite `card_attachments`; bytes under `data/cards/<cardId>/attachments/`. Managed via `/api/cards/:id/attachments`. Not a Chat attachment sidecar and not an execution `kind: "attachment"` diagnostic.
+_Avoid_: Chat attachment; reusing `jeeves-attachment://` pointers for Card attachment files
+
 **Project Chat**:
 A freeform ACP conversation against the active Project's repo, owned by the Project rather than any Card or Step. Distinct from step chats (Grill, Spec assist, Tasks assist), which are pipeline-bound and keyed by card/step/round.
 _Avoid_: Using "chat" alone when the Card/Step vs Project distinction matters; Global chat

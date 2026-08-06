@@ -1,74 +1,84 @@
 import type { AttachmentAdapter } from "@assistant-ui/core";
 import { generateId } from "ai";
+import { guessTextMediaType } from "@shared/attachment-refs";
 import {
   attachmentAcceptFor,
   type PromptCapabilities,
 } from "@shared/prompt-capabilities";
 
-async function fileToDataUrl(file: File): Promise<string> {
-  if (typeof FileReader === "undefined") {
-    const buffer = await file.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
-    let binary = "";
-    const chunkSize = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-    }
-    const b64 =
-      typeof btoa === "function"
-        ? btoa(binary)
-        : Buffer.from(bytes).toString("base64");
-    return `data:${file.type || "application/octet-stream"};base64,${b64}`;
-  }
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = (error) => reject(error);
-    reader.readAsDataURL(file);
-  });
+export type AttachmentUploadTarget =
+  | { kind: "chat"; threadId: string }
+  | { kind: "step"; cardId: string; stepKey: string };
+
+export type UploadChatAttachment = (
+  target: AttachmentUploadTarget,
+  file: File,
+) => Promise<{ mediaType: string; filename?: string; url: string }>;
+
+function resolveContentType(file: File): string {
+  return (
+    file.type ||
+    guessTextMediaType(file.name) ||
+    "application/octet-stream"
+  );
 }
 
 /**
  * Capability-gated attachment adapter for ACP composers.
- * `accept` is empty when the session advertises no prompt attachment kinds.
+ * Uploads bytes to a sidecar via REST, then puts a pointer URL on the file
+ * part — never a base64 data URL (ADR 0017).
  */
 export function createAcpAttachmentAdapter(
   caps: PromptCapabilities,
+  opts: {
+    target: AttachmentUploadTarget | null;
+    upload: UploadChatAttachment;
+  },
 ): AttachmentAdapter {
   const accept = attachmentAcceptFor(caps);
   return {
     accept,
     async add({ file }) {
+      const contentType = resolveContentType(file);
       return {
         id: generateId(),
-        type: file.type.startsWith("image/")
+        type: contentType.startsWith("image/")
           ? "image"
-          : file.type.startsWith("audio/")
+          : contentType.startsWith("audio/")
             ? "file"
             : "document",
         name: file.name,
         file,
-        contentType: file.type,
+        contentType,
         content: [],
         status: { type: "requires-action", reason: "composer-send" },
       };
     },
     async send(attachment) {
+      if (!opts.target) {
+        throw new Error("Cannot upload attachment: chat session has no owner.");
+      }
+      const mimeType =
+        attachment.contentType ||
+        resolveContentType(attachment.file) ||
+        "application/octet-stream";
+      const uploaded = await opts.upload(opts.target, attachment.file);
       return {
         ...attachment,
         status: { type: "complete" },
         content: [
           {
             type: "file",
-            mimeType: attachment.contentType ?? "application/octet-stream",
-            filename: attachment.name,
-            data: await fileToDataUrl(attachment.file),
+            mimeType: uploaded.mediaType || mimeType,
+            filename: uploaded.filename ?? attachment.name,
+            // Pointer URL (jeeves-attachment://…) — assistant-ui maps `data` → part.url
+            data: uploaded.url,
           },
         ],
       };
     },
     async remove() {
-      // noop — local-only pending attachments
+      // noop — pending attachments are local until send uploads
     },
   };
 }

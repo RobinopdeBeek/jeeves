@@ -157,6 +157,29 @@ export class AcpChatTransport {
 
   constructor(private readonly options: AcpChatTransportOptions) {}
 
+  /** Owner coords for REST sidecar upload before the WS turn. */
+  attachmentUploadTarget():
+    | { kind: "chat"; threadId: string }
+    | { kind: "step"; cardId: string; stepKey: string }
+    | null {
+    if (this.options.threadId != null && this.options.threadId !== "") {
+      return { kind: "chat", threadId: this.options.threadId };
+    }
+    if (
+      this.options.cardId != null &&
+      this.options.cardId !== "" &&
+      this.options.stepKey != null &&
+      this.options.stepKey !== ""
+    ) {
+      return {
+        kind: "step",
+        cardId: this.options.cardId,
+        stepKey: this.options.stepKey,
+      };
+    }
+    return null;
+  }
+
   /** True once the ACP session handshake finished (send is allowed). */
   isSessionOpen(): boolean {
     return this.sessionOpen && this.isSocketUsable() && !this.displaced;

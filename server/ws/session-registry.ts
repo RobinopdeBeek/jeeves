@@ -194,6 +194,8 @@ export class ChatSessionRegistry {
       onTurnComplete: session.onTurnComplete,
       frameUserMessage: session.frameUserMessage,
       onModelChanged: session.onModelChanged,
+      persistAttachments: session.persistAttachments,
+      resolveAttachmentBytes: session.resolveAttachmentBytes,
     });
 
     // A handshake already in flight owns this id. Wait for it rather than

@@ -1209,6 +1209,55 @@ describe("AcpBridge", () => {
     ]);
   });
 
+  it("materializes data URLs to pointers before transcript persist", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-sidecar", {
+      promptCapabilities: { image: true },
+    });
+    const transcripts: UIMessage[][] = [];
+    const pointerUrl = "jeeves-attachment://chat/tid/aid1";
+    const bridge = new AcpBridge({
+      spawn: () => process,
+      onTranscript: (messages) => transcripts.push(messages),
+      persistAttachments: (atts) =>
+        atts.map((a) => ({ ...a, url: pointerUrl })),
+      resolveAttachmentBytes: () => ({
+        mimeType: "image/png",
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      }),
+    });
+    await bridge.openSession({
+      cwd: "/repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    const replyPromise = bridge.sendMessage("What is this?", {
+      attachments: [
+        { mediaType: "image/png", filename: "dot.png", url: TINY_PNG },
+      ],
+    });
+    await viWaitFor(() => process.prompts().length === 1);
+    const promptReq = process.promptRequest();
+    process.emit({
+      jsonrpc: "2.0",
+      id: promptReq.id,
+      result: { stopReason: "end_turn" },
+    });
+    await replyPromise;
+
+    const user = transcripts.at(-1)?.find((m) => m.role === "user");
+    const filePart = user?.parts.find((p) => p.type === "file") as {
+      url: string;
+    };
+    expect(filePart.url).toBe(pointerUrl);
+    expect(process.prompts()[0]!.prompt).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "image", mimeType: "image/png" }),
+      ]),
+    );
+  });
+
   it("rejects unsupported attachments before prompting", async () => {
     const process = new MockAcpProcess();
     process.autoHandshake("sess-reject");

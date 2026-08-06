@@ -1,7 +1,15 @@
 import { Hono } from "hono";
+import fs from "node:fs";
 import type {
   RewindOp,
 } from "../../shared/branchable-transcript.js";
+import {
+  AttachmentStoreError,
+  chatAttachmentsDir,
+  contentTypeForAttachmentFile,
+  findAttachmentFile,
+  writeAttachmentBytes,
+} from "../attachments/store.js";
 import {
   ChatThreadStoreError,
   type ChatThreadStore,
@@ -111,6 +119,78 @@ export function chatThreadRoutes(
     const id = c.req.param("id");
     const ok = projectChat.deleteThread(id);
     return ok ? c.json({ ok: true }) : c.json({ error: "not found" }, 404);
+  });
+
+  /**
+   * Upload a Project Chat turn attachment (multipart). Returns a pointer
+   * ChatAttachment for the WS turn — bytes never go in transcript.json.
+   */
+  app.post("/:id/attachments", async (c) => {
+    const threadId = c.req.param("id");
+    if (!store.getThread(threadId)) {
+      return c.json({ error: "not found" }, 404);
+    }
+    try {
+      const body = await c.req.parseBody();
+      const file = body.file;
+      if (!(file instanceof File)) {
+        return c.json({ error: "file is required" }, 400);
+      }
+      const filename =
+        typeof body.filename === "string" && body.filename
+          ? body.filename
+          : file.name || undefined;
+      const mediaType =
+        typeof body.mediaType === "string" && body.mediaType
+          ? body.mediaType
+          : file.type || undefined;
+      const created = writeAttachmentBytes(
+        { kind: "chat", chatRoot: store.root, threadId },
+        {
+          filename,
+          mediaType,
+          bytes: Buffer.from(await file.arrayBuffer()),
+        },
+      );
+      return c.json(created, 201);
+    } catch (e) {
+      if (e instanceof AttachmentStoreError) {
+        return c.json({ error: e.message }, 400);
+      }
+      throw e;
+    }
+  });
+
+  /**
+   * Serve a Project Chat turn attachment sidecar by id.
+   * Path: data/chat/<threadId>/attachments/<attachmentId>-<safeName>
+   */
+  app.get("/:id/attachments/:attachmentId", (c) => {
+    const threadId = c.req.param("id");
+    const attachmentId = c.req.param("attachmentId");
+    if (!store.getThread(threadId)) {
+      return c.json({ error: "not found" }, 404);
+    }
+    try {
+      const dir = chatAttachmentsDir(store.root, threadId);
+      const abs = findAttachmentFile(dir, attachmentId);
+      if (!abs || !fs.existsSync(abs)) {
+        return c.json({ error: "not found" }, 404);
+      }
+      const body = fs.readFileSync(abs);
+      return new Response(body, {
+        status: 200,
+        headers: {
+          "Content-Type": contentTypeForAttachmentFile(abs),
+          "Cache-Control": "private, max-age=3600",
+        },
+      });
+    } catch (e) {
+      if (e instanceof AttachmentStoreError) {
+        return c.json({ error: e.message }, 400);
+      }
+      throw e;
+    }
   });
 
   return app;

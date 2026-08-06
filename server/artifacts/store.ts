@@ -80,6 +80,11 @@ export class ArtifactStore {
     private readonly artifactRoot: string,
   ) {}
 
+  /** Absolute project-store data root (`data/`). */
+  get root(): string {
+    return this.artifactRoot;
+  }
+
   save(input: SaveArtifactInput): Artifact {
     const id = nanoid(10);
     const createdAt = new Date();

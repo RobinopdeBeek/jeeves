@@ -1,4 +1,8 @@
 import type { UIMessage } from "ai";
+import {
+  materializeAttachments,
+  resolveAttachmentBytesForOwner,
+} from "../attachments/store.js";
 import type { ArtifactStore } from "../artifacts/store.js";
 import type { CardStore } from "../cards/store.js";
 import {
@@ -9,6 +13,7 @@ import type { EventBus } from "../execution/events.js";
 import { AUTO_MODEL_VALUE } from "../models/list-models.js";
 import type { StepKey } from "../pipelines.js";
 import { resolveProjectStorePaths } from "../project-store.js";
+import type { ChatAttachment } from "../../shared/prompt-capabilities.js";
 import type { AcpLiveCallbacks, InteractivePermissionPolicy } from "./chat.js";
 import {
   chatStepProfile,
@@ -58,6 +63,15 @@ export interface ChatSession {
   onTurnComplete?: AcpLiveCallbacks["onTurnComplete"];
   /** The agent switched model itself — persist so the picker follows. */
   onModelChanged?: AcpLiveCallbacks["onModelChanged"];
+  /** Rewrite live `data:` attachments to sidecars before transcript persist. */
+  persistAttachments?: (
+    attachments: ChatAttachment[],
+  ) => ChatAttachment[];
+  /** Resolve pointer / data: URL → base64 for ACP ContentBlocks. */
+  resolveAttachmentBytes?: (att: ChatAttachment) => {
+    mimeType: string;
+    data: string;
+  };
 }
 
 /** Server-built opaque id for a card step chat. */
@@ -189,6 +203,13 @@ export function createStepChatSession(
       : undefined,
   });
 
+  const attachmentOwner = {
+    kind: "step" as const,
+    artifactRoot: deps.artifacts.root,
+    cardId: ref.cardId,
+    stepKey: ref.stepKey,
+  };
+
   return {
     id: stepChatSessionIdFromRef(ref),
     cwd,
@@ -213,6 +234,12 @@ export function createStepChatSession(
     interactivePermissionPolicy: profile.interactivePermissionPolicy,
     frameUserMessage: profile.frameUserMessage,
     onTurnComplete: hooks.onTurnComplete,
+    persistAttachments: (attachments) =>
+      materializeAttachments(attachmentOwner, attachments),
+    resolveAttachmentBytes: (att) => {
+      const resolved = resolveAttachmentBytesForOwner(attachmentOwner, att);
+      return { mimeType: resolved.mimeType, data: resolved.data };
+    },
   };
 }
 
@@ -232,6 +259,12 @@ export function createProjectChatSession(
 ): ChatSession {
   const thread = deps.threads.getThread(ref.threadId);
   if (!thread) throw new Error("thread not found");
+
+  const attachmentOwner = {
+    kind: "chat" as const,
+    chatRoot: deps.threads.root,
+    threadId: ref.threadId,
+  };
 
   return {
     id: threadChatSessionId(ref.threadId),
@@ -263,6 +296,12 @@ export function createProjectChatSession(
         ref.threadId,
         deps.threads.loadTranscript(ref.threadId),
       );
+    },
+    persistAttachments: (attachments) =>
+      materializeAttachments(attachmentOwner, attachments),
+    resolveAttachmentBytes: (att) => {
+      const resolved = resolveAttachmentBytesForOwner(attachmentOwner, att);
+      return { mimeType: resolved.mimeType, data: resolved.data };
     },
   };
 }

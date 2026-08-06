@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import fs from "node:fs";
 import { CardStoreError, type KindPath } from "../cards/store.js";
 import type { CardStore } from "../cards/store.js";
 import type { Project } from "../db/schema.js";
@@ -15,9 +16,19 @@ import type { ExecutionEngine } from "../execution/engine.js";
 import type { EventBus } from "../execution/events.js";
 import type { RunStore } from "../execution/run-store.js";
 import type { ArtifactStore } from "../artifacts/store.js";
+import type { CardAttachmentStore } from "../attachments/card-library.js";
+import {
+  AttachmentStoreError,
+  contentTypeForAttachmentFile,
+  findAttachmentFile,
+  stepAttachmentsDir,
+  writeAttachmentBytes,
+} from "../attachments/store.js";
+import { isStepKey } from "../pipelines.js";
 import type { ChatSessionRegistry } from "../ws/session-registry.js";
 import type { SpawnAcp } from "../ws/chat.js";
 import { artifactRoutes } from "./artifacts.js";
+import { cardAttachmentRoutes } from "./card-attachments.js";
 
 function isKindPath(value: unknown): value is KindPath {
   return value === "feature" || value === "standalone";
@@ -28,6 +39,7 @@ export interface CardRouteDeps {
   runs: RunStore;
   events: EventBus;
   artifacts: ArtifactStore;
+  cardAttachments: CardAttachmentStore;
   sessions: ChatSessionRegistry;
   spawn: SpawnAcp;
   createSpec: CreateSpec;
@@ -236,6 +248,92 @@ export function cardRoutes(
   });
 
   app.route("/:id/artifacts", artifactRoutes(deps.artifacts));
+
+  app.route(
+    "/:id/attachments",
+    cardAttachmentRoutes(store, deps.cardAttachments),
+  );
+
+  /**
+   * Upload a step-chat turn attachment (multipart). Returns a pointer
+   * ChatAttachment — bytes live under chat-attachments/, not the Info library.
+   */
+  app.post("/:id/chat-attachments/:stepKey", async (c) => {
+    const cardId = c.req.param("id");
+    const stepKey = c.req.param("stepKey");
+    if (!store.getCard(cardId)) return c.json({ error: "not found" }, 404);
+    if (!isStepKey(stepKey)) {
+      return c.json({ error: "invalid step key" }, 400);
+    }
+    try {
+      const body = await c.req.parseBody();
+      const file = body.file;
+      if (!(file instanceof File)) {
+        return c.json({ error: "file is required" }, 400);
+      }
+      const filename =
+        typeof body.filename === "string" && body.filename
+          ? body.filename
+          : file.name || undefined;
+      const mediaType =
+        typeof body.mediaType === "string" && body.mediaType
+          ? body.mediaType
+          : file.type || undefined;
+      const created = writeAttachmentBytes(
+        {
+          kind: "step",
+          artifactRoot: deps.artifacts.root,
+          cardId,
+          stepKey,
+        },
+        {
+          filename,
+          mediaType,
+          bytes: Buffer.from(await file.arrayBuffer()),
+        },
+      );
+      return c.json(created, 201);
+    } catch (e) {
+      if (e instanceof AttachmentStoreError) {
+        return c.json({ error: e.message }, 400);
+      }
+      throw e;
+    }
+  });
+
+  /**
+   * Serve a step-chat turn attachment sidecar by id.
+   * Path: data/cards/<cardId>/chat-attachments/<stepKey>/<attachmentId>-<safeName>
+   */
+  app.get("/:id/chat-attachments/:stepKey/:attachmentId", (c) => {
+    const cardId = c.req.param("id");
+    const stepKey = c.req.param("stepKey");
+    const attachmentId = c.req.param("attachmentId");
+    if (!store.getCard(cardId)) return c.json({ error: "not found" }, 404);
+    if (!isStepKey(stepKey)) {
+      return c.json({ error: "invalid step key" }, 400);
+    }
+    try {
+      const dir = stepAttachmentsDir(deps.artifacts.root, cardId, stepKey);
+      const abs = findAttachmentFile(dir, attachmentId);
+      if (!abs || !fs.existsSync(abs)) {
+        return c.json({ error: "not found" }, 404);
+      }
+      const body = fs.readFileSync(abs);
+      return new Response(body, {
+        status: 200,
+        headers: {
+          "Content-Type": contentTypeForAttachmentFile(abs),
+          "Cache-Control": "private, max-age=3600",
+        },
+      });
+    } catch (e) {
+      if (e instanceof AttachmentStoreError) {
+        return c.json({ error: e.message }, 400);
+      }
+      throw e;
+    }
+  });
 
   app.post("/:id/steps/:stepKey/retry", (c) => {
     const stepKey = c.req.param("stepKey");

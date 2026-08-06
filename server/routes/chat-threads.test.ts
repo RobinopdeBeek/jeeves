@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { parseAttachmentPointer } from "../../shared/attachment-refs.js";
+import { materializeAttachment } from "../attachments/store.js";
 import { CardStore } from "../cards/store.js";
 import { ChatThreadStore } from "../chat-threads/store.js";
 import { openDb, type Db } from "../db/index.js";
@@ -10,6 +12,9 @@ import { MockAcpProcess } from "../ws/mock-acp-process.js";
 import { ProjectChat } from "../ws/project-chat.js";
 import { ChatSessionRegistry } from "../ws/session-registry.js";
 import { chatThreadRoutes } from "./chat-threads.js";
+
+const TINY_PNG =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 describe("chat thread routes", () => {
   let db: Db;
@@ -195,5 +200,67 @@ describe("chat thread routes", () => {
       headers: { "Content-Type": "application/json" },
     });
     expect(res.status).toBe(400);
+  });
+
+  it("serves chat attachment sidecar bytes", async () => {
+    const app = chatThreadRoutes(store, project, projectChat);
+    const created = (await (
+      await app.request("http://localhost/", { method: "POST" })
+    ).json()) as { id: string };
+
+    const written = materializeAttachment(
+      { kind: "chat", chatRoot, threadId: created.id },
+      { mediaType: "image/png", filename: "dot.png", url: TINY_PNG },
+    );
+    const pointer = parseAttachmentPointer(written.url)!;
+    expect(pointer.kind).toBe("chat");
+
+    const res = await app.request(
+      `http://localhost/${created.id}/attachments/${pointer.attachmentId}`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("image/png");
+    const buf = Buffer.from(await res.arrayBuffer());
+    expect(buf.length).toBeGreaterThan(0);
+
+    const missing = await app.request(
+      `http://localhost/${created.id}/attachments/nope`,
+    );
+    expect(missing.status).toBe(404);
+  });
+
+  it("uploads a turn attachment via multipart and returns a pointer", async () => {
+    const app = chatThreadRoutes(store, project, projectChat);
+    const created = (await (
+      await app.request("http://localhost/", { method: "POST" })
+    ).json()) as { id: string };
+
+    const form = new FormData();
+    form.append(
+      "file",
+      new File(["# uploaded\n"], "notes.md", { type: "text/markdown" }),
+    );
+    const res = await app.request(
+      `http://localhost/${created.id}/attachments`,
+      { method: "POST", body: form },
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      url: string;
+      mediaType: string;
+      filename?: string;
+    };
+    expect(body.mediaType).toMatch(/markdown|plain/);
+    expect(body.url).toMatch(
+      new RegExp(`^jeeves-attachment://chat/${created.id}/`),
+    );
+    expect(body.url.startsWith("data:")).toBe(false);
+
+    const pointer = parseAttachmentPointer(body.url)!;
+    const getRes = await app.request(
+      `http://localhost/${created.id}/attachments/${pointer.attachmentId}`,
+    );
+    expect(getRes.status).toBe(200);
+    expect(await getRes.text()).toBe("# uploaded\n");
   });
 });

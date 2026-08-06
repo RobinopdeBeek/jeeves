@@ -40,6 +40,11 @@ export class ChatThreadStore {
     private readonly chatRoot: string,
   ) {}
 
+  /** Absolute project-store chat root (`data/chat/`). */
+  get root(): string {
+    return this.chatRoot;
+  }
+
   /** Board-style list: most recently opened first, then newest created. */
   listThreads(projectId: string): ChatThread[] {
     return this.db

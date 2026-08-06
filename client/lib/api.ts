@@ -155,6 +155,19 @@ export interface AgentModel {
   default: boolean;
 }
 
+/** Card Info library attachment (ADR 0017 Phase 2) — not a chat-turn sidecar. */
+export interface CardAttachment {
+  id: string;
+  cardId: string;
+  filename: string;
+  mediaType: string;
+  path: string;
+  instruction: string;
+  originStep: string;
+  sizeBytes: number;
+  createdAt: string;
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     headers: { "Content-Type": "application/json" },
@@ -162,6 +175,22 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     let detail = `${init?.method ?? "GET"} ${url} → ${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body.error) detail = body.error;
+    } catch {
+      // keep status-based message
+    }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<T>;
+}
+
+/** Like `request`, but leaves Content-Type unset (multipart FormData). */
+async function requestForm<T>(url: string, form: FormData): Promise<T> {
+  const res = await fetch(url, { method: "POST", body: form });
+  if (!res.ok) {
+    let detail = `POST ${url} → ${res.status}`;
     try {
       const body = (await res.json()) as { error?: string };
       if (body.error) detail = body.error;
@@ -263,4 +292,72 @@ export const api = {
       body: JSON.stringify(op),
     }),
   listModels: () => request<{ models: AgentModel[] }>("/api/models"),
+
+  /**
+   * Upload a Project Chat turn attachment; returns a pointer ChatAttachment
+   * (`jeeves-attachment://chat/…`) for the WS send.
+   */
+  uploadChatThreadAttachment: (threadId: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return requestForm<{
+      mediaType: string;
+      filename?: string;
+      url: string;
+    }>(`/api/chat-threads/${threadId}/attachments`, form);
+  },
+
+  /**
+   * Upload a step-chat turn attachment; returns a pointer ChatAttachment
+   * (`jeeves-attachment://step/…`) for the WS send.
+   */
+  uploadStepChatAttachment: (
+    cardId: string,
+    stepKey: string,
+    file: File,
+  ) => {
+    const form = new FormData();
+    form.append("file", file);
+    return requestForm<{
+      mediaType: string;
+      filename?: string;
+      url: string;
+    }>(`/api/cards/${cardId}/chat-attachments/${stepKey}`, form);
+  },
+
+  listCardAttachments: (cardId: string) =>
+    request<CardAttachment[]>(`/api/cards/${cardId}/attachments`),
+  addCardAttachment: (
+    cardId: string,
+    file: File,
+    opts?: { instruction?: string; originStep?: string },
+  ) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (opts?.instruction !== undefined) {
+      form.append("instruction", opts.instruction);
+    }
+    form.append("originStep", opts?.originStep ?? "info");
+    return requestForm<CardAttachment>(
+      `/api/cards/${cardId}/attachments`,
+      form,
+    );
+  },
+  updateCardAttachmentInstruction: (
+    cardId: string,
+    attachmentId: string,
+    instruction: string,
+  ) =>
+    request<CardAttachment>(`/api/cards/${cardId}/attachments/${attachmentId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ instruction }),
+    }),
+  deleteCardAttachment: (cardId: string, attachmentId: string) =>
+    request<{ ok: boolean }>(
+      `/api/cards/${cardId}/attachments/${attachmentId}`,
+      { method: "DELETE" },
+    ),
+  /** HTTP URL for library attachment bytes (not a jeeves-attachment:// pointer). */
+  cardAttachmentUrl: (cardId: string, attachmentId: string) =>
+    `/api/cards/${cardId}/attachments/${attachmentId}`,
 };

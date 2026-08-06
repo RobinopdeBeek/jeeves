@@ -6,6 +6,7 @@ import type { PermissionRequestData } from "@/hooks/acp-chat-transport";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { AttachmentChip } from "@/components/assistant-ui/attachment-chip";
+import { attachmentDisplayUrl } from "@shared/attachment-refs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { PermissionPartView } from "./PermissionPartView";
 
@@ -93,11 +94,14 @@ function ReadOnlyMessage({ message }: { message: UIMessage }) {
               };
               const label = file.filename?.trim() || file.mediaType;
               const isImage = file.mediaType.startsWith("image/");
+              const preview = isImage
+                ? (attachmentDisplayUrl(file.url) ?? undefined)
+                : undefined;
               return (
                 <AttachmentChip
                   key={i}
                   name={label}
-                  previewUrl={isImage ? file.url : undefined}
+                  previewUrl={preview}
                 />
               );
             })}

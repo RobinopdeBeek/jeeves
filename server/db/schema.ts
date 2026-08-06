@@ -151,6 +151,40 @@ export const chatThreads = sqliteTable("chat_threads", {
   lastOpenedAt: integer("last_opened_at", { mode: "timestamp_ms" }),
 });
 
+/**
+ * Card attachment library (Info / Backlog inputs) — SQL metadata + instruction;
+ * bytes live under `data/cards/<cardId>/attachments/` (ADR 0017 Phase 2).
+ * Distinct from chat-turn sidecars and from artifact `kind: "attachment"`.
+ */
+export const cardAttachments = sqliteTable("card_attachments", {
+  id: text("id").primaryKey(),
+  cardId: text("card_id")
+    .notNull()
+    .references(() => cards.id, { onDelete: "cascade" }),
+  filename: text("filename").notNull(),
+  mediaType: text("media_type").notNull(),
+  /** Store-relative path under artifact root, e.g. cards/<id>/attachments/<id>-name. */
+  path: text("path").notNull(),
+  /** Per-file instruction for downstream steps; empty string when unset. */
+  instruction: text("instruction").notNull().default(""),
+  originStep: text("origin_step", {
+    enum: [
+      "info",
+      "grill",
+      "spec",
+      "tasks",
+      "plan",
+      "impl",
+      "airev",
+      "review",
+      "document",
+      "deploy",
+    ],
+  }).notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+});
+
 export type Project = typeof projects.$inferSelect;
 export type Card = typeof cards.$inferSelect;
 export type CardStep = typeof cardSteps.$inferSelect;
@@ -159,3 +193,4 @@ export type Run = typeof runs.$inferSelect;
 export type Artifact = typeof artifacts.$inferSelect;
 export type ArtifactKind = (typeof artifactKinds)[number];
 export type ChatThread = typeof chatThreads.$inferSelect;
+export type CardAttachment = typeof cardAttachments.$inferSelect;

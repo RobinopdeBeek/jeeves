@@ -3,6 +3,10 @@
  */
 import type { UIMessage } from "ai";
 import {
+  isAllowlistedTextAttachment,
+  isUtf8TextAttachment,
+} from "../../shared/attachment-refs.js";
+import {
   assertAttachmentsAllowed,
   attachmentMarker,
   classifyAttachmentKind,
@@ -38,6 +42,12 @@ export type AcpContentBlock =
 
 const DATA_URL_RE = /^data:([^;,]+);base64,([\s\S]+)$/i;
 
+/** Resolve attachment bytes for ACP (data: URL or sidecar via injected resolver). */
+export type AttachmentBytesResolver = (att: ChatAttachment) => {
+  mimeType: string;
+  data: string;
+};
+
 export function parseDataUrl(url: string): { mimeType: string; data: string } {
   const match = DATA_URL_RE.exec(url.trim());
   if (!match) {
@@ -46,13 +56,30 @@ export function parseDataUrl(url: string): { mimeType: string; data: string } {
   return { mimeType: match[1]!.toLowerCase(), data: match[2]! };
 }
 
+function resolveAttachmentPayload(
+  att: ChatAttachment,
+  resolveBytes?: AttachmentBytesResolver,
+): { mimeType: string; data: string } {
+  if (resolveBytes) return resolveBytes(att);
+  return parseDataUrl(att.url);
+}
+
+function resourceAllowed(
+  att: ChatAttachment,
+  caps: PromptCapabilities,
+): boolean {
+  if (caps.embeddedContext) return true;
+  return isAllowlistedTextAttachment(att.mediaType, att.filename);
+}
+
 function attachmentToBlock(
   att: ChatAttachment,
   caps: PromptCapabilities,
+  resolveBytes?: AttachmentBytesResolver,
 ): AcpContentBlock {
   const mediaType = att.mediaType.trim().toLowerCase();
-  const kind = classifyAttachmentKind(mediaType);
-  const { mimeType, data } = parseDataUrl(att.url);
+  const kind = classifyAttachmentKind(mediaType, att.filename);
+  const { mimeType, data } = resolveAttachmentPayload(att, resolveBytes);
   const resolvedMime = mediaType || mimeType;
 
   if (kind === "image" && caps.image) {
@@ -61,20 +88,23 @@ function attachmentToBlock(
   if (kind === "audio" && caps.audio) {
     return { type: "audio", mimeType: resolvedMime, data };
   }
-  if (kind === "resource" && caps.embeddedContext) {
+  if (kind === "resource" && resourceAllowed(att, caps)) {
     const name = att.filename?.trim() || "attachment";
     const uri = `attachment://${encodeURIComponent(name)}`;
-    if (resolvedMime.startsWith("text/") || resolvedMime === "application/json") {
+    // Cursor override: text allowlist → resource.text even when embeddedContext is false.
+    if (isUtf8TextAttachment(resolvedMime, att.filename)) {
       const text = Buffer.from(data, "base64").toString("utf8");
       return {
         type: "resource",
         resource: { uri, mimeType: resolvedMime, text },
       };
     }
-    return {
-      type: "resource",
-      resource: { uri, mimeType: resolvedMime, blob: data },
-    };
+    if (caps.embeddedContext) {
+      return {
+        type: "resource",
+        resource: { uri, mimeType: resolvedMime, blob: data },
+      };
+    }
   }
   throw new Error(
     `Cannot convert attachment "${att.filename ?? mediaType}" to an ACP ContentBlock.`,
@@ -124,6 +154,7 @@ export function buildPromptContentBlocks(opts: {
   text: string;
   attachments?: readonly ChatAttachment[];
   caps: PromptCapabilities;
+  resolveBytes?: AttachmentBytesResolver;
 }): AcpContentBlock[] {
   const attachments = opts.attachments ?? [];
   assertAttachmentsAllowed(attachments, opts.caps);
@@ -133,7 +164,7 @@ export function buildPromptContentBlocks(opts: {
     blocks.push({ type: "text", text: opts.text });
   }
   for (const att of attachments) {
-    blocks.push(attachmentToBlock(att, opts.caps));
+    blocks.push(attachmentToBlock(att, opts.caps, opts.resolveBytes));
   }
   if (blocks.length === 0) {
     throw new Error("Message must include text or at least one attachment.");
@@ -152,12 +183,14 @@ export function buildSeedPromptContentBlocks(opts: {
   latestText: string;
   latestAttachments?: readonly ChatAttachment[];
   caps: PromptCapabilities;
+  resolveBytes?: AttachmentBytesResolver;
 }): AcpContentBlock[] {
   const prior = opts.history.slice(0, -1);
   const latestBlocks = buildPromptContentBlocks({
     text: opts.latestText,
     attachments: opts.latestAttachments,
     caps: opts.caps,
+    resolveBytes: opts.resolveBytes,
   });
 
   if (prior.length === 0) return latestBlocks;
@@ -176,7 +209,9 @@ export function buildSeedPromptContentBlocks(opts: {
     for (const att of atts) {
       try {
         assertAttachmentsAllowed([att], opts.caps);
-        priorAttachmentBlocks.push(attachmentToBlock(att, opts.caps));
+        priorAttachmentBlocks.push(
+          attachmentToBlock(att, opts.caps, opts.resolveBytes),
+        );
       } catch {
         // Drop prior attachments the current agent no longer accepts; markers remain in text.
       }

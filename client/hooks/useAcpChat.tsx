@@ -11,7 +11,7 @@ import {
   EMPTY_PROMPT_CAPABILITIES,
   OPTIMISTIC_PROMPT_CAPABILITIES,
 } from "@shared/prompt-capabilities";
-import type { TasksDraftTip } from "@/lib/api";
+import { api, type TasksDraftTip } from "@/lib/api";
 import { createAcpAttachmentAdapter } from "./acp-attachment-adapter";
 import {
   AcpChatTransport,
@@ -374,7 +374,19 @@ export function AcpChatProvider({
     chat as unknown as Parameters<typeof useAISDKRuntime>[0],
     {
       adapters: {
-        attachments: createAcpAttachmentAdapter(promptCapabilities),
+        attachments: createAcpAttachmentAdapter(promptCapabilities, {
+          target: transport.attachmentUploadTarget(),
+          upload: async (target, file) => {
+            if (target.kind === "chat") {
+              return api.uploadChatThreadAttachment(target.threadId, file);
+            }
+            return api.uploadStepChatAttachment(
+              target.cardId,
+              target.stepKey,
+              file,
+            );
+          },
+        }),
       },
     },
   );

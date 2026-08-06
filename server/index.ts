@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { ArtifactStore } from "./artifacts/store.js";
+import { CardAttachmentStore } from "./attachments/card-library.js";
 import { CardStore } from "./cards/store.js";
 import { ChatThreadStore } from "./chat-threads/store.js";
 import { openDb } from "./db/index.js";
@@ -43,6 +44,7 @@ const port = Number(process.env.JEEVES_PORT ?? 3939);
 
 const db = openDb(paths.dbPath);
 const artifacts = new ArtifactStore(db, paths.artifactRoot);
+const cardAttachments = new CardAttachmentStore(db, paths.artifactRoot);
 const store = new CardStore(db, artifacts);
 const chatThreads = new ChatThreadStore(db, paths.chatRoot);
 const project = store.ensureDefaultProject(path.basename(paths.repoPath), paths.repoPath);
@@ -93,6 +95,7 @@ app.route(
     runs,
     events,
     artifacts,
+    cardAttachments,
     sessions: chatSessions,
     spawn: spawnAcp,
     createSpec: createCreateSpec({

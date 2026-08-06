@@ -89,6 +89,18 @@ export interface AcpLiveCallbacks {
   frameUserMessage?: (userText: string, liveDraftBody: string) => string;
   /** The agent switched model on its own (rate limit, fallback). */
   onModelChanged?: (value: string) => void;
+  /**
+   * Rewrite live `data:` attachments to sidecar pointers before transcript
+   * persist / ACP prompt (ADR 0017). Omit in unit tests that keep data URLs.
+   */
+  persistAttachments?: (
+    attachments: ChatAttachment[],
+  ) => ChatAttachment[];
+  /** Resolve pointer or data: URL → base64 for ACP ContentBlocks. */
+  resolveAttachmentBytes?: (att: ChatAttachment) => {
+    mimeType: string;
+    data: string;
+  };
 }
 
 /**
@@ -227,6 +239,8 @@ export class AcpBridge {
       onTurnComplete: deps.onTurnComplete,
       frameUserMessage: deps.frameUserMessage,
       onModelChanged: deps.onModelChanged,
+      persistAttachments: deps.persistAttachments,
+      resolveAttachmentBytes: deps.resolveAttachmentBytes,
     };
   }
 
@@ -615,13 +629,16 @@ export class AcpBridge {
   ): Promise<void> {
     if (!this.sessionId || !this.process) throw new Error("session not open");
 
-    const attachments = opts.attachments ?? [];
+    let attachments = opts.attachments ?? [];
     // Fail closed before mutating transcript / starting the turn.
     if (opts.recordUser) {
       if (!text.trim() && attachments.length === 0) {
         throw new Error("Message must include text or at least one attachment.");
       }
       assertAttachmentsAllowed(attachments, this.promptCapabilities);
+      if (this.live.persistAttachments && attachments.length > 0) {
+        attachments = this.live.persistAttachments(attachments);
+      }
     }
 
     this.beginTurn();
@@ -652,6 +669,7 @@ export class AcpBridge {
         ? this.live.frameUserMessage(text, opts.liveDraftBody)
         : text;
 
+    const resolveBytes = this.live.resolveAttachmentBytes;
     let promptBlocks;
     if (opts.recordUser && !this.contextSeeded) {
       promptBlocks = buildSeedPromptContentBlocks({
@@ -659,6 +677,7 @@ export class AcpBridge {
         latestText: agentText,
         latestAttachments: attachments,
         caps: this.promptCapabilities,
+        resolveBytes,
       });
       this.contextSeeded = true;
     } else {
@@ -666,6 +685,7 @@ export class AcpBridge {
         text: agentText,
         attachments: opts.recordUser ? attachments : [],
         caps: this.promptCapabilities,
+        resolveBytes,
       });
     }
 

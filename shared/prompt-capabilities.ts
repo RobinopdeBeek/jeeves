@@ -3,7 +3,18 @@
  * (ADR 0008: no ACP types on the client). Field names mirror the protocol's
  * promptCapabilities so the wire DTO stays stable; omitted / unknown agent
  * fields fail closed as unsupported.
+ *
+ * Text allowlist override: Cursor ACP still advertises `embeddedContext: false`
+ * but accepts markdown `resource` blocks at runtime — see
+ * docs/research/acp-prompt-capabilities-embedded-context.md and ADR 0017.
  */
+
+import {
+  isAllowlistedTextAttachment,
+  isAttachmentPointerUrl,
+  isDataUrl,
+  TEXT_ATTACHMENT_ACCEPT,
+} from "./attachment-refs.js";
 
 export type PromptCapabilities = {
   image: boolean;
@@ -15,7 +26,10 @@ export type PromptCapabilities = {
 export type ChatAttachment = {
   mediaType: string;
   filename?: string;
-  /** data: URL carrying base64 payload. */
+  /**
+   * Payload reference: preferred sidecar pointer (`jeeves-attachment://…`),
+   * or legacy/wire `data:` URL (materialized to a sidecar before persist).
+   */
   url: string;
 };
 
@@ -61,32 +75,38 @@ export function normalizePromptCapabilities(
 
 export function classifyAttachmentKind(
   mediaType: string,
+  filename?: string,
 ): AttachmentKind | "unsupported" {
   const mime = mediaType.trim().toLowerCase();
-  if (!mime) return "unsupported";
   if (mime.startsWith("image/")) return "image";
   if (mime.startsWith("audio/")) return "audio";
-  // Non-media files ride as embedded resources when the agent advertises it.
-  return "resource";
+  if (mime) return "resource";
+  // Empty MIME: extension fallback for text allowlist only.
+  if (isAllowlistedTextAttachment(mime, filename)) return "resource";
+  return "unsupported";
 }
 
-/** HTML `accept` for the file picker; empty string means offer no attach control. */
+/**
+ * HTML `accept` for the file picker.
+ * Always includes the Phase 1 text allowlist (Cursor `embeddedContext: false`
+ * override — ADR 0017). Empty string is reserved for a future hard disable.
+ */
 export function attachmentAcceptFor(caps: PromptCapabilities): string {
   const parts: string[] = [];
   if (caps.image) parts.push("image/*");
   if (caps.audio) parts.push("audio/*");
-  if (caps.embeddedContext) {
-    // Broaden beyond media so documents can become embedded resources.
-    parts.push(
-      "text/*,application/json,application/pdf,application/xml,application/octet-stream",
-    );
-  }
-  return parts.join(",");
+  parts.push(TEXT_ATTACHMENT_ACCEPT);
+  return [...new Set(parts.join(",").split(",").filter(Boolean))].join(",");
 }
 
+/**
+ * Whether this attachment kind may be sent under negotiated caps (+ text override).
+ * `filename` participates for empty/wrong MIME extension fallback.
+ */
 export function isAttachmentKindAllowed(
   kind: AttachmentKind,
   caps: PromptCapabilities,
+  opts?: { mediaType?: string; filename?: string },
 ): boolean {
   switch (kind) {
     case "image":
@@ -94,7 +114,11 @@ export function isAttachmentKindAllowed(
     case "audio":
       return caps.audio;
     case "resource":
-      return caps.embeddedContext;
+      if (caps.embeddedContext) return true;
+      return isAllowlistedTextAttachment(
+        opts?.mediaType ?? "",
+        opts?.filename,
+      );
   }
 }
 
@@ -102,18 +126,22 @@ export function isAttachmentKindAllowed(
 export function unsupportedAttachmentMessage(
   mediaType: string,
   caps: PromptCapabilities,
+  filename?: string,
 ): string {
-  const kind = classifyAttachmentKind(mediaType);
+  const kind = classifyAttachmentKind(mediaType, filename);
   if (kind === "unsupported") {
     return `Unsupported attachment type "${mediaType || "(missing)"}".`;
   }
-  if (isAttachmentKindAllowed(kind, caps)) {
+  if (
+    isAttachmentKindAllowed(kind, caps, { mediaType, filename })
+  ) {
     return `Unsupported attachment type "${mediaType}".`;
   }
   const offered: string[] = [];
   if (caps.image) offered.push("images");
   if (caps.audio) offered.push("audio");
   if (caps.embeddedContext) offered.push("embedded files");
+  else offered.push("text files");
   if (offered.length === 0) {
     return `Attachments are not supported by this agent session (rejected "${mediaType}").`;
   }
@@ -121,8 +149,8 @@ export function unsupportedAttachmentMessage(
 }
 
 /**
- * Fail closed: every attachment must be allowed by negotiated capabilities.
- * Throws Error with a user-visible message.
+ * Fail closed: every attachment must be allowed by negotiated capabilities
+ * (plus the Cursor text-resource override). Throws Error with a user-visible message.
  */
 export function assertAttachmentsAllowed(
   attachments: readonly ChatAttachment[],
@@ -131,27 +159,34 @@ export function assertAttachmentsAllowed(
   for (const att of attachments) {
     const mediaType =
       typeof att.mediaType === "string" ? att.mediaType : "";
-    const kind = classifyAttachmentKind(mediaType);
+    const kind = classifyAttachmentKind(mediaType, att.filename);
     if (
       kind === "unsupported" ||
-      !isAttachmentKindAllowed(kind, caps)
-    ) {
-      throw new Error(unsupportedAttachmentMessage(mediaType, caps));
-    }
-    if (typeof att.url !== "string" || !att.url.startsWith("data:")) {
-      throw new Error(
-        `Attachment "${att.filename ?? mediaType}" must be a data URL.`,
-      );
-    }
-    const dataMime = dataUrlMimeType(att.url);
-    if (
-      dataMime &&
-      mediaType &&
-      dataMime.toLowerCase() !== mediaType.trim().toLowerCase()
+      !isAttachmentKindAllowed(kind, caps, {
+        mediaType,
+        filename: att.filename,
+      })
     ) {
       throw new Error(
-        `Attachment "${att.filename ?? mediaType}" media type mismatch (declared ${mediaType}, data is ${dataMime}).`,
+        unsupportedAttachmentMessage(mediaType, caps, att.filename),
       );
+    }
+    if (typeof att.url !== "string" || (!isDataUrl(att.url) && !isAttachmentPointerUrl(att.url))) {
+      throw new Error(
+        `Attachment "${att.filename ?? mediaType}" must be a data URL or jeeves-attachment pointer.`,
+      );
+    }
+    if (isDataUrl(att.url)) {
+      const dataMime = dataUrlMimeType(att.url);
+      if (
+        dataMime &&
+        mediaType &&
+        dataMime.toLowerCase() !== mediaType.trim().toLowerCase()
+      ) {
+        throw new Error(
+          `Attachment "${att.filename ?? mediaType}" media type mismatch (declared ${mediaType}, data is ${dataMime}).`,
+        );
+      }
     }
   }
 }

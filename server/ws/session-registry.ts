@@ -33,7 +33,11 @@ export interface WarmSessionHandle {
   /** Send a user message; chunks arrive via attach / onChunk buffering. */
   sendMessage(
     text: string,
-    opts?: { liveDraftBody?: string; attachments?: ChatAttachment[] },
+    opts?: {
+      liveDraftBody?: string;
+      attachments?: ChatAttachment[];
+      messageId?: string;
+    },
   ): Promise<void>;
   respondToPermission(requestId: string, optionId: string): void;
   /** Abort the in-flight ACP prompt turn. */

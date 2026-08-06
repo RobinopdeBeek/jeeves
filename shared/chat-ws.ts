@@ -30,6 +30,11 @@ export type WsClientMessage =
       /** User-visible chat text (and transcript). */
       text: string;
       /**
+       * Client-generated UIMessage id. Server persists this so branch pickers
+       * (keyed by the live UI id) match the branchable tree without remount.
+       */
+      messageId?: string;
+      /**
        * Live editor/tip draft for Define assist steps. Server frames this into
        * the agent prompt only — it must not appear in the chat transcript.
        * Kind is implied by the step; body is opaque to the transport.
@@ -68,6 +73,11 @@ export type WsServerMessage =
     }
   | { type: "chunk"; chunk: UIMessageChunk }
   | { type: "status"; status: "ai-working" | "needs-user" }
+  /**
+   * Project Chat only: full branch-aware transcript after a live save.
+   * Lets the client show sibling branch pickers without waiting for remount.
+   */
+  | { type: "branchable"; branchable: BranchableTranscript }
   /** Answer to a client `ping` — proves the socket is not half-open. */
   | { type: "pong"; id: string }
   /** Spec side-chat harvested a revision — replace editor content. */

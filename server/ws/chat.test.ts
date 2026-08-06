@@ -310,6 +310,41 @@ describe("AcpBridge", () => {
     expect(promptText(process, 1)).not.toContain("Prior transcript");
   });
 
+  it("persists the client messageId on the user turn (branch picker lookup)", async () => {
+    // Branch pickers key off the UI message id. If the server mints a different
+    // id, getBranches(uiId) is empty until a remount loads server ids.
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-msgid");
+    const transcripts: UIMessage[][] = [];
+
+    const bridge = new AcpBridge({
+      spawn: () => process,
+      onTranscript: (messages) => transcripts.push(messages),
+    });
+
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    const replyPromise = bridge.sendMessage("Edited prompt", {
+      messageId: "client-user-42",
+    });
+    await viWaitFor(() => process.prompts().length === 1);
+
+    expect(transcripts.at(-1)?.[0]?.id).toBe("client-user-42");
+    expect(bridge.getMessages()[0]?.id).toBe("client-user-42");
+
+    const promptReq = process.promptRequest();
+    process.emit({
+      jsonrpc: "2.0",
+      id: promptReq.id,
+      result: { stopReason: "end_turn" },
+    });
+    await replyPromise;
+  });
+
   it("persists the user turn before the prompt RPC finishes (mid-stream reattach)", async () => {
     const process = new MockAcpProcess();
     process.autoHandshake("sess-mid");

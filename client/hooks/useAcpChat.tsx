@@ -52,7 +52,7 @@ export interface UseAcpChatOptions {
    * (Project Chat Rewind → "rewound").
    */
   softDisplaceReasons?: readonly string[];
-  /** Project Chat: authoritative branchable from WS ready / reconnect. */
+  /** Project Chat: branchable from WS ready / reconnect / live save pushes. */
   onBranchable?: (branchable: BranchableTranscript) => void;
 }
 

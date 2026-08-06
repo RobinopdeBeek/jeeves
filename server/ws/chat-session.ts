@@ -1,4 +1,6 @@
 import type { UIMessage } from "ai";
+import type { BranchableTranscript } from "../../shared/branchable-transcript.js";
+import type { ChatAttachment } from "../../shared/prompt-capabilities.js";
 import {
   materializeAttachments,
   resolveAttachmentBytesForOwner,
@@ -13,7 +15,6 @@ import type { EventBus } from "../execution/events.js";
 import { AUTO_MODEL_VALUE } from "../models/list-models.js";
 import type { StepKey } from "../pipelines.js";
 import { resolveProjectStorePaths } from "../project-store.js";
-import type { ChatAttachment } from "../../shared/prompt-capabilities.js";
 import type { AcpLiveCallbacks, InteractivePermissionPolicy } from "./chat.js";
 import {
   chatStepProfile,
@@ -247,6 +248,11 @@ export interface CreateProjectChatSessionDeps {
   threads: ChatThreadStore;
   /** Main Project checkout cwd (not a worktree). */
   cwd: string;
+  /**
+   * Fired after each Project Chat transcript save with the updated tree.
+   * WS attach uses this to push `branchable` so sibling pickers update live.
+   */
+  onBranchableUpdated?: (branchable: BranchableTranscript) => void;
 }
 
 /**
@@ -274,6 +280,9 @@ export function createProjectChatSession(
     loadTranscript: () => deps.threads.loadTranscript(ref.threadId),
     saveTranscript: (messages) => {
       deps.threads.saveTranscript(ref.threadId, messages);
+      deps.onBranchableUpdated?.(
+        deps.threads.loadBranchable(ref.threadId),
+      );
     },
     assertMutable: () => {
       if (!deps.threads.getThread(ref.threadId)) {

@@ -462,7 +462,12 @@ export class AcpBridge {
   /** Send a user message; chunks arrive via attach / onChunk buffering. */
   async sendMessage(
     text: string,
-    opts?: { liveDraftBody?: string; attachments?: ChatAttachment[] },
+    opts?: {
+      liveDraftBody?: string;
+      attachments?: ChatAttachment[];
+      /** Client UIMessage id — persisted so branch pickers match without remount. */
+      messageId?: string;
+    },
   ): Promise<void> {
     if (!this.sessionId) throw new Error("session not open");
     const attachments = opts?.attachments ?? [];
@@ -473,6 +478,7 @@ export class AcpBridge {
       recordUser: true,
       liveDraftBody: opts?.liveDraftBody,
       attachments,
+      messageId: opts?.messageId,
     });
   }
 
@@ -625,6 +631,7 @@ export class AcpBridge {
       recordUser: boolean;
       liveDraftBody?: string;
       attachments?: ChatAttachment[];
+      messageId?: string;
     },
   ): Promise<void> {
     if (!this.sessionId || !this.process) throw new Error("session not open");
@@ -644,8 +651,9 @@ export class AcpBridge {
     this.beginTurn();
 
     if (opts.recordUser) {
+      const clientId = opts.messageId?.trim();
       this.messages.push({
-        id: nanoid(10),
+        id: clientId && clientId.length > 0 ? clientId : nanoid(10),
         role: "user",
         parts: userMessageParts(text, attachments),
       });

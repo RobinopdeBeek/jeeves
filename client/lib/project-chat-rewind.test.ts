@@ -2,6 +2,7 @@ import type { UIMessage } from "ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   fromLinear,
+  getBranches,
   syncActivePath,
   truncateTo,
   type BranchableTranscript,
@@ -71,5 +72,13 @@ describe("project-chat-rewind", () => {
 
     adapter.switchToBranch("u1");
     expect(onSwitchBranch).toHaveBeenCalledWith("u1");
+  });
+
+  it("hides the branch picker when the UI message id is not in the tree", () => {
+    // Live UI keeps client ids; branchable must use the same ids or
+    // getBranches returns [] and the picker stays hidden until remount.
+    const tree = twoBranchTree();
+    expect(getBranches(tree, "some-other-client-id")).toEqual([]);
+    expect(getBranches(tree, "u2").sort()).toEqual(["u1", "u2"]);
   });
 });

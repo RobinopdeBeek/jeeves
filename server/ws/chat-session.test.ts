@@ -270,6 +270,46 @@ describe("createProjectChatSession", () => {
     expect(threads.getThread(threadId)?.title).toBe("Explain the warm pool");
   });
 
+  it("notifies onBranchableUpdated after each transcript save", () => {
+    const updates: Array<{ headId: string | null; count: number }> = [];
+    const session = createProjectChatSession(
+      { threadId },
+      {
+        threads,
+        cwd: repoPath,
+        onBranchableUpdated: (branchable) => {
+          updates.push({
+            headId: branchable.headId,
+            count: branchable.messages.length,
+          });
+        },
+      },
+    );
+
+    session.saveTranscript([
+      {
+        id: "u1",
+        role: "user",
+        parts: [{ type: "text", text: "first" }],
+      },
+    ]);
+    expect(updates).toEqual([{ headId: "u1", count: 1 }]);
+
+    // Truncate then append — second save forks a sibling; callback must fire
+    // so the WS client can show the branch picker without remounting.
+    threads.truncateTranscript(threadId, null);
+    session.saveTranscript([
+      {
+        id: "u2",
+        role: "user",
+        parts: [{ type: "text", text: "edited" }],
+      },
+    ]);
+    expect(updates).toHaveLength(2);
+    expect(updates[1]).toEqual({ headId: "u2", count: 2 });
+    expect(threads.getBranches(threadId, "u2").sort()).toEqual(["u1", "u2"]);
+  });
+
   it("rejects missing threads at the factory", () => {
     expect(() =>
       createProjectChatSession(

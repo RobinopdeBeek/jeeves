@@ -57,8 +57,8 @@ export interface AcpChatTransportOptions {
     opts: { streaming: boolean; branchable?: BranchableTranscript },
   ) => void;
   /**
-   * Initial `ready` (and reconnect) may include Project Chat branchable.
-   * Step chats omit it.
+   * Project Chat branchable from `ready` / reconnect, and mid-session
+   * `branchable` pushes after each transcript save. Step chats omit it.
    */
   onBranchable?: (branchable: BranchableTranscript) => void;
   /**
@@ -266,10 +266,12 @@ export class AcpChatTransport {
     this.beginTurn();
     const stream = this.openChunkStream(abortSignal);
     const liveDraftBody = this.options.getLiveDraftBody?.();
+    const messageId = lastUser?.id;
     try {
       this.sendClient({
         type: "user-message",
         text,
+        ...(messageId ? { messageId } : {}),
         ...(liveDraftBody != null ? { liveDraftBody } : {}),
         ...(attachments.length > 0 ? { attachments } : {}),
       });
@@ -839,6 +841,10 @@ export class AcpChatTransport {
         break;
       case "chunk":
         this.pushChunk(msg.chunk);
+        break;
+      case "branchable":
+        // Live Project Chat save — refresh sibling branch pickers mid-session.
+        this.options.onBranchable?.(msg.branchable);
         break;
       case "pong":
         this.pingWaiters.get(msg.id)?.resolve();

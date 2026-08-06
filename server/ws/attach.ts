@@ -140,6 +140,10 @@ export class ChatConnection {
     return createProjectChatSession(ref, {
       threads: this.deps.chatThreads,
       cwd: this.deps.projectCwd,
+      onBranchableUpdated: (branchable) => {
+        if (this.closed) return;
+        this.send({ type: "branchable", branchable });
+      },
     });
   }
 
@@ -284,8 +288,11 @@ export class ChatConnection {
     try {
       const liveDraftBody =
         typeof msg.liveDraftBody === "string" ? msg.liveDraftBody : undefined;
+      const messageId =
+        typeof msg.messageId === "string" ? msg.messageId : undefined;
       await this.handle.sendMessage(text, {
         liveDraftBody,
+        ...(messageId != null ? { messageId } : {}),
         ...(attachments.length > 0 ? { attachments } : {}),
       });
     } catch (err) {

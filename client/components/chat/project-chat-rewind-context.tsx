@@ -1,3 +1,4 @@
+import type { BranchableTranscript } from "@shared/branchable-transcript";
 import {
   createContext,
   useContext,
@@ -5,8 +6,11 @@ import {
 } from "react";
 
 export type ProjectChatRewindApi = {
-  /** Sibling branch ids for a message (incl. itself); empty if unknown. */
-  getBranches: (messageId: string) => readonly string[];
+  /**
+   * Authoritative branch tree. Updated by WS `ready` / rewind / live
+   * `branchable` pushes so sibling pickers appear without remounting.
+   */
+  branchable: BranchableTranscript;
   onSwitchBranch: (branchId: string) => void;
   /** Edit-and-send: server rewind truncate, then send the new text. */
   onEditMessage: (messageId: string, text: string) => void;

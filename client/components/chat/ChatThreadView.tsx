@@ -162,7 +162,7 @@ function LiveProjectChat({
             attachmentsEnabled={chat.attachmentsEnabled}
             composerLeading={modelPicker}
             rewind={{
-              getBranches: (id) => session.branchAdapter.getBranches(id),
+              branchable: session.branchable,
               onSwitchBranch: (id) => session.branchAdapter.switchToBranch(id),
               onEditMessage: (messageId, text) => {
                 void session.runRewind(

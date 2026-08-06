@@ -374,7 +374,7 @@ describe("AcpChatTransport", () => {
 
     expect((await readP).map((c) => c.type)).toEqual(["start", "finish"]);
     const sent = fresh.sent.map((s) => JSON.parse(s) as { type: string; text?: string });
-    expect(sent).toContainEqual({ type: "user-message", text: "hi" });
+    expect(sent).toContainEqual({ type: "user-message", text: "hi", messageId: "u1" });
     // Nothing was lost into the dead socket.
     expect(dead.sent).toEqual([]);
   });
@@ -449,7 +449,7 @@ describe("AcpChatTransport", () => {
 
     await sendP;
     const sent = ws.sent.map((s) => JSON.parse(s) as { type: string; text?: string });
-    expect(sent).toContainEqual({ type: "user-message", text: "still there?" });
+    expect(sent).toContainEqual({ type: "user-message", text: "still there?", messageId: "u1" });
     // No reconnect was needed.
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
@@ -646,6 +646,7 @@ describe("AcpChatTransport", () => {
     expect(sent).toContainEqual({
       type: "user-message",
       text: "see this",
+      messageId: "u1",
       attachments: [
         { mediaType: "image/png", filename: "dot.png", url: TINY_PNG },
       ],
@@ -683,6 +684,7 @@ describe("AcpChatTransport", () => {
     expect(sent).toContainEqual({
       type: "user-message",
       text: "> selected span\n\nwhat about this?",
+      messageId: "u1",
     });
   });
 
@@ -717,6 +719,7 @@ describe("AcpChatTransport", () => {
     expect(sent).toContainEqual({
       type: "user-message",
       text: "> line one\n> line two\n\n",
+      messageId: "u1",
     });
   });
 
@@ -760,6 +763,7 @@ describe("AcpChatTransport", () => {
     expect(sent).toContainEqual({
       type: "user-message",
       text: "",
+      messageId: "u1",
       attachments: [
         { mediaType: "image/png", filename: "dot.png", url: TINY_PNG },
       ],
@@ -810,6 +814,7 @@ describe("AcpChatTransport — parked prompts", () => {
     expect(ws.sent.map((s) => JSON.parse(s) as unknown)).toContainEqual({
       type: "user-message",
       text: "while it boots",
+      messageId: "u1",
     });
   });
 
@@ -837,6 +842,7 @@ describe("AcpChatTransport — parked prompts", () => {
     expect(ws.sent.map((s) => JSON.parse(s) as unknown)).toContainEqual({
       type: "user-message",
       text: "slow agent",
+      messageId: "u1",
     });
   });
 
@@ -948,6 +954,85 @@ describe("AcpChatTransport — failed handshake", () => {
     ws.deliver({ type: "session", status: "open", streaming: true });
     const resume = await transport.reconnectToStream();
     expect(resume).not.toBeNull();
+  });
+
+  it("sends the client UIMessage id on user-message", async () => {
+    const transport = new AcpChatTransport({ threadId: "t1" });
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({ type: "ready", messages: [], streaming: false });
+    await connectP;
+    ws.deliver({ type: "session", status: "open", streaming: false });
+
+    const stream = await transport.sendMessages({
+      messages: [
+        {
+          id: "client-user-99",
+          role: "user",
+          parts: [{ type: "text", text: "Edited branch" }],
+        },
+      ],
+      abortSignal: undefined as unknown as AbortSignal,
+    } as Parameters<AcpChatTransport["sendMessages"]>[0]);
+    void readAll(stream);
+
+    const sent = ws.sent
+      .map((s) => JSON.parse(s) as { type: string; messageId?: string; text?: string })
+      .find((m) => m.type === "user-message");
+    expect(sent).toEqual({
+      type: "user-message",
+      text: "Edited branch",
+      messageId: "client-user-99",
+    });
+  });
+
+  it("forwards mid-session branchable pushes to onBranchable", async () => {
+    const trees: Array<{ headId: string | null }> = [];
+    const transport = new AcpChatTransport({
+      threadId: "t1",
+      onBranchable: (branchable) => {
+        trees.push({ headId: branchable.headId });
+      },
+    });
+
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({
+      type: "ready",
+      messages: [],
+      streaming: false,
+      branchable: { version: 1, headId: null, messages: [] },
+    });
+    await connectP;
+    expect(trees).toEqual([{ headId: null }]);
+
+    // Live save after edit-and-send — must update without a remount/ready.
+    ws.deliver({
+      type: "branchable",
+      branchable: {
+        version: 1,
+        headId: "u2",
+        messages: [
+          {
+            parentId: null,
+            message: {
+              id: "u1",
+              role: "user",
+              parts: [{ type: "text", text: "v1" }],
+            },
+          },
+          {
+            parentId: null,
+            message: {
+              id: "u2",
+              role: "user",
+              parts: [{ type: "text", text: "v2" }],
+            },
+          },
+        ],
+      },
+    });
+    expect(trees).toEqual([{ headId: null }, { headId: "u2" }]);
   });
 
   it("rebinds resume after epoch remount abandons the first stream without cancel", async () => {
@@ -1162,6 +1247,7 @@ describe("AcpChatTransport — failed handshake", () => {
     expect(retry.sent.map((s) => JSON.parse(s) as unknown)).toContainEqual({
       type: "user-message",
       text: "try again",
+      messageId: "u1",
     });
     expect(failed.sent).toEqual([]);
   });

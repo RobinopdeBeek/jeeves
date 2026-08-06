@@ -19,6 +19,7 @@ import {
   type ProjectChatRewindApi,
   useProjectChatRewind,
 } from "@/components/chat/project-chat-rewind-context";
+import { getBranches } from "@shared/branchable-transcript";
 import {
   ActionBarPrimitive,
   AttachmentPrimitive,
@@ -674,7 +675,9 @@ const UserMessage: FC = () => {
 const UserMessageBranchPicker: FC<{ messageId: string }> = ({ messageId }) => {
   const rewind = useProjectChatRewind();
   if (!rewind) return null;
-  const branches = rewind.getBranches(messageId);
+  // Read `branchable` from context (updated by live WS pushes after
+  // edit-and-send) so siblings appear without a remount.
+  const branches = getBranches(rewind.branchable, messageId);
   if (branches.length <= 1) return null;
   const index = branches.indexOf(messageId);
   if (index < 0) return null;

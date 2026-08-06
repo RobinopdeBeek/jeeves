@@ -26,6 +26,7 @@ export function ChatThreadView({
   showBack,
   railOpen,
   onToggleRail,
+  onStreamingChange,
   onStreamingSettled,
   onThreadUpdated,
 }: {
@@ -34,6 +35,8 @@ export function ChatThreadView({
   /** Desktop rail visibility (omit on mobile). */
   railOpen?: boolean;
   onToggleRail?: () => void;
+  /** Active-thread busy for the chat rail. */
+  onStreamingChange?: (streaming: boolean) => void;
   /** Refresh the thread list after a turn (auto-title may have changed). */
   onStreamingSettled?: () => void;
   /** Keep parent list/active row in sync when the pinned model changes. */
@@ -75,6 +78,7 @@ export function ChatThreadView({
           key={thread.id}
           thread={thread}
           welcomeTitle={thread.title.trim() || "New Chat"}
+          onStreamingChange={onStreamingChange}
           onStreamingSettled={onStreamingSettled}
           onThreadUpdated={onThreadUpdated}
         />
@@ -90,16 +94,19 @@ export function ChatThreadView({
 function LiveProjectChat({
   thread,
   welcomeTitle,
+  onStreamingChange,
   onStreamingSettled,
   onThreadUpdated,
 }: {
   thread: ChatThread;
   welcomeTitle: string;
+  onStreamingChange?: (streaming: boolean) => void;
   onStreamingSettled?: () => void;
   onThreadUpdated?: (thread: ChatThread) => void;
 }) {
   const session = useProjectChatThreadSession({
     thread,
+    onStreamingChange,
     onStreamingSettled,
     onThreadUpdated,
   });
@@ -122,14 +129,14 @@ function LiveProjectChat({
     );
   }
 
-  if (session.rewinding) {
-    return <ThreadShell composerLeading={modelPicker} />;
-  }
-
   if (chat.status === "displaced") {
     return (
       <DisplacedProjectChat reason={chat.reason} messages={chat.messages} />
     );
+  }
+
+  if (session.rewinding || !chat.historyReady) {
+    return <ThreadShell composerLeading={modelPicker} />;
   }
 
   return (
@@ -139,7 +146,7 @@ function LiveProjectChat({
         <SessionErrorBanner error={chat.sessionError} />
       ) : null}
       <AcpChatProvider
-        key={`${chat.epoch}:${chat.attachmentsEnabled ? "att" : "plain"}`}
+        key={String(chat.epoch)}
         transport={chat.transport}
         messages={chat.messages}
         promptCapabilities={chat.promptCapabilities}

@@ -1,4 +1,10 @@
-import { IconMessage, IconPencil, IconPlus, IconTrash } from "@tabler/icons-react";
+import {
+  IconLoader2,
+  IconMessage,
+  IconPencil,
+  IconPlus,
+  IconTrash,
+} from "@tabler/icons-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import type { ChatThread } from "@/lib/api";
@@ -30,6 +36,8 @@ function threadLabel(thread: ChatThread): string {
 export function ChatThreadList({
   threads,
   activeId,
+  busyIds,
+  unreadIds,
   onNewThread,
   onRename,
   onDelete,
@@ -37,6 +45,8 @@ export function ChatThreadList({
 }: {
   threads: ChatThread[];
   activeId?: string;
+  busyIds?: ReadonlySet<string>;
+  unreadIds?: ReadonlySet<string>;
   onNewThread: () => void;
   onRename: (id: string, title: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
@@ -70,6 +80,8 @@ export function ChatThreadList({
           threads.map((thread) => {
             const active = thread.id === activeId;
             const label = threadLabel(thread);
+            const busy = busyIds?.has(thread.id) ?? false;
+            const unread = !busy && (unreadIds?.has(thread.id) ?? false);
             return (
               <li key={thread.id} className="group flex items-center gap-1">
                 <Button
@@ -78,9 +90,33 @@ export function ChatThreadList({
                   className="min-w-0 flex-1 justify-start"
                   asChild
                 >
-                  <Link to={`/chat/${thread.id}`}>
+                  <Link
+                    to={`/chat/${thread.id}`}
+                    aria-busy={busy || undefined}
+                    aria-label={
+                      busy
+                        ? `${label}, responding`
+                        : unread
+                          ? `${label}, unread response`
+                          : label
+                    }
+                  >
                     <IconMessage data-icon="inline-start" />
-                    <span className="truncate">{label}</span>
+                    <span className="min-w-0 flex-1 truncate text-left">
+                      {label}
+                    </span>
+                    {busy ? (
+                      <IconLoader2
+                        className="size-3.5 shrink-0 animate-spin text-pipeline-ai"
+                        aria-hidden
+                      />
+                    ) : null}
+                    {unread ? (
+                      <span
+                        className="size-2 shrink-0 rounded-full bg-pipeline-user"
+                        aria-hidden
+                      />
+                    ) : null}
                   </Link>
                 </Button>
                 <Button

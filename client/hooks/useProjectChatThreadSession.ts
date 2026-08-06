@@ -30,10 +30,13 @@ export type ProjectChatThreadSession = {
  */
 export function useProjectChatThreadSession({
   thread,
+  onStreamingChange,
   onStreamingSettled,
   onThreadUpdated,
 }: {
   thread: ChatThread;
+  /** Active-thread busy signal for the chat rail (busy / unread). */
+  onStreamingChange?: (streaming: boolean) => void;
   onStreamingSettled?: () => void;
   onThreadUpdated?: (thread: ChatThread) => void;
 }): ProjectChatThreadSession {
@@ -53,6 +56,7 @@ export function useProjectChatThreadSession({
     softDisplaceReasons: ["rewound"],
     onBranchable: setBranchable,
     onStreamingChange: (streaming) => {
+      onStreamingChange?.(streaming);
       if (!streaming) onStreamingSettled?.();
     },
   });

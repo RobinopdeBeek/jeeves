@@ -6,7 +6,7 @@ import {
 import { motion, useReducedMotion } from "motion/react";
 import { useEffect, useState, useRef, type ReactNode } from "react";
 import type { UIMessage } from "ai";
-import { Thread } from "@/components/assistant-ui/thread";
+import { Thread, ThreadShell } from "@/components/assistant-ui/thread";
 import { AcpChatProvider, useAcpChat } from "@/hooks/useAcpChat";
 import { ReconnectingBanner } from "@/components/chat/ReconnectingBanner";
 import { SessionErrorBanner } from "@/components/chat/SessionErrorBanner";
@@ -285,6 +285,20 @@ export function DefineAssistChat({
     );
   }
 
+  if (!chat.historyReady) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <ThreadShell
+          placeholder={
+            composerLocked
+              ? labels.workingPlaceholder
+              : "Ask or request a change…"
+          }
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {chat.connection === "reconnecting" ? <ReconnectingBanner /> : null}
@@ -292,7 +306,7 @@ export function DefineAssistChat({
         <SessionErrorBanner error={chat.sessionError} />
       ) : null}
       <AcpChatProvider
-        key={`${chat.epoch}:${chat.attachmentsEnabled ? "att" : "plain"}`}
+        key={String(chat.epoch)}
         transport={chat.transport}
         messages={chat.messages}
         promptCapabilities={chat.promptCapabilities}

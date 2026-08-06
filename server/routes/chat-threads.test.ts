@@ -61,7 +61,7 @@ describe("chat thread routes", () => {
     const listRes = await app.request("http://localhost/");
     expect(listRes.status).toBe(200);
     expect(await listRes.json()).toEqual([
-      expect.objectContaining({ id: created.id }),
+      expect.objectContaining({ id: created.id, aiWorking: false }),
     ]);
 
     const renameRes = await app.request(`http://localhost/${created.id}`, {

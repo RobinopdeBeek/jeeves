@@ -144,6 +144,8 @@ export interface ChatThread {
   createdAt: string;
   updatedAt: string;
   lastOpenedAt: string | null;
+  /** Live warm ACP mid-turn — present on list responses for the chat rail. */
+  aiWorking?: boolean;
 }
 
 /** Agent model row for the Project Chat picker (ACP session config option). */

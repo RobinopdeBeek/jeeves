@@ -136,6 +136,13 @@ export class AcpChatTransport {
 
   /** Chunks for the current turn until a stream consumer attaches. */
   private chunkBuffer: UIMessageChunk[] = [];
+  /**
+   * Full turn log (mirrors server turnChunks). When an epoch remount abandons
+   * a resume stream without cancel, rebind replays this so the new useChat
+   * never sees a bare text-delta (AI SDK: Cannot read properties of undefined
+   * (reading 'text')).
+   */
+  private turnChunkLog: UIMessageChunk[] = [];
   private streamController: ReadableStreamDefaultController<UIMessageChunk> | null =
     null;
   private turnDone = false;
@@ -304,7 +311,15 @@ export class AcpChatTransport {
    */
   async reconnectToStream(): Promise<ReadableStream<UIMessageChunk> | null> {
     await this.connect();
-    if (this.resumeConsumed) return null;
+    if (this.resumeConsumed) {
+      // Epoch remount / GC can abandon the first ReadableStream without
+      // cancel(). Steal the live turn and replay the full catch-up log so the
+      // new runtime never starts mid-stream on a text-delta.
+      if (this.turnDone) return null;
+      this.closeActiveStream();
+      this.chunkBuffer = [...this.turnChunkLog];
+      this.resumeConsumed = false;
+    }
     this.resumeConsumed = true;
     return this.openChunkStream();
   }
@@ -635,6 +650,7 @@ export class AcpChatTransport {
   private beginTurn(): void {
     this.closeActiveStream();
     this.chunkBuffer = [];
+    this.turnChunkLog = [];
     this.turnDone = false;
     this.options.onStreamingChange?.(true);
   }
@@ -688,6 +704,9 @@ export class AcpChatTransport {
   }
 
   private pushChunk(chunk: UIMessageChunk): void {
+    if (!this.turnDone) {
+      this.turnChunkLog.push(chunk);
+    }
     const controller = this.streamController;
     if (controller) {
       try {
@@ -772,6 +791,7 @@ export class AcpChatTransport {
         this.lastHistory = msg.messages;
         // Fresh generation: this socket replays the live turn from scratch.
         this.chunkBuffer = [];
+        this.turnChunkLog = [];
         this.resumeConsumed = false;
         this.turnDone = false;
         // Step chats (Grill / assist) fire an opening turn on empty history;
@@ -783,6 +803,10 @@ export class AcpChatTransport {
         // Idle non-opening sessions: close the resume stream so Send is live.
         if (!msg.streaming && !this.expectOpeningStream) {
           this.markTurnDone();
+        } else if (msg.streaming) {
+          // Thread-switch reattach: UI/rail must know the warm turn is live
+          // even before the first resumed chunk arrives.
+          this.options.onStreamingChange?.(true);
         }
         if (msg.branchable) {
           this.options.onBranchable?.(msg.branchable);

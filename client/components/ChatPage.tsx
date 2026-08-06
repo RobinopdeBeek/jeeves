@@ -1,11 +1,15 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ChatThreadList } from "@/components/chat/ChatThreadList";
 import { ChatThreadView } from "@/components/chat/ChatThreadView";
 import { useIsMd } from "@/hooks/use-is-md";
 import { api, type ChatThread } from "@/lib/api";
+import { mergeBusyFromList } from "@/lib/chat-thread-rail";
 import { resolveBareChatDestination } from "@/lib/chat-routes";
 import { toast } from "@/components/ui/sonner";
+
+/** Poll while any thread is busy so the rail can clear spinners / set unread. */
+const BUSY_POLL_MS = 1500;
 
 /** Project Chat — thread rail / mobile list + live ACP thread view. */
 export function ChatPage() {
@@ -16,12 +20,38 @@ export function ChatPage() {
   const [loading, setLoading] = useState(true);
   const [active, setActive] = useState<ChatThread | null>(null);
   const [railOpen, setRailOpen] = useState(true);
+  const [busyIds, setBusyIds] = useState<Set<string>>(() => new Set());
+  const [unreadIds, setUnreadIds] = useState<Set<string>>(() => new Set());
+  const threadIdRef = useRef(threadId);
+  threadIdRef.current = threadId;
+
+  const applyListBusy = useCallback((listed: ChatThread[]) => {
+    setBusyIds((prev) => {
+      const { busy, settled } = mergeBusyFromList(
+        prev,
+        listed,
+        threadIdRef.current,
+      );
+      if (settled.length > 0) {
+        const activeId = threadIdRef.current;
+        setUnreadIds((uPrev) => {
+          const next = new Set(uPrev);
+          for (const id of settled) {
+            if (id !== activeId) next.add(id);
+          }
+          return next;
+        });
+      }
+      return busy;
+    });
+  }, []);
 
   const refresh = useCallback(async () => {
     const listed = await api.listChatThreads();
     setThreads(listed);
+    applyListBusy(listed);
     return listed;
-  }, []);
+  }, [applyListBusy]);
 
   const refreshActiveTitle = useCallback(async () => {
     const listed = await refresh();
@@ -29,6 +59,26 @@ export function ChatPage() {
     const fromList = listed.find((t) => t.id === threadId);
     if (fromList) setActive(fromList);
   }, [refresh, threadId]);
+
+  useEffect(() => {
+    if (!threadId) return;
+    setUnreadIds((prev) => {
+      if (!prev.has(threadId)) return prev;
+      const next = new Set(prev);
+      next.delete(threadId);
+      return next;
+    });
+  }, [threadId]);
+
+  useEffect(() => {
+    if (busyIds.size === 0) return;
+    const timer = setInterval(() => {
+      void refresh().catch(() => {
+        /* non-fatal — rail indicators catch up on next successful poll */
+      });
+    }, BUSY_POLL_MS);
+    return () => clearInterval(timer);
+  }, [busyIds.size, refresh]);
 
   useEffect(() => {
     let cancelled = false;
@@ -80,6 +130,24 @@ export function ChatPage() {
     };
   }, [threadId, isDesktop, navigate, refresh]);
 
+  function handleActiveStreamingChange(streaming: boolean) {
+    if (!threadId) return;
+    setBusyIds((prev) => {
+      const next = new Set(prev);
+      if (streaming) next.add(threadId);
+      else next.delete(threadId);
+      return next;
+    });
+    if (!streaming) {
+      setUnreadIds((prev) => {
+        if (!prev.has(threadId)) return prev;
+        const next = new Set(prev);
+        next.delete(threadId);
+        return next;
+      });
+    }
+  }
+
   async function handleNewThread() {
     try {
       const thread = await api.createChatThread();
@@ -118,6 +186,18 @@ export function ChatPage() {
   async function handleDelete(id: string) {
     try {
       await api.deleteChatThread(id);
+      setBusyIds((prev) => {
+        if (!prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      setUnreadIds((prev) => {
+        if (!prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
       const listed = await refresh();
       if (threadId === id) {
         if (isDesktop && listed[0]) {
@@ -147,6 +227,8 @@ export function ChatPage() {
         <div className="flex min-h-0 flex-1 flex-col">
           <ChatThreadList
             threads={threads}
+            busyIds={busyIds}
+            unreadIds={unreadIds}
             onNewThread={handleNewThread}
             onRename={handleRename}
             onDelete={handleDelete}
@@ -159,6 +241,7 @@ export function ChatPage() {
       <ChatThreadView
         thread={active}
         showBack
+        onStreamingChange={handleActiveStreamingChange}
         onStreamingSettled={() => {
           void refreshActiveTitle();
         }}
@@ -175,6 +258,8 @@ export function ChatPage() {
           <ChatThreadList
             threads={threads}
             activeId={threadId}
+            busyIds={busyIds}
+            unreadIds={unreadIds}
             onNewThread={handleNewThread}
             onRename={handleRename}
             onDelete={handleDelete}
@@ -186,6 +271,7 @@ export function ChatPage() {
         thread={active}
         railOpen={railOpen}
         onToggleRail={() => setRailOpen((open) => !open)}
+        onStreamingChange={handleActiveStreamingChange}
         onStreamingSettled={() => {
           void refreshActiveTitle();
         }}

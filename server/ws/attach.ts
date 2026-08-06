@@ -144,7 +144,11 @@ export class ChatConnection {
   }
 
   private sendReady(session: ChatSession): void {
-    const messages = session.loadTranscript();
+    // Prefer the warm bridge while a turn is in flight — disk may lag until
+    // early persist / turn end, and mid-stream reattach must show the user prompt.
+    const messages =
+      this.deps.sessions.peekWarmMessages(this.sessionId) ??
+      session.loadTranscript();
     if (this.target.kind === "thread") {
       this.send({
         type: "ready",

@@ -89,6 +89,11 @@ export class ProjectChat {
     return this.deps.threads.deleteThread(threadId);
   }
 
+  /** True while this thread's warm ACP bridge is mid-turn. */
+  isAiWorking(threadId: string): boolean {
+    return this.deps.sessions.isAiWorking(threadChatSessionId(threadId));
+  }
+
   /**
    * Truncate/switch the transcript, close warm ACP, attempt respawn.
    * Durable Rewind always stands; warm failure is reported explicitly.

@@ -28,7 +28,13 @@ export function chatThreadRoutes(
   app.get("/", (c) => {
     // Chat page load: start a spare handshake now so the first open is instant.
     projectChat.prewarm();
-    return c.json(store.listThreads(project.id));
+    // Project busy onto the index so the rail can show spinners without a WS.
+    return c.json(
+      store.listThreads(project.id).map((thread) => ({
+        ...thread,
+        aiWorking: projectChat.isAiWorking(thread.id),
+      })),
+    );
   });
 
   app.post("/", (c) => c.json(store.createOrReuseEmptyDraft(project.id), 201));

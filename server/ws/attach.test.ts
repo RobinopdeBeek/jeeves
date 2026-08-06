@@ -42,6 +42,7 @@ function harness() {
       claim: () => {},
       release: () => {},
       isAiWorking: () => false,
+      peekWarmMessages: () => null,
     },
   } as unknown as ChatWsDeps;
   return { sent, conn: new ChatConnection(ws, stepTarget, deps) };
@@ -278,5 +279,61 @@ describe("ChatConnection thread target", () => {
     expect(sent.map((s) => JSON.parse(s) as unknown)).toEqual([
       { type: "pong", id: "tp" },
     ]);
+  });
+
+  it("seeds ready from warm mid-turn messages instead of a stale disk transcript", async () => {
+    const sent: string[] = [];
+    const ws = {
+      send: (data: string) => sent.push(data),
+      close: () => {},
+    } as unknown as WSContext;
+
+    const warmUser = {
+      id: "u1",
+      role: "user" as const,
+      parts: [{ type: "text" as const, text: "Still running" }],
+    };
+    const diskOnly = [] as typeof warmUser[];
+
+    const deps = {
+      sessions: {
+        claim: () => {},
+        release: () => {},
+        isAiWorking: () => true,
+        peekWarmMessages: () => [warmUser],
+        acquire: async () => {
+          throw new Error("should not open for this ready assertion");
+        },
+      },
+      chatThreads: {
+        getThread: () => ({ id: "t1" }),
+        loadBranchable: () => ({ messages: {}, activeHeadId: null }),
+        loadTranscript: () => diskOnly,
+      },
+      projectCwd: "/tmp/repo",
+      spawn: () => {
+        throw new Error("no spawn");
+      },
+    } as unknown as ChatWsDeps;
+
+    const conn = new ChatConnection(
+      ws,
+      { kind: "thread", ref: { threadId: "t1" } },
+      deps,
+    );
+
+    // start() sends ready before openChat; openChat will fail — we only care about ready.
+    await conn.start();
+
+    const ready = sent
+      .map((s) => JSON.parse(s) as { type: string; messages?: unknown; streaming?: boolean })
+      .find((m) => m.type === "ready");
+    expect(ready).toEqual(
+      expect.objectContaining({
+        type: "ready",
+        streaming: true,
+        messages: [warmUser],
+      }),
+    );
   });
 });

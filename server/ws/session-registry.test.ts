@@ -194,6 +194,44 @@ describe("ChatSessionRegistry — warm bridges", () => {
     expect(registry.hasWarm(idA)).toBe(true);
   });
 
+  it("exposes mid-turn warm messages after detach so ready can reseed the user prompt", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-reattach");
+    const registry = new ChatSessionRegistry();
+    const threadId = threadChatSessionId("thread-1");
+
+    const handle = await registry.acquire(
+      testSession(threadId, {
+        cwd: "C:/repo",
+        openingPrompt: null,
+        history: [],
+      }),
+      { spawn: () => process },
+    );
+
+    const sub = collectingSubscriber();
+    handle.attach(sub);
+    void handle.sendMessage("Where did my prompt go?").catch(() => undefined);
+    await viWaitFor(() => process.prompts().length === 1);
+    expect(registry.isAiWorking(threadId)).toBe(true);
+
+    handle.detach(sub);
+
+    const warm = registry.peekWarmMessages(threadId);
+    expect(warm?.map((m) => m.role)).toEqual(["user"]);
+    expect(warm?.[0]?.parts).toEqual([
+      { type: "text", text: "Where did my prompt go?" },
+    ]);
+    expect(registry.isAiWorking(threadId)).toBe(true);
+
+    process.emit({
+      jsonrpc: "2.0",
+      id: process.promptRequest().id,
+      result: { stopReason: "end_turn" },
+    });
+    await handle.bridge.whenIdle();
+  });
+
   it("a second acquire during the handshake waits instead of reusing a half-open bridge", async () => {
     let spawnCount = 0;
     const process = new MockAcpProcess();

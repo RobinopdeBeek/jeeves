@@ -930,6 +930,212 @@ describe("AcpChatTransport — failed handshake", () => {
     expect(streaming.at(-1)).toBe(false);
   });
 
+  it("signals streaming when ready reports an in-flight turn (thread switch reattach)", async () => {
+    const streaming: boolean[] = [];
+    const transport = new AcpChatTransport({
+      threadId: "t1",
+      onStreamingChange: (s) => streaming.push(s),
+    });
+
+    const history = [userMessage("Still waiting")];
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({ type: "ready", messages: history, streaming: true });
+    await connectP;
+
+    expect(streaming.at(-1)).toBe(true);
+
+    ws.deliver({ type: "session", status: "open", streaming: true });
+    const resume = await transport.reconnectToStream();
+    expect(resume).not.toBeNull();
+  });
+
+  it("rebinds resume after epoch remount abandons the first stream without cancel", async () => {
+    // Defense in depth for reconnect epoch remounts: @ai-sdk/react does not
+    // cancel the first ReadableStream on unmount, so resumeConsumed must not
+    // permanently block a second attach while the turn is still live.
+    const transport = new AcpChatTransport({ threadId: "t1" });
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({
+      type: "ready",
+      messages: [userMessage("Still waiting")],
+      streaming: true,
+    });
+    await connectP;
+    ws.deliver({ type: "session", status: "open", streaming: true });
+
+    const first = await transport.reconnectToStream();
+    expect(first).not.toBeNull();
+    // Epoch remount: old Chat GC'd — no reader.cancel().
+
+    const second = await transport.reconnectToStream();
+    expect(second).not.toBeNull();
+    const readP = readAll(second!);
+
+    ws.deliver({
+      type: "chunk",
+      chunk: { type: "start", messageId: "a1" },
+    });
+    ws.deliver({
+      type: "chunk",
+      chunk: { type: "text-delta", id: "t1", delta: "hello" },
+    });
+    ws.deliver({
+      type: "chunk",
+      chunk: { type: "finish", finishReason: "stop" },
+    });
+
+    const chunks = await readP;
+    expect(chunks.map((c) => c.type)).toEqual([
+      "start",
+      "text-delta",
+      "finish",
+    ]);
+  });
+
+  it("replays catch-up on rebind so a mid-turn text-delta is never orphaned", async () => {
+    // Repro: first resume consumes start/text-start/"I am going to search…",
+    // then an epoch remount steals the stream. Without replaying the log, the
+    // next text-delta hits AI SDK with no active text part →
+    // Cannot read properties of undefined (reading 'text').
+    const transport = new AcpChatTransport({ threadId: "t1" });
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({
+      type: "ready",
+      messages: [userMessage("Look this up")],
+      streaming: true,
+    });
+    await connectP;
+    ws.deliver({ type: "session", status: "open", streaming: true });
+
+    const first = await transport.reconnectToStream();
+    expect(first).not.toBeNull();
+    // Drain the first consumer so chunks are "seen" then abandoned.
+    const firstReader = first!.getReader();
+
+    ws.deliver({
+      type: "chunk",
+      chunk: { type: "start", messageId: "a1" },
+    });
+    ws.deliver({
+      type: "chunk",
+      chunk: { type: "text-start", id: "t1" },
+    });
+    ws.deliver({
+      type: "chunk",
+      chunk: {
+        type: "text-delta",
+        id: "t1",
+        delta: "I am going to search online for this…",
+      },
+    });
+    await firstReader.read();
+    await firstReader.read();
+    await firstReader.read();
+    // Abandon without cancel (useChat unmount).
+
+    const second = await transport.reconnectToStream();
+    expect(second).not.toBeNull();
+    const readP = readAll(second!);
+
+    ws.deliver({
+      type: "chunk",
+      chunk: { type: "text-end", id: "t1" },
+    });
+    ws.deliver({
+      type: "chunk",
+      chunk: { type: "text-start", id: "t2" },
+    });
+    ws.deliver({
+      type: "chunk",
+      chunk: { type: "text-delta", id: "t2", delta: "Here is what I found." },
+    });
+    ws.deliver({
+      type: "chunk",
+      chunk: { type: "finish", finishReason: "stop" },
+    });
+
+    const chunks = await readP;
+    expect(chunks.map((c) => c.type)).toEqual([
+      "start",
+      "text-start",
+      "text-delta",
+      "text-end",
+      "text-start",
+      "text-delta",
+      "finish",
+    ]);
+    expect(
+      chunks
+        .filter(
+          (c): c is Extract<(typeof chunks)[number], { type: "text-delta" }> =>
+            c.type === "text-delta",
+        )
+        .map((c) => c.delta),
+    ).toEqual([
+      "I am going to search online for this…",
+      "Here is what I found.",
+    ]);
+  });
+
+  it("delivers catch-up chunks buffered before the first resume (deferred provider mount)", async () => {
+    // Preferred path: mount AcpChatProvider only after connect() seeds history.
+    // Catch-up chunks arrive while historyReady is false and must land in the
+    // first (and only) resume stream.
+    const transport = new AcpChatTransport({ threadId: "t1" });
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.deliver({
+      type: "ready",
+      messages: [userMessage("Still waiting")],
+      streaming: true,
+    });
+    await connectP;
+    ws.deliver({ type: "session", status: "open", streaming: true });
+
+    // Server attach() catch-up before useChat mounts.
+    ws.deliver({
+      type: "chunk",
+      chunk: { type: "start", messageId: "a1" },
+    });
+    ws.deliver({
+      type: "chunk",
+      chunk: { type: "text-delta", id: "t1", delta: "already said" },
+    });
+
+    const resume = await transport.reconnectToStream();
+    expect(resume).not.toBeNull();
+    const readP = readAll(resume!);
+
+    ws.deliver({
+      type: "chunk",
+      chunk: { type: "text-delta", id: "t1", delta: " more" },
+    });
+    ws.deliver({
+      type: "chunk",
+      chunk: { type: "finish", finishReason: "stop" },
+    });
+
+    const chunks = await readP;
+    expect(chunks.map((c) => c.type)).toEqual([
+      "start",
+      "text-delta",
+      "text-delta",
+      "finish",
+    ]);
+    expect(
+      chunks
+        .filter(
+          (c): c is Extract<(typeof chunks)[number], { type: "text-delta" }> =>
+            c.type === "text-delta",
+        )
+        .map((c) => c.delta)
+        .join(""),
+    ).toBe("already said more");
+  });
+
   it("retries on the next send by reconnecting the abandoned socket", async () => {
     vi.useFakeTimers();
     const transport = new AcpChatTransport({ threadId: "t1" });

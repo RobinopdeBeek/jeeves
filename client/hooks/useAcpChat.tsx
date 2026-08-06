@@ -61,6 +61,12 @@ export type AcpChatState =
       status: "ready";
       transport: AcpChatTransport;
       messages: UIMessage[];
+      /**
+       * False until the first `connect()` resolves. Callers must not mount
+       * `AcpChatProvider` (resume:true) before this — an empty→history epoch
+       * remount orphans the first resume stream and kills live tokens.
+       */
+      historyReady: boolean;
       /** ACP handshake done. Sends are parked (not refused) until then. */
       sessionOpen: boolean;
       /** Socket health; "reconnecting" drives the recovery hint. */
@@ -89,14 +95,15 @@ export type AcpChatState =
   | { status: "error"; error: string };
 
 /**
- * Live from the first frame: the transport is already there, history is empty
- * and `sessionOpen` is false. No caller ever swaps components during startup.
+ * Transport exists immediately; `historyReady` flips after the first connect
+ * so `AcpChatProvider` mounts once with the authoritative seed (empty or warm).
  */
 function liveState(transport: AcpChatTransport): AcpChatState {
   return {
     status: "ready",
     transport,
     messages: [],
+    historyReady: false,
     sessionOpen: transport.isSessionOpen(),
     connection: transport.getConnectionState(),
     epoch: 0,
@@ -204,6 +211,7 @@ export function useAcpChat({
           prev.status === "ready"
             ? {
                 ...prev,
+                historyReady: true,
                 messages: history,
                 sessionOpen: transport.isSessionOpen(),
                 connection: transport.getConnectionState(),
@@ -260,14 +268,20 @@ export function useAcpChat({
       .then((history) => {
         apply(transport, (prev) => {
           if (prev.status !== "ready") return prev;
+          const firstSeed = !prev.historyReady;
           const synced = {
             ...prev,
+            historyReady: true,
             sessionOpen: transport.isSessionOpen(),
             connection: transport.getConnectionState(),
             ...capsFromTransport(transport),
           };
-          // Re-seeding remounts the chat runtime, so only pay for it when there
-          // is history to seed — a brand-new chat never remounts.
+          // First connect: seed messages without bumping epoch — the provider
+          // mounts after historyReady and must get a single resume. Later
+          // reseeds (shouldn't hit here) still remount when history arrives.
+          if (firstSeed) {
+            return { ...synced, messages: history };
+          }
           return history.length > 0
             ? { ...synced, messages: history, epoch: prev.epoch + 1 }
             : synced;

@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import type { UIMessage } from "ai";
-import { Thread } from "@/components/assistant-ui/thread";
+import { Thread, ThreadShell } from "@/components/assistant-ui/thread";
 import { AcpChatProvider, useAcpChat } from "@/hooks/useAcpChat";
 import { ReconnectingBanner } from "@/components/chat/ReconnectingBanner";
 import { SessionErrorBanner } from "@/components/chat/SessionErrorBanner";
@@ -75,6 +75,10 @@ function LiveGrill({
     );
   }
 
+  if (!chat.historyReady) {
+    return <ThreadShell />;
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {chat.connection === "reconnecting" ? <ReconnectingBanner /> : null}
@@ -83,7 +87,7 @@ function LiveGrill({
       ) : null}
       {/* epoch remounts the runtime after a reconnect so the server transcript wins. */}
       <AcpChatProvider
-        key={`${chat.epoch}:${chat.attachmentsEnabled ? "att" : "plain"}`}
+        key={String(chat.epoch)}
         transport={chat.transport}
         messages={chat.messages}
         promptCapabilities={chat.promptCapabilities}

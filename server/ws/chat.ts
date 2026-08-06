@@ -649,6 +649,9 @@ export class AcpBridge {
         role: "user",
         parts: userMessageParts(text, attachments),
       });
+      // Persist before the prompt RPC so a mid-turn reattach (thread switch)
+      // can seed the user message from disk even if the warm bridge is gone.
+      this.live.onTranscript(this.messages);
     }
 
     const messageId = nanoid(10);

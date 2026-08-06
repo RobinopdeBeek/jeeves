@@ -89,6 +89,15 @@ export class ChatSessionRegistry {
     return this.warm.get(id)?.isAiWorking() ?? false;
   }
 
+  /**
+   * In-memory transcript for a warm bridge, including a user turn that is not
+   * yet finished on disk when early persist is unavailable. Null when cold.
+   */
+  peekWarmMessages(id: ChatSessionId): UIMessage[] | null {
+    const bridge = this.warm.get(id);
+    return bridge ? bridge.getMessages() : null;
+  }
+
   claim(id: ChatSessionId, connection: DisplaceableConnection): void {
     const previous = this.active.get(id);
     if (previous && previous !== connection) {

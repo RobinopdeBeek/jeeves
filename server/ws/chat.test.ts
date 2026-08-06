@@ -310,6 +310,42 @@ describe("AcpBridge", () => {
     expect(promptText(process, 1)).not.toContain("Prior transcript");
   });
 
+  it("persists the user turn before the prompt RPC finishes (mid-stream reattach)", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-mid");
+    const transcripts: UIMessage[][] = [];
+
+    const bridge = new AcpBridge({
+      spawn: () => process,
+      onTranscript: (messages) => transcripts.push(messages),
+    });
+
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    const replyPromise = bridge.sendMessage("Still thinking about pantry alerts");
+    await viWaitFor(() => process.prompts().length === 1);
+
+    // Disk/in-memory ready must already include the user message while AI works.
+    expect(bridge.isAiWorking()).toBe(true);
+    expect(bridge.getMessages().map((m) => m.role)).toEqual(["user"]);
+    expect(transcripts.at(-1)?.map((m) => m.role)).toEqual(["user"]);
+    expect(transcripts.at(-1)?.[0]?.parts).toEqual([
+      { type: "text", text: "Still thinking about pantry alerts" },
+    ]);
+
+    process.emit({
+      jsonrpc: "2.0",
+      id: process.promptRequest().id,
+      result: { stopReason: "end_turn" },
+    });
+    await replyPromise;
+    expect(transcripts.at(-1)?.map((m) => m.role)).toEqual(["user", "assistant"]);
+  });
+
   it("keeps Spec markdown out of the transcript while framing the agent prompt", async () => {
     const process = new MockAcpProcess();
     process.autoHandshake("sess-spec");

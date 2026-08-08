@@ -52,3 +52,9 @@ export function showMarkdownArtifact(
 ): boolean {
   return shouldLoadMarkdownArtifact(stepKey, stepStatus) && artifact != null;
 }
+
+/** Live empty-state / status line while a step is ai-working. */
+export function liveWorkingMessage(stepKey: string): string {
+  if (stepKey === "prepeval") return "Preparing interactive evaluation…";
+  return "agent is warming up…";
+}

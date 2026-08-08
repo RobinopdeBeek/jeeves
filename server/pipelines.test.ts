@@ -270,6 +270,51 @@ describe("advance", () => {
     });
   });
 
+  it("step-finished Prepare Eval success marks prepeval done and human review needs-user", () => {
+    expect(
+      advance(
+        {
+          id: "task-1",
+          kind: "task",
+          column: "review",
+          steps: [
+            { key: "prepeval", status: "ai-working" },
+            { key: "review", status: "pending" },
+          ],
+        },
+        { type: "step-finished", stepKey: "prepeval", outcome: "succeeded" },
+      ),
+    ).toEqual({
+      ok: true,
+      stepPatches: [
+        { key: "prepeval", status: "done" },
+        { key: "review", status: "needs-user" },
+      ],
+      sideEffects: [],
+    });
+  });
+
+  it("step-finished Prepare Eval failure parks needs-user without unlocking review", () => {
+    expect(
+      advance(
+        {
+          id: "task-1",
+          kind: "task",
+          column: "review",
+          steps: [
+            { key: "prepeval", status: "ai-working" },
+            { key: "review", status: "pending" },
+          ],
+        },
+        { type: "step-finished", stepKey: "prepeval", outcome: "failed" },
+      ),
+    ).toEqual({
+      ok: true,
+      stepPatches: [{ key: "prepeval", status: "needs-user" }],
+      sideEffects: [],
+    });
+  });
+
   it("step-finished for other steps still maps outcome to done / needs-user", () => {
     expect(
       advance(

@@ -482,13 +482,14 @@ describe("ExecutionEngine", () => {
     expect(stepStatus(harness, card.id, "plan")).toBe("done");
     expect(stepStatus(harness, card.id, "impl")).toBe("done");
     const runsForCard = harness.runStore.listForCard(card.id);
-    expect(runsForCard).toHaveLength(4);
+    expect(runsForCard).toHaveLength(5);
     expect(runsForCard.filter((r) => r.stepKey === "plan").map((r) => r.status).sort()).toEqual([
       "failed",
       "succeeded",
     ]);
     expect(runsForCard.find((r) => r.stepKey === "impl")?.status).toBe("succeeded");
     expect(runsForCard.find((r) => r.stepKey === "airev")?.status).toBe("succeeded");
+    expect(runsForCard.find((r) => r.stepKey === "prepeval")?.status).toBe("succeeded");
   });
 
   it("rejects retry when the step has no failed run", () => {
@@ -788,13 +789,14 @@ describe("ExecutionEngine", () => {
       await engine.whenIdle();
 
       const branch = `jeeves/card-${card.id}`;
-      expect(resolvedRefs).toEqual(["main", branch, branch]);
+      expect(resolvedRefs).toEqual(["main", branch, branch, branch]);
       expect(createFromCalls).toEqual([{ branch, baseSha: "sha-of-main" }]);
-      expect(checkoutCalls).toEqual([{ branch }, { branch }]);
+      expect(checkoutCalls).toEqual([{ branch }, { branch }, { branch }]);
       expect(harness.store.getCard(card.id)?.branch).toBe(branch);
       expect(harness.runStore.latestForStep(card.id, "plan")?.baseSha).toBe("sha-of-main");
       expect(stepStatus(harness, card.id, "impl")).toBe("done");
       expect(stepStatus(harness, card.id, "airev")).toBe("done");
+      expect(stepStatus(harness, card.id, "prepeval")).toBe("done");
     });
 
     it("uses a non-main projects.default_branch as the upstream ref", async () => {
@@ -888,12 +890,14 @@ describe("ExecutionEngine", () => {
       expect(tracked.createFromCalls).toEqual([
         { branch: `jeeves/card-${card.id}`, baseSha: "sha-of-main" },
       ]);
-      // Implement + AI Review continuations after successful Plan retry.
+      // Implement + AI Review + Prepare Eval continuations after successful Plan retry.
       expect(tracked.checkoutCalls).toEqual([
+        { branch: `jeeves/card-${card.id}` },
         { branch: `jeeves/card-${card.id}` },
         { branch: `jeeves/card-${card.id}` },
       ]);
       expect(tracked.resolvedRefs).toEqual([
+        `jeeves/card-${card.id}`,
         `jeeves/card-${card.id}`,
         `jeeves/card-${card.id}`,
       ]);
@@ -929,6 +933,7 @@ describe("ExecutionEngine", () => {
       const childBranch = `jeeves/card-${child.id}`;
       expect(tracked.resolvedRefs).toEqual([
         "jeeves/card-feature",
+        childBranch,
         childBranch,
         childBranch,
       ]);
@@ -1114,9 +1119,11 @@ describe("ExecutionEngine", () => {
       expect(checkoutCalls).toEqual([
         `jeeves/card-${card.id}`,
         `jeeves/card-${card.id}`,
+        `jeeves/card-${card.id}`,
       ]);
       expect(stepStatus(harness, card.id, "impl")).toBe("done");
       expect(stepStatus(harness, card.id, "airev")).toBe("done");
+      expect(stepStatus(harness, card.id, "prepeval")).toBe("done");
     });
 
     it("fails Implement when the agent leaves no commits", async () => {
@@ -1284,9 +1291,13 @@ describe("ExecutionEngine", () => {
       );
     });
 
-    it("harvests review.md and advances to Review with prepeval queued on clean review", async () => {
+    it("harvests review.md and advances through Prepare Eval stub to human Review", async () => {
       const card = queuedCard(harness);
-      const { engine } = makeEngine(harness, [planOk(), implementOk(), airevOk()]);
+      const { engine, calls } = makeEngine(harness, [
+        planOk(),
+        implementOk(),
+        airevOk(),
+      ]);
 
       engine.enqueue(card.id, "plan");
       await engine.whenIdle();
@@ -1300,8 +1311,23 @@ describe("ExecutionEngine", () => {
       expect(harness.artifactStore.readBody(review!)).toContain("Clean review");
       expect(stepStatus(harness, card.id, "airev")).toBe("done");
       expect(harness.store.getCard(card.id)?.column).toBe("review");
-      expect(stepStatus(harness, card.id, "prepeval")).toBe("queued");
-      expect(stepStatus(harness, card.id, "review")).toBe("pending");
+      // Host stub — no AgentRunner call for prepeval.
+      expect(calls).toHaveLength(3);
+      expect(stepStatus(harness, card.id, "prepeval")).toBe("done");
+      expect(stepStatus(harness, card.id, "review")).toBe("needs-user");
+
+      const evalArtifact = harness.artifactStore.latest(card.id, {
+        stepKey: "prepeval",
+        round: 0,
+        kind: "eval",
+      });
+      expect(evalArtifact).toBeDefined();
+      expect(harness.artifactStore.readBody(evalArtifact!)).toContain(
+        "Prepare Eval stub",
+      );
+      expect(harness.runStore.latestForStep(card.id, "prepeval")?.skill).toBe(
+        "eval-assemble",
+      );
     });
 
     it("allows zero commits on a clean review and skips host verify", async () => {
@@ -1467,16 +1493,89 @@ describe("ExecutionEngine", () => {
       expect(harness.runStore.latestForStep(card.id, "airev")?.error).toMatch(/dirty/i);
     });
 
-    it("does not produce Evaluation HTML or eval artifacts", async () => {
+    it("does not produce Evaluation HTML from AI Review (Prepare Eval owns eval)", async () => {
       const card = queuedCard(harness);
       const { engine } = makeEngine(harness, [planOk(), implementOk(), airevOk()]);
 
       engine.enqueue(card.id, "plan");
       await engine.whenIdle();
 
-      const kinds = harness.artifactStore.list(card.id).map((a) => a.kind);
-      expect(kinds).toContain("review");
-      expect(kinds).not.toContain("eval");
+      expect(
+        harness.artifactStore.latest(card.id, {
+          stepKey: "airev",
+          round: 0,
+          kind: "eval",
+        }),
+      ).toBeUndefined();
+      expect(
+        harness.artifactStore.latest(card.id, {
+          stepKey: "airev",
+          round: 0,
+          kind: "review",
+        }),
+      ).toBeDefined();
+      // Slice 8.5 stub harvests eval on prepeval, not airev.
+      expect(
+        harness.artifactStore.latest(card.id, {
+          stepKey: "prepeval",
+          round: 0,
+          kind: "eval",
+        }),
+      ).toBeDefined();
+    });
+  });
+
+  describe("Prepare Eval stub (slice 8.5)", () => {
+    it("emits preparing copy on the run log while the host stub runs", async () => {
+      const card = queuedCard(harness);
+      const { engine } = makeEngine(harness, [planOk(), implementOk(), airevOk()]);
+
+      engine.enqueue(card.id, "plan");
+      await engine.whenIdle();
+
+      const runlog = harness.artifactStore.latest(card.id, {
+        stepKey: "prepeval",
+        round: 0,
+        kind: "runlog",
+      });
+      expect(runlog).toBeDefined();
+      expect(harness.artifactStore.readBody(runlog!)).toContain(
+        "Preparing interactive evaluation…",
+      );
+      const logEvents = harness.received.filter(
+        (e) =>
+          e.type === "run.log" &&
+          e.cardId === card.id &&
+          e.line.includes("Preparing interactive evaluation"),
+      );
+      expect(logEvents.length).toBeGreaterThan(0);
+    });
+
+    it("fails Prepare Eval when the stub leaves the source tree dirty", async () => {
+      const card = queuedCard(harness);
+      const { engine: setup } = makeEngine(harness, [planOk(), implementOk(), airevOk()]);
+      setup.enqueue(card.id, "plan");
+      await setup.whenIdle();
+
+      harness.store.setStepStatus(card.id, "prepeval", "queued");
+      harness.store.setStepStatus(card.id, "review", "pending");
+
+      const base = fakeWorktrees(harness.artifactRoot);
+      const engine = makeEngineWithRunner(harness, fakeRunner([]).runner, {
+        ...base,
+        async worktreeStatus() {
+          return "?? leaked.txt";
+        },
+      });
+
+      engine.enqueue(card.id, "prepeval");
+      await engine.whenIdle();
+
+      expect(stepStatus(harness, card.id, "prepeval")).toBe("needs-user");
+      expect(stepStatus(harness, card.id, "review")).toBe("pending");
+      expect(harness.runStore.latestForStep(card.id, "prepeval")?.error).toMatch(
+        /dirty|source tree/i,
+      );
     });
   });
 });

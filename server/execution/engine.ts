@@ -196,6 +196,39 @@ export class ExecutionEngine {
         store.setCardBranch(cardId, branch);
       }
 
+      if (policy.hostBody) {
+        const line = "Preparing interactive evaluation…";
+        try {
+          fs.appendFileSync(logPath, `${line}\n`);
+        } catch {
+          // Best-effort — UI still gets the SSE line.
+        }
+        events.emit({ type: "run.log", runId: run.id, cardId, line });
+
+        // Stub creates no commits — pin eval to tip-at-start.
+        headSha = baseSha;
+        const ctx = {
+          workspacePath: worktreePath,
+          headSha,
+          baseSha,
+        };
+        await policy.hostBody(ctx);
+        await this.finalizeStep(cardId, stepKey, round, policy.skill, ctx);
+
+        if (!meetsPostconditions(stepKey, artifacts, cardId, round)) {
+          await fail("step postconditions not met");
+        } else {
+          this.freezeRunLog(run, stepKey, round, policy.skill, headSha);
+          runs.finish(run.id, { status: "succeeded" });
+          this.finishStep(cardId, stepKey, run.id, "succeeded");
+        }
+        return;
+      }
+
+      if (!policy.promptFile) {
+        throw new Error(`step ${stepKey} has no promptFile`);
+      }
+
       let result: Extract<RunEvent, { type: "result" }> | undefined;
       const prompt = this.buildPrompt(card, stepKey, policy.promptFile);
       const iterable = runner.run(prompt, {

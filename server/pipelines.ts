@@ -389,7 +389,7 @@ export function advance(
 
   // step-finished: status patch for the completed step; Plan → Implement →
   // AI Review chain on the same card; AI Review success enters Review with
-  // Prepare Eval queued (stub body lands in slice 8.5).
+  // Prepare Eval queued; Prepare Eval success unlocks human Review.
   if (trigger.stepKey === "plan" && trigger.outcome === "succeeded") {
     return {
       ok: true,
@@ -431,6 +431,18 @@ export function advance(
       sideEffects: [
         { type: "enqueue", cardId: card.id, stepKey: "prepeval" },
       ],
+    };
+  }
+
+  // Prepare Eval stub success unlocks human Review (slice 8.5; real assemble in 9).
+  if (trigger.stepKey === "prepeval" && trigger.outcome === "succeeded") {
+    return {
+      ok: true,
+      stepPatches: [
+        { key: "prepeval", status: "done" },
+        { key: "review", status: "needs-user" },
+      ],
+      sideEffects: [],
     };
   }
 

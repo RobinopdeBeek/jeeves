@@ -7,6 +7,7 @@ import { useJeevesEvents } from "@/lib/events";
 import { appendLogLine, formatRunLogText } from "@/lib/run-log";
 import {
   initialLogOpen,
+  liveWorkingMessage,
   logOpenAfterFinish,
   markdownArtifactKind,
   shouldLoadMarkdownArtifact,
@@ -36,8 +37,8 @@ function toDisplayLog(raw: string): string {
 }
 
 /**
- * Plan / Implement / AI Review run-log panel: queued message → live SSE
- * stream while ai-working → run log above formatted markdown when finished.
+ * Plan / Implement / AI Review / Prepare Eval run-log panel: queued message →
+ * live SSE stream while ai-working → run log above formatted markdown when finished.
  */
 export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
   const step = card.steps.find((s) => s.key === stepKey);
@@ -109,7 +110,7 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
     }
     if (prevStepStatus.current !== step?.status && step?.status === "ai-working") {
       activeRunIdRef.current = null;
-      setPlanArtifact(null);
+      setMarkdownArtifact(null);
     }
     prevStepStatus.current = step?.status;
   }, [step?.status]);
@@ -217,7 +218,9 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
             )}
             {renderLogBody()}
             {mode === "live" && !logText && (
-              <div className="text-muted-foreground">[starting] agent is warming up…</div>
+              <div className="text-muted-foreground">
+                [starting] {liveWorkingMessage(stepKey)}
+              </div>
             )}
           </div>
         </div>

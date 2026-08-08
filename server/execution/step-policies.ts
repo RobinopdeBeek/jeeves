@@ -1,12 +1,22 @@
 import path from "node:path";
 import type { ArtifactStore, HarvestDeclaration } from "../artifacts/store.js";
 import type { StepKey } from "../pipelines.js";
+import { writePrepareEvalStub } from "./prepare-eval-stub.js";
 import type { RunFinalizeContext } from "./runner.js";
 import type { WorktreeLifecycle } from "./worktree-manager.js";
 
 export interface StepExecutionPolicy {
   skill: string;
-  promptFile: string;
+  /**
+   * Skill prompt under the app repo. Required for agent-run steps; unused when
+   * `hostBody` is set (Prepare Eval stub).
+   */
+  promptFile?: string;
+  /**
+   * Host-owned step body — skips AgentRunner. Used for the Prepare Eval stub
+   * until slice 9 wires real eval-assemble.
+   */
+  hostBody?: (ctx: RunFinalizeContext) => Promise<void>;
   harvest?: HarvestDeclaration[];
   assertWorkspace?: (
     worktrees: WorktreeLifecycle,
@@ -86,6 +96,21 @@ export const STEP_POLICIES: Partial<Record<StepKey, StepExecutionPolicy>> = {
       undefined,
     hostVerify: "if-committed",
   },
+  prepeval: {
+    skill: "eval-assemble",
+    hostBody: writePrepareEvalStub,
+    harvest: [
+      {
+        exchangePath: ".jeeves/eval.html",
+        kind: "eval",
+        stepKey: "prepeval",
+      },
+    ],
+    assertWorkspace: assertPrepareEvalWorkspace,
+    postcondition: (artifacts, cardId, round) =>
+      artifacts.latest(cardId, { stepKey: "prepeval", round, kind: "eval" }) !==
+      undefined,
+  },
 };
 
 export function stepPolicy(stepKey: StepKey): StepExecutionPolicy | undefined {
@@ -150,5 +175,22 @@ async function assertAiReviewWorkspace(
   if (status) {
     const summary = status.split("\n")[0] ?? "dirty tree";
     throw new Error(`ai-review step left source tree dirty: ${summary}`);
+  }
+}
+
+/** Prepare Eval: placeholder eval only; no source commits; clean tree. */
+async function assertPrepareEvalWorkspace(
+  worktrees: WorktreeLifecycle,
+  ctx: RunFinalizeContext,
+): Promise<void> {
+  if (ctx.headSha !== ctx.baseSha) {
+    throw new Error("prepare-eval step must not create commits on the card branch");
+  }
+  const status = await worktrees.worktreeStatus(ctx.workspacePath, {
+    ignorePathPrefixes: [".jeeves"],
+  });
+  if (status) {
+    const summary = status.split("\n")[0] ?? "dirty tree";
+    throw new Error(`prepare-eval step left source tree dirty: ${summary}`);
   }
 }

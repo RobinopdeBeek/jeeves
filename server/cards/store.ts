@@ -658,19 +658,35 @@ export class CardStore {
     }));
   }
 
-  /** Steps waiting for the ExecutionEngine, oldest card first (boot scan). */
+  /**
+   * Eligible execution steps for the queue: `queued` and no unmerged blockers,
+   * ordered by sibling `position` then step index plan < impl < airev < prepeval
+   * (depth-first per task). Boot and live enqueue both rebuild from this.
+   */
   listQueuedSteps(): Array<{ cardId: string; stepKey: StepKey }> {
-    return this.db
+    const rows = this.db
       .select({
         cardId: cardSteps.cardId,
         stepKey: cardSteps.stepKey,
-        createdAt: cards.createdAt,
+        position: cards.position,
       })
       .from(cardSteps)
       .innerJoin(cards, eq(cardSteps.cardId, cards.id))
       .where(eq(cardSteps.status, "queued"))
-      .orderBy(asc(cards.createdAt))
-      .all()
+      .all();
+
+    return rows
+      .filter(
+        (r) =>
+          executionQueueIndex(r.stepKey) !== undefined &&
+          !this.hasUnmergedBlockers(r.cardId),
+      )
+      .sort((a, b) => {
+        if (a.position !== b.position) return a.position - b.position;
+        return (
+          executionQueueIndex(a.stepKey)! - executionQueueIndex(b.stepKey)!
+        );
+      })
       .map((r) => ({ cardId: r.cardId, stepKey: r.stepKey as StepKey }));
   }
 
@@ -800,7 +816,7 @@ export class CardStore {
   }
 
   /** True when any blocker card is not yet merged (slice 10 releases these). */
-  private hasUnmergedBlockers(cardId: string): boolean {
+  hasUnmergedBlockers(cardId: string): boolean {
     const rows = this.db
       .select({ status: cards.status })
       .from(cardBlockers)
@@ -836,5 +852,21 @@ export class CardStore {
         implementProgress: full.implementProgress,
       };
     });
+  }
+}
+
+/** Depth-first queue step index — only AI-execution pipeline steps. */
+function executionQueueIndex(stepKey: string): number | undefined {
+  switch (stepKey) {
+    case "plan":
+      return 0;
+    case "impl":
+      return 1;
+    case "airev":
+      return 2;
+    case "prepeval":
+      return 3;
+    default:
+      return undefined;
   }
 }

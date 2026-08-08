@@ -33,19 +33,22 @@ export interface ExecutionEngineDeps {
 }
 
 /**
- * ExecutionEngine — sequential FIFO queue over the AgentRunner seam. One
- * run at a time; step transitions, run rows, and SSE events happen here.
+ * ExecutionEngine — sequential queue over the AgentRunner seam. One run at
+ * a time. Order is derived from CardStore.listQueuedSteps (depth-first), not
+ * in-memory insertion order.
  */
 export class ExecutionEngine {
-  private readonly queue: Array<{ cardId: string; stepKey: StepKey }> = [];
   private processing = false;
   private idleResolvers: Array<() => void> = [];
   private readonly abort = new AbortController();
 
   constructor(private readonly deps: ExecutionEngineDeps) {}
 
-  enqueue(cardId: string, stepKey: StepKey): void {
-    this.queue.push({ cardId, stepKey });
+  /**
+   * Wake the processor. The card/step must already be `queued` in the store;
+   * the next job is always the head of listQueuedSteps (eligible + depth-first).
+   */
+  enqueue(_cardId: string, _stepKey: StepKey): void {
     void this.processQueue();
   }
 
@@ -95,20 +98,22 @@ export class ExecutionEngine {
         card: store.setStepStatus(orphan.cardId, orphan.stepKey as StepKey, "needs-user"),
       });
     }
-    for (const step of store.listQueuedSteps()) {
-      this.enqueue(step.cardId, step.stepKey);
+    // One wake drains all eligible steps in durable depth-first order.
+    if (store.listQueuedSteps().length > 0) {
+      const head = store.listQueuedSteps()[0]!;
+      this.enqueue(head.cardId, head.stepKey);
     }
   }
 
-  /** Graceful shutdown: cancel the in-flight run and drain the queue. */
+  /** Graceful shutdown: cancel the in-flight run and stop picking new work. */
   async stop(): Promise<void> {
     this.abort.abort(new Error("server shutting down"));
     await this.whenIdle();
   }
 
-  /** Resolves once the queue is empty and no run is in flight. */
+  /** Resolves once no run is in flight and the processor is idle. */
   whenIdle(): Promise<void> {
-    if (!this.processing && this.queue.length === 0) return Promise.resolve();
+    if (!this.processing) return Promise.resolve();
     return new Promise((resolve) => this.idleResolvers.push(resolve));
   }
 
@@ -119,9 +124,13 @@ export class ExecutionEngine {
       // After shutdown-abort, leave remaining jobs `queued` in the DB so the
       // next boot re-enqueues them; only the in-flight run is interrupted.
       while (!this.abort.signal.aborted) {
-        const job = this.queue.shift();
-        if (!job) break;
-        await this.execute(job.cardId, job.stepKey);
+        const next = this.deps.store.listQueuedSteps()[0];
+        if (!next) break;
+        const claim = `${next.cardId}:${next.stepKey}`;
+        await this.execute(next.cardId, next.stepKey);
+        const head = this.deps.store.listQueuedSteps()[0];
+        // execute must claim the step; otherwise avoid spinning on it.
+        if (head && `${head.cardId}:${head.stepKey}` === claim) break;
       }
     } finally {
       this.processing = false;
@@ -136,6 +145,10 @@ export class ExecutionEngine {
     const policy = stepPolicy(stepKey);
     const card = store.getCard(cardId);
     if (!policy || !card) return;
+    // Blocked cards stay queued until merge (slice 10); never start them.
+    if (store.hasUnmergedBlockers(cardId)) return;
+    const step = card.steps.find((s) => s.key === stepKey);
+    if (step?.status !== "queued") return;
 
     const round = currentRound(cardId);
     const priorRun = runs.latestForStep(cardId, stepKey);

@@ -2,8 +2,10 @@ import { IconChevronDown, IconRefresh } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { ImplementDiffPanel } from "@/components/ImplementDiffPanel";
 import { api, type ArtifactContent, type Run } from "@/lib/api";
 import { useJeevesEvents } from "@/lib/events";
+import { shouldShowImplementDiff } from "@/lib/implement-diff-view";
 import { appendLogLine, formatRunLogText } from "@/lib/run-log";
 import {
   initialLogOpen,
@@ -158,6 +160,8 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
   const frozen = usesFrozenArtifacts(mode);
   const showMarkdown =
     frozen && showMarkdownArtifact(stepKey, step?.status, markdownArtifact);
+  const showImplementDiff =
+    frozen && shouldShowImplementDiff(stepKey, step?.status);
 
   function renderLogBody() {
     return (
@@ -207,6 +211,8 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdownArtifact.content}</ReactMarkdown>
             </div>
           ) : null}
+
+          {showImplementDiff ? <ImplementDiffPanel cardId={card.id} /> : null}
         </>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">

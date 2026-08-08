@@ -24,11 +24,13 @@ import {
   stepAttachmentsDir,
   writeAttachmentBytes,
 } from "../attachments/store.js";
+import type { CardDiff } from "../execution/card-diff.js";
 import { isStepKey } from "../pipelines.js";
 import type { ChatSessionRegistry } from "../ws/session-registry.js";
 import type { SpawnAcp } from "../ws/chat.js";
 import { artifactRoutes } from "./artifacts.js";
 import { cardAttachmentRoutes } from "./card-attachments.js";
+import { cardDiffRoutes } from "./card-diff.js";
 
 function isKindPath(value: unknown): value is KindPath {
   return value === "feature" || value === "standalone";
@@ -45,6 +47,7 @@ export interface CardRouteDeps {
   createSpec: CreateSpec;
   createTasks: CreateTasks;
   promptsRoot: string;
+  cardDiff: CardDiff;
 }
 
 /** Thin HTTP adapter over the CardStore seam. */
@@ -263,6 +266,7 @@ export function cardRoutes(
   });
 
   app.route("/:id/artifacts", artifactRoutes(deps.artifacts));
+  app.route("/:id/diff", cardDiffRoutes(store, deps.cardDiff));
 
   app.route(
     "/:id/attachments",

@@ -1,10 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { CardAttachmentStore } from "../attachments/card-library.js";
 import { CardStoreError, type CardWithSteps } from "../cards/store.js";
 import type { CardStore } from "../cards/store.js";
 import type { ArtifactStore } from "../artifacts/store.js";
 import type { StepKey } from "../pipelines.js";
 import { EventBus } from "./events.js";
+import {
+  buildPlanImplementationPrompt,
+  type PlanAttachmentInput,
+} from "./plan-implementation.js";
 import type { RunStore } from "./run-store.js";
 import type { AgentRunner, RunEvent } from "./runner.js";
 import type { WorktreeDiagnostics, WorktreeLifecycle } from "./worktree-manager.js";
@@ -18,8 +23,10 @@ export interface ExecutionEngineDeps {
   worktrees: WorktreeLifecycle;
   artifacts: ArtifactStore;
   events: EventBus;
-  /** Repo root — prompt files resolve relative to this. */
+  /** Repo root — prompt templates resolve relative to this. */
   repoRoot: string;
+  /** Card Info library — Plan/Implement/AI Review inject on-disk paths. */
+  cardAttachments?: CardAttachmentStore;
 }
 
 /**
@@ -122,7 +129,7 @@ export class ExecutionEngine {
   }
 
   private async execute(cardId: string, stepKey: StepKey): Promise<void> {
-    const { store, runs, runner, worktrees, artifacts, events, repoRoot } = this.deps;
+    const { store, runs, runner, worktrees, artifacts, events } = this.deps;
     const policy = stepPolicy(stepKey);
     const card = store.getCard(cardId);
     if (!policy || !card) return;
@@ -187,7 +194,8 @@ export class ExecutionEngine {
       }
 
       let result: Extract<RunEvent, { type: "result" }> | undefined;
-      const iterable = runner.run(path.resolve(repoRoot, policy.promptFile), {
+      const prompt = this.buildPrompt(card, stepKey, policy.promptFile);
+      const iterable = runner.run(prompt, {
         cwd: repoPath,
         branch,
         worktreePath,
@@ -352,6 +360,58 @@ export class ExecutionEngine {
         this.enqueue(effect.cardId, effect.stepKey);
       }
     }
+  }
+
+  /** Compose the fully injected prompt for a step (skills never hunt the DB). */
+  private buildPrompt(
+    card: CardWithSteps,
+    stepKey: StepKey,
+    promptFile: string,
+  ): string {
+    const { artifacts, repoRoot, cardAttachments } = this.deps;
+    const promptsRoot = path.join(repoRoot, "prompts");
+
+    if (stepKey === "plan") {
+      return buildPlanImplementationPrompt(
+        {
+          cardTitle: card.title,
+          cardDescription: card.description,
+          parentSpec: this.parentSpecBody(card),
+          manifestPath: artifacts.manifestAbsolutePath(card.id),
+          attachments: this.planAttachments(card.id),
+        },
+        promptsRoot,
+      );
+    }
+
+    return fs.readFileSync(path.resolve(repoRoot, promptFile), "utf8");
+  }
+
+  private parentSpecBody(card: CardWithSteps): string {
+    if (!card.parentCardId) return "";
+    const { artifacts } = this.deps;
+    const spec = artifacts.latest(card.parentCardId, {
+      stepKey: "spec",
+      round: 0,
+      kind: "spec",
+    });
+    return spec ? artifacts.readBody(spec) : "";
+  }
+
+  private planAttachments(cardId: string): PlanAttachmentInput[] {
+    const library = this.deps.cardAttachments;
+    if (!library) return [];
+    const out: PlanAttachmentInput[] = [];
+    for (const att of library.list(cardId)) {
+      const absolutePath = library.absolutePath(cardId, att.id);
+      if (!absolutePath) continue;
+      out.push({
+        absolutePath,
+        filename: att.filename,
+        instruction: att.instruction,
+      });
+    }
+    return out;
   }
 }
 

@@ -39,18 +39,18 @@ describe("ExecutionEngine", () => {
     await engine.whenIdle();
 
     expect(stepStatus(harness, card.id, "plan")).toBe("done");
-    expect(stepStatus(harness, card.id, "impl")).toBe("pending");
+    expect(stepStatus(harness, card.id, "impl")).toBe("queued");
     expect(stepStatus(harness, card.id, "airev")).toBe("pending");
 
     const run = harness.runStore.latestForStep(card.id, "plan");
     expect(run?.status).toBe("succeeded");
-    expect(run?.skill).toBe("slice-3-tracer");
+    expect(run?.skill).toBe("plan-implementation");
     expect(run?.logPath).toContain(path.join("cards", card.id, "0"));
 
     expect(calls).toHaveLength(1);
-    expect(calls[0].promptFile).toContain(
-      path.join("prompts", "execution", "slice-3-tracer.md"),
-    );
+    expect(calls[0].prompt).toContain("Plan implementation");
+    expect(calls[0].prompt).toContain("Rest timer");
+    expect(calls[0].prompt).toContain("manifest.json");
     expect(calls[0].options.cwd).toBe("C:/target-repo");
     expect(calls[0].options.branch).toBe(`jeeves/card-${card.id}`);
     expect(calls[0].options.worktreePath).toContain(path.join("worktrees", card.id));
@@ -64,6 +64,98 @@ describe("ExecutionEngine", () => {
     });
     expect(plan).toBeDefined();
     expect(harness.artifactStore.readContent(plan!)).toContain("Tracer plan.");
+  });
+
+  it("does not enqueue Implement when Plan fails", async () => {
+    const card = queuedCard(harness);
+    const { engine } = makeEngine(harness, [{ error: new Error("agent crashed") }]);
+
+    engine.enqueue(card.id, "plan");
+    await engine.whenIdle();
+
+    expect(stepStatus(harness, card.id, "plan")).toBe("needs-user");
+    expect(stepStatus(harness, card.id, "impl")).toBe("pending");
+  });
+
+  it("injects card-library attachments into the Plan prompt", async () => {
+    const { CardAttachmentStore } = await import("../attachments/card-library.js");
+    const cardAttachments = new CardAttachmentStore(harness.db, harness.artifactRoot);
+    const card = queuedCard(harness);
+    harness.store.updateCard(card.id, {
+      description: "Keep the timer across reloads.",
+    });
+    const att = cardAttachments.add({
+      cardId: card.id,
+      filename: "wire.png",
+      mediaType: "image/png",
+      bytes: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+      instruction: "Match this layout",
+    });
+    const { engine, calls } = makeEngine(harness, [{ events: ok() }], cardAttachments);
+
+    engine.enqueue(card.id, "plan");
+    await engine.whenIdle();
+
+    const prompt = calls[0]!.prompt;
+    expect(prompt).toContain("Keep the timer across reloads.");
+    expect(prompt).toContain("wire.png");
+    expect(prompt).toContain("Match this layout");
+    expect(prompt).toContain(cardAttachments.absolutePath(card.id, att.id)!);
+    expect(stepStatus(harness, card.id, "impl")).toBe("queued");
+  });
+
+  it("treats an empty card attachment library as non-fatal", async () => {
+    const { CardAttachmentStore } = await import("../attachments/card-library.js");
+    const cardAttachments = new CardAttachmentStore(harness.db, harness.artifactRoot);
+    const card = queuedCard(harness);
+    const { engine, calls } = makeEngine(harness, [{ events: ok() }], cardAttachments);
+
+    engine.enqueue(card.id, "plan");
+    await engine.whenIdle();
+
+    expect(calls[0]!.prompt).toMatch(/Card attachments[\s\S]*\(none\)/);
+    expect(stepStatus(harness, card.id, "plan")).toBe("done");
+    expect(stepStatus(harness, card.id, "impl")).toBe("queued");
+  });
+
+  it("injects the parent feature spec for a child task Plan", async () => {
+    const projectId = harness.store.ensureDefaultProject("jeeves", "C:/target-repo").id;
+    const feature = harness.store.createCard(projectId);
+    harness.store.updateCard(feature.id, { title: "Workout streaks" });
+    const featureId = harness.store.decideKind(feature.id, "feature").card.id;
+    harness.store.handOffGrillToSpec(featureId);
+    harness.artifactStore.save({
+      cardId: featureId,
+      stepKey: "spec",
+      round: 0,
+      kind: "spec",
+      content: "# Spec\n\nStreaks must survive offline sync.\n",
+      sourceSkill: "to-spec",
+    });
+    harness.store.handOffSpecToTasks(featureId);
+    harness.artifactStore.appendTasksDraft(featureId, 0, {
+      tasks: [
+        {
+          id: "t1",
+          title: "API streak endpoint",
+          description: "POST /streaks",
+          dependsOn: [],
+        },
+      ],
+    });
+    harness.store.setCardBranch(featureId, "jeeves/card-feature");
+    const { children } = harness.store.fanOut(featureId);
+    const child = children[0]!;
+
+    const { engine, calls } = makeEngine(harness, [{ events: ok() }]);
+    engine.enqueue(child.id, "plan");
+    await engine.whenIdle();
+
+    expect(calls[0]!.prompt).toContain("API streak endpoint");
+    expect(calls[0]!.prompt).toContain("Streaks must survive offline sync.");
+    expect(calls[0]!.prompt).toContain("POST /streaks");
+    expect(stepStatus(harness, child.id, "plan")).toBe("done");
+    expect(stepStatus(harness, child.id, "impl")).toBe("queued");
   });
 
   it("fails Plan when the exchange file is missing at finalize", async () => {
@@ -256,7 +348,7 @@ describe("ExecutionEngine", () => {
       const orphan = harness.runStore.create({
         cardId: card.id,
         stepKey: "plan",
-        skill: "slice-3-tracer",
+        skill: "plan-implementation",
         logPath: "",
       });
       const logPath = harness.artifactStore.liveLogPath(card.id, 0, orphan.id);

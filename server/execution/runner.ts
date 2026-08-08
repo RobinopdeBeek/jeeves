@@ -40,5 +40,6 @@ export type RunEvent =
 
 /** A failing run is signalled by the iterable throwing. */
 export interface AgentRunner {
-  run(promptFile: string, options: RunAgentOptions): AsyncIterable<RunEvent>;
+  /** `prompt` is the fully injected skill prompt text (ADR 0008). */
+  run(prompt: string, options: RunAgentOptions): AsyncIterable<RunEvent>;
 }

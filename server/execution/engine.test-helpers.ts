@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect } from "vitest";
 import { ArtifactStore } from "../artifacts/store.js";
+import type { CardAttachmentStore } from "../attachments/card-library.js";
 import { openDb, type Db } from "../db/index.js";
 import { CardStore, type CardWithSteps } from "../cards/store.js";
 import { EventBus, type JeevesEvent } from "./events.js";
@@ -22,10 +23,10 @@ export const ok = (): RunEvent[] => [
 ];
 
 export function fakeRunner(scripts: Script[]) {
-  const calls: Array<{ promptFile: string; options: RunAgentOptions }> = [];
+  const calls: Array<{ prompt: string; options: RunAgentOptions }> = [];
   const runner: AgentRunner = {
-    async *run(promptFile, options) {
-      calls.push({ promptFile, options });
+    async *run(prompt, options) {
+      calls.push({ prompt, options });
       const script = scripts.shift();
       if (!script) throw new Error("fake runner: no script left");
       if ("error" in script) throw script.error;
@@ -125,8 +126,8 @@ export function createEngineHarness(): EngineTestHarness {
   const events = new EventBus();
   const received: JeevesEvent[] = [];
   events.subscribe((e) => received.push(e));
-  const repoRoot = path.join(os.tmpdir(), "jeeves-repo-root");
-  fs.mkdirSync(repoRoot, { recursive: true });
+  // Real app repo root so prompt templates under prompts/ resolve.
+  const repoRoot = path.resolve(import.meta.dirname, "../..");
   return {
     db,
     store,
@@ -138,7 +139,6 @@ export function createEngineHarness(): EngineTestHarness {
     repoRoot,
     dispose() {
       fs.rmSync(artifactRoot, { recursive: true, force: true });
-      fs.rmSync(repoRoot, { recursive: true, force: true });
     },
   };
 }
@@ -147,6 +147,7 @@ export function makeEngineWithRunner(
   harness: EngineTestHarness,
   runner: AgentRunner,
   worktrees: WorktreeLifecycle = fakeWorktrees(harness.artifactRoot),
+  cardAttachments?: CardAttachmentStore,
 ) {
   const engine = new ExecutionEngine({
     store: harness.store,
@@ -156,13 +157,18 @@ export function makeEngineWithRunner(
     artifacts: harness.artifactStore,
     events: harness.events,
     repoRoot: harness.repoRoot,
+    cardAttachments,
   });
   return engine;
 }
 
-export function makeEngine(harness: EngineTestHarness, scripts: Script[]) {
+export function makeEngine(
+  harness: EngineTestHarness,
+  scripts: Script[],
+  cardAttachments?: CardAttachmentStore,
+) {
   const { runner, calls } = fakeRunner(scripts);
-  const engine = makeEngineWithRunner(harness, runner);
+  const engine = makeEngineWithRunner(harness, runner, undefined, cardAttachments);
   return { engine, calls };
 }
 
@@ -193,7 +199,7 @@ export function runnerWithFinalize(
   headSha?: (options: RunAgentOptions) => string,
 ): AgentRunner {
   return {
-    async *run(_promptFile, options) {
+    async *run(_prompt, options) {
       yield { type: "log", line: "working…" };
       fs.appendFileSync(options.logPath, "working…\n");
       setup(options);

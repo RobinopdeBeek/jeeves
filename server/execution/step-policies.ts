@@ -39,8 +39,8 @@ function stripFrontmatter(raw: string): string {
 
 export const STEP_POLICIES: Partial<Record<StepKey, StepExecutionPolicy>> = {
   plan: {
-    skill: "slice-3-tracer",
-    promptFile: path.join("prompts", "execution", "slice-3-tracer.md"),
+    skill: "plan-implementation",
+    promptFile: path.join("prompts", "execution", "plan-implementation.md"),
     harvest: [
       {
         exchangePath: ".jeeves/plan.md",

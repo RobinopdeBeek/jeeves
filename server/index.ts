@@ -63,6 +63,7 @@ const engine = new ExecutionEngine({
   artifacts,
   events,
   repoRoot: rootDir,
+  cardAttachments,
 });
 
 const chatSessions = new ChatSessionRegistry();

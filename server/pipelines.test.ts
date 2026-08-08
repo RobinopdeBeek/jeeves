@@ -129,19 +129,64 @@ describe("advance", () => {
     });
   });
 
-  it("step-finished maps outcome to done / needs-user", () => {
+  it("step-finished Plan success queues Implement on the same card", () => {
     expect(
       advance(
         {
           id: "task-1",
           kind: "task",
-          steps: [{ key: "plan", status: "ai-working" }],
+          steps: [
+            { key: "plan", status: "ai-working" },
+            { key: "impl", status: "pending" },
+          ],
         },
         { type: "step-finished", stepKey: "plan", outcome: "succeeded" },
       ),
     ).toEqual({
       ok: true,
-      stepPatches: [{ key: "plan", status: "done" }],
+      stepPatches: [
+        { key: "plan", status: "done" },
+        { key: "impl", status: "queued" },
+      ],
+      sideEffects: [
+        { type: "enqueue", cardId: "task-1", stepKey: "impl" },
+      ],
+    });
+  });
+
+  it("step-finished Plan failure parks needs-user without enqueueing Implement", () => {
+    expect(
+      advance(
+        {
+          id: "task-1",
+          kind: "task",
+          steps: [
+            { key: "plan", status: "ai-working" },
+            { key: "impl", status: "pending" },
+          ],
+        },
+        { type: "step-finished", stepKey: "plan", outcome: "failed" },
+      ),
+    ).toEqual({
+      ok: true,
+      stepPatches: [{ key: "plan", status: "needs-user" }],
+      sideEffects: [],
+    });
+  });
+
+  it("step-finished for other steps still maps outcome to done / needs-user", () => {
+    expect(
+      advance(
+        {
+          id: "task-1",
+          kind: "task",
+          steps: [{ key: "impl", status: "ai-working" }],
+        },
+        { type: "step-finished", stepKey: "impl", outcome: "succeeded" },
+      ),
+    ).toEqual({
+      ok: true,
+      stepPatches: [{ key: "impl", status: "done" }],
       sideEffects: [],
     });
     expect(
@@ -149,13 +194,13 @@ describe("advance", () => {
         {
           id: "task-1",
           kind: "task",
-          steps: [{ key: "plan", status: "ai-working" }],
+          steps: [{ key: "impl", status: "ai-working" }],
         },
-        { type: "step-finished", stepKey: "plan", outcome: "failed" },
+        { type: "step-finished", stepKey: "impl", outcome: "failed" },
       ),
     ).toEqual({
       ok: true,
-      stepPatches: [{ key: "plan", status: "needs-user" }],
+      stepPatches: [{ key: "impl", status: "needs-user" }],
       sideEffects: [],
     });
   });

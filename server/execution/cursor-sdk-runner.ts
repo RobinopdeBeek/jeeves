@@ -18,7 +18,7 @@ const MODEL = "composer-2.5";
  */
 export class CursorSdkAgentRunner implements AgentRunner {
   async *run(
-    promptFile: string,
+    prompt: string,
     options: RunAgentOptions,
   ): AsyncIterable<RunEvent> {
     const { worktreePath, baseSha } = options;
@@ -26,7 +26,6 @@ export class CursorSdkAgentRunner implements AgentRunner {
     const apiKey = process.env.CURSOR_API_KEY?.trim();
     if (!apiKey) throw new Error("CURSOR_API_KEY is not set");
 
-    const prompt = fs.readFileSync(promptFile, "utf8");
     fs.mkdirSync(path.dirname(options.logPath), { recursive: true });
     const log = fs.createWriteStream(options.logPath, { flags: "w" });
     const logWriter = new RunLogWriter((chunk) => log.write(chunk));

@@ -264,7 +264,7 @@ export class CardStore {
     }
 
     const plan = this.requireAdvance(
-      { kind: card.kind, steps: this.stepStatuses(cardId) },
+      { id: cardId, kind: card.kind, steps: this.stepStatuses(cardId) },
       { type: "kind-decision", path },
     );
     this.applyAdvancePlan(cardId, plan);
@@ -440,7 +440,8 @@ export class CardStore {
 
   /**
    * Implement → fan-out: freeze tip, materialize child task cards + blockers,
-   * set Tasks to awaiting. No child Plan enqueue. Second call → 409.
+   * set Tasks to awaiting, queue Plan on unblocked children, declare
+   * ensure-branch + per-child enqueue effects. Second call → 409.
    */
   fanOut(
     cardId: string,
@@ -477,6 +478,7 @@ export class CardStore {
 
     const childIds: string[] = [];
     const draftIdToCardId = new Map<string, string>();
+    const enqueueEffects: AdvanceSideEffect[] = [];
 
     this.db.transaction(() => {
       artifacts.freezeTasksBreakdown(cardId, round);
@@ -515,13 +517,23 @@ export class CardStore {
         }
       }
 
+      for (const childId of childIds) {
+        if (this.hasUnmergedBlockers(childId)) continue;
+        this.setStepStatus(childId, "plan", "queued");
+        enqueueEffects.push({
+          type: "enqueue",
+          cardId: childId,
+          stepKey: "plan",
+        });
+      }
+
       this.applyAdvancePlan(cardId, plan);
     });
 
     return {
       card: this.getCard(cardId)!,
       children: childIds.map((id) => this.getCard(id)!),
-      sideEffects: plan.sideEffects,
+      sideEffects: [...plan.sideEffects, ...enqueueEffects],
     };
   }
 
@@ -546,6 +558,7 @@ export class CardStore {
 
   private requireAdvance(
     card: {
+      id: string;
       kind: Card["kind"];
       steps: Array<{ key: StepKey; status: StepStatus }>;
     },
@@ -734,6 +747,17 @@ export class CardStore {
       .innerJoin(cards, eq(cardBlockers.blocksOnCardId, cards.id))
       .where(eq(cardBlockers.cardId, cardId))
       .all();
+  }
+
+  /** True when any blocker card is not yet merged (slice 10 releases these). */
+  private hasUnmergedBlockers(cardId: string): boolean {
+    const rows = this.db
+      .select({ status: cards.status })
+      .from(cardBlockers)
+      .innerJoin(cards, eq(cardBlockers.blocksOnCardId, cards.id))
+      .where(eq(cardBlockers.cardId, cardId))
+      .all();
+    return rows.some((r) => r.status !== "merged");
   }
 
   private loadChildren(parentId: string): CardChildSummary[] {

@@ -276,7 +276,8 @@ export type AdvanceTrigger =
 
 /** Declared follow-on work — adapters dispatch; PipelineEngine does not I/O. */
 export type AdvanceSideEffect =
-  | { type: "enqueue"; stepKey: StepKey }
+  | { type: "enqueue"; cardId: string; stepKey: StepKey }
+  | { type: "ensure-branch"; cardId: string }
   | {
       type: "close-chat";
       stepKey: StepKey;
@@ -297,10 +298,11 @@ export type AdvancePlan =
 
 /**
  * Pure workflow transition: patches + side-effects for a trigger.
- * CardStore persists; routes/engine dispatch effects (enqueue, close-chat).
+ * CardStore persists; routes/engine dispatch effects (enqueue, ensure-branch, close-chat).
  */
 export function advance(
   card: {
+    id: string;
     kind: CardKind | null;
     steps: Array<{ key: StepKey; status: StepStatus }>;
   },
@@ -314,7 +316,11 @@ export function advance(
     const sideEffects: AdvanceSideEffect[] = [];
     for (const step of transition.steps) {
       if (step.status === "queued") {
-        sideEffects.push({ type: "enqueue", stepKey: step.key });
+        sideEffects.push({
+          type: "enqueue",
+          cardId: card.id,
+          stepKey: step.key,
+        });
       }
     }
     return {
@@ -367,6 +373,7 @@ export function advance(
       ok: true,
       stepPatches: transition.patches,
       sideEffects: [
+        { type: "ensure-branch", cardId: card.id },
         {
           type: "close-chat",
           stepKey: "tasks",

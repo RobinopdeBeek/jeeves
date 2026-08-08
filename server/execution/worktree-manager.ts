@@ -21,6 +21,11 @@ export interface WorktreeLifecycle {
   createFrom(cardBranch: string, baseSha: string, worktreePath: string): Promise<void>;
   /** Check out an existing durable branch at its tip (no upstream `-B` reset). */
   checkoutExisting(cardBranch: string, worktreePath: string): Promise<void>;
+  /**
+   * Create a durable branch at `baseSha` with no worktree (fan-out feature branch).
+   * No-op when the branch already exists.
+   */
+  ensureBranch(cardBranch: string, baseSha: string): Promise<void>;
   remove(worktreePath: string): Promise<void>;
   /** Porcelain status only — used for finalize checks without touching the index in parallel. */
   worktreeStatus(cwd: string, options?: WorktreeStatusOptions): Promise<string>;
@@ -111,6 +116,17 @@ export class WorktreeManager implements WorktreeLifecycle {
   ): Promise<void> {
     const absPath = await this.prepareWorktreePath(worktreePath);
     await git(this.repoPath, ["worktree", "add", absPath, cardBranch]);
+  }
+
+  /**
+   * Create a durable branch at `baseSha` without opening a worktree.
+   * Idempotent when the branch already points at any commit.
+   */
+  async ensureBranch(cardBranch: string, baseSha: string): Promise<void> {
+    if (await gitOk(this.repoPath, ["rev-parse", "--verify", cardBranch])) {
+      return;
+    }
+    await git(this.repoPath, ["branch", cardBranch, baseSha]);
   }
 
   private async prepareWorktreePath(worktreePath: string): Promise<string> {

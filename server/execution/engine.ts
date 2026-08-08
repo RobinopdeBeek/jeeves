@@ -40,6 +40,26 @@ export class ExecutionEngine {
   }
 
   /**
+   * Create the durable card branch from its upstream tip and persist
+   * `cards.branch`. No-op when already recorded. Used at feature fan-out.
+   */
+  async ensureBranch(cardId: string): Promise<void> {
+    const { store, worktrees, events } = this.deps;
+    const card = store.getCard(cardId);
+    if (!card) throw new CardStoreError(404, "card not found");
+    if (card.branch) return;
+
+    const branch = WorktreeManager.cardBranch(cardId);
+    const upstream = store.getUpstreamRef(cardId);
+    const baseSha = await worktrees.resolveRef(upstream);
+    await worktrees.ensureBranch(branch, baseSha);
+    events.emit({
+      type: "card.updated",
+      card: store.setCardBranch(cardId, branch),
+    });
+  }
+
+  /**
    * Boot hooks, in order: (1) orphaned `running` runs from a previous
    * process are failed and their steps parked at needs-user; (2) steps left
    * `queued` (never picked up, or restart before start) are re-enqueued;
@@ -329,7 +349,7 @@ export class ExecutionEngine {
     events.emit({ type: "card.updated", card });
     for (const effect of sideEffects) {
       if (effect.type === "enqueue") {
-        this.enqueue(cardId, effect.stepKey);
+        this.enqueue(effect.cardId, effect.stepKey);
       }
     }
   }

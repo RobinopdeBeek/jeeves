@@ -69,6 +69,9 @@ export function fakeWorktrees(root: string): WorktreeLifecycle {
     async checkoutExisting(_branch, worktreePath) {
       fs.mkdirSync(worktreePath, { recursive: true });
     },
+    async ensureBranch() {
+      // No-op in harness — ExecutionEngine.ensureBranch tests stub this.
+    },
     async remove(worktreePath) {
       fs.rmSync(worktreePath, { recursive: true, force: true });
     },

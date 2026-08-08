@@ -90,8 +90,9 @@ export function cardRoutes(
       // Board tabs open elsewhere only see decide via SSE — not the HTTP response.
       deps.events.emit({ type: "card.updated", card });
       // advance declares enqueue; route only dispatches (ADR 0006).
-      dispatchAdvanceEffects(card.id, sideEffects, {
+      await dispatchAdvanceEffects(card.id, sideEffects, {
         enqueue: (id, step) => deps.engine.enqueue(id, step),
+        ensureBranch: (id) => deps.engine.ensureBranch(id),
         sessions: deps.sessions,
       });
       return c.json(card);
@@ -172,7 +173,7 @@ export function cardRoutes(
     }
   });
 
-  app.post("/:id/implement", (c) => {
+  app.post("/:id/implement", async (c) => {
     const cardId = c.req.param("id");
     try {
       const { card, children, sideEffects } = store.fanOut(cardId);
@@ -180,11 +181,13 @@ export function cardRoutes(
       for (const child of children) {
         deps.events.emit({ type: "card.updated", card: child });
       }
-      dispatchAdvanceEffects(card.id, sideEffects, {
+      await dispatchAdvanceEffects(card.id, sideEffects, {
         enqueue: (id, step) => deps.engine.enqueue(id, step),
+        ensureBranch: (id) => deps.engine.ensureBranch(id),
         sessions: deps.sessions,
       });
-      return c.json(card);
+      // Re-read after ensure-branch so cards.branch is in the response.
+      return c.json(store.getCard(cardId)!);
     } catch (e) {
       if (e instanceof CardStoreError) {
         return c.json({ error: e.message }, e.status as 400 | 404 | 409);

@@ -6,7 +6,9 @@ Jeeves replaces Sandcastle + Docker as the autonomous execution path. **Jeeves o
 
 Execution SDK runs (`CursorSdkAgentRunner`) load ambient Cursor settings from **`project`** and **`user`** only (`EXECUTION_SETTING_SOURCES` in `server/execution/cursor-sdk-runner.ts`). That is enough for host/project `mcp.json` (including Context7 when configured). **`team` / `mdm` / `plugins` / `all` are not enabled** — keep the ambient surface narrow for unattended Plan → Implement → AI Review.
 
-Missing Context7 or other MCP is **non-fatal**: the SDK typically surfaces "no tool" rather than failing `Agent.create`, and the Plan prompt tells the agent to continue with repo sources. Do not treat MCP availability as a run postcondition.
+Missing Context7 or other MCP is **non-fatal**: the SDK typically surfaces "no tool" rather than failing `Agent.create`, and the Plan prompt tells the agent to continue with repo sources (and optionally note missing docs under risks). Do not treat MCP availability as a run postcondition.
+
+Sandbox note: on non-Windows hosts the runner still sets `sandboxOptions.enabled`. Headless sandbox may block MCP tools that require interactive approval — a known `@cursor/sdk` limitation. Treat successful Context7 use under sandbox as best-effort; do not fail the run when tools are unavailable.
 
 This is separate from ACP Project Chat / step-chat MCP (ADR 0017). Grill session extract and other non-execution SDK callers keep their own `settingSources` policy.
 

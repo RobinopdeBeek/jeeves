@@ -391,19 +391,16 @@ describe("ExecutionEngine", () => {
       .all()
       .map((r) => `${r.cardId}:${r.stepKey}`);
 
-    const child1ImplColumn = order.filter(
-      (id) =>
-        id.startsWith(`${child1!.id}:`) &&
-        (id.endsWith(":plan") || id.endsWith(":impl") || id.endsWith(":airev")),
-    );
-    expect(child1ImplColumn).toEqual([
+    const child1Pipeline = order.filter((id) => id.startsWith(`${child1!.id}:`));
+    expect(child1Pipeline).toEqual([
       `${child1!.id}:plan`,
       `${child1!.id}:impl`,
       `${child1!.id}:airev`,
+      `${child1!.id}:prepeval`,
     ]);
     const child2PlanIdx = order.indexOf(`${child2!.id}:plan`);
-    const child1AirevIdx = order.indexOf(`${child1!.id}:airev`);
-    expect(child2PlanIdx).toBeGreaterThan(child1AirevIdx);
+    const child1PrepIdx = order.indexOf(`${child1!.id}:prepeval`);
+    expect(child2PlanIdx).toBeGreaterThan(child1PrepIdx);
   });
 
   it("skips blocked children even when incorrectly marked queued", async () => {

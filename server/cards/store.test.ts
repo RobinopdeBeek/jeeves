@@ -597,5 +597,29 @@ describe("CardStore", () => {
         { cardId: children[0]!.id, stepKey: "plan" },
       ]);
     });
+
+    it("keeps each feature's children together by parent board position", () => {
+      const featureA = featureWithTip({
+        tasks: [
+          { id: "a1", title: "A1", description: "", dependsOn: [] },
+          { id: "a2", title: "A2", description: "", dependsOn: [] },
+        ],
+      });
+      const featureB = featureWithTip({
+        tasks: [{ id: "b1", title: "B1", description: "", dependsOn: [] }],
+      });
+      // featureA was created first → lower board position than featureB.
+      const { children: kidsA } = queueStore.fanOut(featureA);
+      const { children: kidsB } = queueStore.fanOut(featureB);
+
+      queueStore.setStepStatus(kidsA[0]!.id, "plan", "done");
+      queueStore.setStepStatus(kidsA[0]!.id, "impl", "queued");
+      // Child A2 still Plan queued; B1 Plan queued at sibling position 0.
+      expect(queueStore.listQueuedSteps()).toEqual([
+        { cardId: kidsA[0]!.id, stepKey: "impl" },
+        { cardId: kidsA[1]!.id, stepKey: "plan" },
+        { cardId: kidsB[0]!.id, stepKey: "plan" },
+      ]);
+    });
   });
 });

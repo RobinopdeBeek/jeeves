@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   initialLogOpen,
+  liveWorkingMessage,
   logOpenAfterFinish,
   markdownArtifactKind,
   shouldLoadMarkdownArtifact,
@@ -67,6 +68,19 @@ describe("step-execution-view", () => {
       expect(showMarkdownArtifact("airev", "done", { content: "# Review" })).toBe(true);
       expect(showMarkdownArtifact("airev", "needs-user", { content: "# Review" })).toBe(false);
       expect(showMarkdownArtifact("plan", "done", null)).toBe(false);
+    });
+  });
+
+  describe("live working message", () => {
+    it("shows Prepare Eval preparing copy while ai-working", () => {
+      expect(liveWorkingMessage("prepeval")).toBe(
+        "Preparing interactive evaluation…",
+      );
+    });
+
+    it("keeps the generic warming copy for other execution steps", () => {
+      expect(liveWorkingMessage("plan")).toBe("agent is warming up…");
+      expect(liveWorkingMessage("airev")).toBe("agent is warming up…");
     });
   });
 });

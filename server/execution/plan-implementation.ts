@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 
 export interface PlanAttachmentInput {
   /** Absolute host path to the library file bytes. */
@@ -35,12 +34,11 @@ export function formatPlanAttachments(
     .join("\n");
 }
 
-/** Load prompts/execution/plan-implementation.md and inject Plan inputs. */
+/** Load the plan-implementation template and inject Plan inputs. */
 export function buildPlanImplementationPrompt(
   input: PlanImplementationPromptInput,
-  promptsRoot: string,
+  templatePath: string,
 ): string {
-  const templatePath = path.join(promptsRoot, "execution", "plan-implementation.md");
   const template = fs.readFileSync(templatePath, "utf8");
   return template
     .replaceAll("{{cardTitle}}", input.cardTitle.trim() || "(untitled)")

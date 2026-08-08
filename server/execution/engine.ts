@@ -368,8 +368,8 @@ export class ExecutionEngine {
     stepKey: StepKey,
     promptFile: string,
   ): string {
-    const { artifacts, repoRoot, cardAttachments } = this.deps;
-    const promptsRoot = path.join(repoRoot, "prompts");
+    const { artifacts, repoRoot } = this.deps;
+    const templatePath = path.resolve(repoRoot, promptFile);
 
     if (stepKey === "plan") {
       return buildPlanImplementationPrompt(
@@ -380,11 +380,11 @@ export class ExecutionEngine {
           manifestPath: artifacts.manifestAbsolutePath(card.id),
           attachments: this.planAttachments(card.id),
         },
-        promptsRoot,
+        templatePath,
       );
     }
 
-    return fs.readFileSync(path.resolve(repoRoot, promptFile), "utf8");
+    return fs.readFileSync(templatePath, "utf8");
   }
 
   private parentSpecBody(card: CardWithSteps): string {

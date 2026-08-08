@@ -5,7 +5,10 @@ import {
   formatPlanAttachments,
 } from "./plan-implementation.js";
 
-const promptsRoot = path.resolve(import.meta.dirname, "../../prompts");
+const templatePath = path.resolve(
+  import.meta.dirname,
+  "../../prompts/execution/plan-implementation.md",
+);
 
 describe("buildPlanImplementationPrompt", () => {
   it("injects card fields, parent spec, manifest path, and attachments", () => {
@@ -28,7 +31,7 @@ describe("buildPlanImplementationPrompt", () => {
           },
         ],
       },
-      promptsRoot,
+      templatePath,
     );
 
     expect(prompt).toContain("Rest timer");
@@ -54,7 +57,7 @@ describe("buildPlanImplementationPrompt", () => {
         manifestPath: "/m/manifest.json",
         attachments: [],
       },
-      promptsRoot,
+      templatePath,
     );
 
     expect(prompt).toContain("Standalone");

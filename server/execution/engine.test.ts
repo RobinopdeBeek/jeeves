@@ -68,13 +68,22 @@ describe("ExecutionEngine", () => {
 
   it("does not enqueue Implement when Plan fails", async () => {
     const card = queuedCard(harness);
-    const { engine } = makeEngine(harness, [{ error: new Error("agent crashed") }]);
+    const { engine } = makeEngine(harness, [
+      { error: new Error("agent crashed") },
+      { events: ok() },
+    ]);
 
     engine.enqueue(card.id, "plan");
     await engine.whenIdle();
 
     expect(stepStatus(harness, card.id, "plan")).toBe("needs-user");
     expect(stepStatus(harness, card.id, "impl")).toBe("pending");
+
+    engine.retry(card.id, "plan");
+    await engine.whenIdle();
+
+    expect(stepStatus(harness, card.id, "plan")).toBe("done");
+    expect(stepStatus(harness, card.id, "impl")).toBe("queued");
   });
 
   it("injects card-library attachments into the Plan prompt", async () => {

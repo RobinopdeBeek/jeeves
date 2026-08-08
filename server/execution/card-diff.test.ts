@@ -11,11 +11,12 @@ const execFileAsync = promisify(execFile);
 async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
     maxBuffer: 10 * 1024 * 1024,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat" },
   });
   return stdout;
 }
 
-describe("CardDiffService", () => {
+describe("CardDiffService", { timeout: 30_000 }, () => {
   let repoPath: string;
 
   beforeEach(async () => {
@@ -23,12 +24,13 @@ describe("CardDiffService", () => {
     await git(repoPath, ["init", "-b", "main"]);
     await git(repoPath, ["config", "user.email", "test@example.com"]);
     await git(repoPath, ["config", "user.name", "Test"]);
+    await git(repoPath, ["config", "commit.gpgsign", "false"]);
     fs.writeFileSync(path.join(repoPath, "README.md"), "initial\n");
     fs.mkdirSync(path.join(repoPath, "src"), { recursive: true });
     fs.writeFileSync(path.join(repoPath, "src/app.ts"), "const x = 1;\n");
     await git(repoPath, ["add", "."]);
     await git(repoPath, ["commit", "-m", "initial"]);
-  });
+  }, 30_000);
 
   afterEach(() => {
     fs.rmSync(repoPath, { recursive: true, force: true });

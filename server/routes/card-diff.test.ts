@@ -18,11 +18,12 @@ const execFileAsync = promisify(execFile);
 async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
     maxBuffer: 10 * 1024 * 1024,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat" },
   });
   return stdout;
 }
 
-describe("GET /:id/diff", () => {
+describe("GET /:id/diff", { timeout: 30_000 }, () => {
   let db: Db;
   let store: CardStore;
   let project: Project;
@@ -42,6 +43,7 @@ describe("GET /:id/diff", () => {
     await git(repoPath, ["init", "-b", "main"]);
     await git(repoPath, ["config", "user.email", "test@example.com"]);
     await git(repoPath, ["config", "user.name", "Test"]);
+    await git(repoPath, ["config", "commit.gpgsign", "false"]);
     fs.writeFileSync(path.join(repoPath, "a.txt"), "one\n");
     await git(repoPath, ["add", "."]);
     await git(repoPath, ["commit", "-m", "initial"]);
@@ -68,7 +70,7 @@ describe("GET /:id/diff", () => {
       promptsRoot: path.resolve(import.meta.dirname, "../../prompts"),
       cardDiff: new CardDiffService(repoPath),
     };
-  });
+  }, 30_000);
 
   afterEach(() => {
     fs.rmSync(artifactRoot, { recursive: true, force: true });

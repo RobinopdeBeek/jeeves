@@ -63,8 +63,9 @@ Deliberately not built (revisit only when the need is real):
 - No cloud dependencies — no Supabase, Cloudflare Workers, or deployment pipeline
 - No parallel execution — a sequential queue, one run at a time
 - No native mobile app — responsive web only
-- No custom diff renderer — the evaluation HTML carries its own inline diffs
-- No workflow editor — pipelines are code ([ADR 0002](./docs/adr/0002-workflow-is-code-state-is-data.md))
+- No bespoke diff engine — Implement tab uses assistant-ui DiffViewer; evaluation HTML may inline diffs
+- No workflow editor — pipelines are code
+  ([ADR 0002](./docs/adr/0002-workflow-is-code-state-is-data.md))
 - No prototype step in the pipeline
 - No CopilotKit/AG-UI, LangChain/Mastra/CrewAI, or AI Elements — see [ADR 0008](./docs/adr/0008-ai-sdk-assistant-ui-agent-runner.md)
 - No direct provider API calls (`generateObject`/`generateText`) — all inference via Cursor

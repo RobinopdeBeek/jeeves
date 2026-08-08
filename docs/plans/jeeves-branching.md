@@ -45,19 +45,30 @@ Consequences that shape the code:
 
 - **One branch per task, one fresh worktree per run.** Plan → Implement → AI Review are separate
   runs on `jeeves/card-<id>`, never per-step branches. Plan is harvested and injected into
-  Implement; Implement commits source changes; AI Review reads that commit. No legitimate state
+  Implement; Implement commits source changes; AI Review may commit rework. No legitimate state
   lives only in a worktree, so every run closes its worktree and a restart simply recreates it.
+- **`createFrom` vs `checkoutExisting`.** First run for a card uses `createFrom(baseSha)`
+  (upstream = `projects.default_branch` or parent feature branch tip) and persists
+  `cards.branch`. Later runs use `checkoutExisting(branch)` at the branch tip — never
+  `worktree add -B` with an upstream SHA, which would wipe Implement commits. Retry of a
+  failed run deliberately resets to that run's recorded `base_sha`.
+- **When branches appear.** Feature branch created/recorded at fan-out. Standalone and child
+  branches are created lazily on the card's first Plan run.
 - `AgentRunner.run()` invokes an `ExecutionEngine` finalization callback after the agent exits
   but before cleanup. The callback harvests required outputs and enforces the step contract:
-  Plan requires an artifact and no source changes; Implement requires commits and a clean tree;
-  AI Review requires artifacts and forbids source changes. Failure preserves diagnostics; Retry
-  captures the failed diff, discards the contaminated tree, and recreates from the pre-run SHA.
+  Plan requires an artifact and no source changes; Implement requires commits and a clean tree
+  then host `verify_commands`; AI Review requires a review markdown artifact, allows zero or
+  more rework commits, clean tree, and re-verify if it committed. Failure preserves diagnostics;
+  Retry captures the failed diff, discards the contaminated tree, and recreates from the
+  pre-run SHA.
 - **Branch bases are explicit.** Projects configure a local `default_branch`; feature and
   standalone branches record its resolved SHA, while child branches record the parent feature
   branch SHA. Jeeves never uses the host checkout and never fetches or updates refs implicitly.
 
-Explicitly blocked child tasks wait for blocker merge. Independent tasks may reach Human Review
-concurrently; approval first tests a temporary merge against the feature branch's current tip.
+Explicitly blocked child tasks wait for blocker merge (Plan stays `pending`). Unblocked
+siblings run **depth-first** (task 1 Plan→Implement→AI Review before task 2's Plan) via
+derived queue order. Independent tasks may still sit in Human Review concurrently once each
+has finished; approval first tests a temporary merge against the feature branch's current tip.
 Conflict or integration failure returns the task for rework instead of merging. The Feature
 Evaluation remains the final assembled integration gate.
 

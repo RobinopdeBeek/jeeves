@@ -98,9 +98,7 @@ describe("CursorSdkAgentRunner local settingSources", () => {
     expect(createArg.local.cwd).toBe(worktreePath);
     // Spec #64: not [] — project + user load host/project mcp.json (Context7).
     expect(EXECUTION_SETTING_SOURCES).toEqual(["project", "user"]);
-    expect(createArg.local.settingSources).toEqual([
-      ...EXECUTION_SETTING_SOURCES,
-    ]);
+    expect(createArg.local.settingSources).toEqual(["project", "user"]);
     expect(events.at(-1)).toMatchObject({
       type: "result",
       status: "finished",

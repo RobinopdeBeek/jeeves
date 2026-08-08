@@ -396,6 +396,8 @@ describe("CardStore", () => {
         },
         { type: "enqueue", cardId: children[0]!.id, stepKey: "plan" },
       ]);
+      // CardStore stays git-free — branch is recorded only when ensure-branch is dispatched.
+      expect(card.branch).toBeNull();
 
       const listed = fanStore.listCards(projectId);
       expect(listed.filter((c) => c.parentCardId === id)).toHaveLength(2);
@@ -424,6 +426,21 @@ describe("CardStore", () => {
       expect(sideEffects.filter((e) => e.type === "enqueue")).toEqual([
         { type: "enqueue", cardId: children[0]!.id, stepKey: "plan" },
         { type: "enqueue", cardId: children[1]!.id, stepKey: "plan" },
+      ]);
+    });
+
+    it("reverts ignited Plans back to pending", () => {
+      const id = featureWithTip({
+        tasks: [
+          { id: "a", title: "API", description: "", dependsOn: [] },
+          { id: "b", title: "UI", description: "", dependsOn: ["a"] },
+        ],
+      });
+      const { children } = fanStore.fanOut(id);
+      fanStore.revertIgnitedPlans(children.map((c) => c.id));
+      expect(children.map((c) => fanStore.getCard(c.id)!.steps.find((s) => s.key === "plan")?.status)).toEqual([
+        "pending",
+        "pending",
       ]);
     });
 

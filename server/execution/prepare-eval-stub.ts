@@ -23,7 +23,7 @@ export const PREPEVAL_STUB_HTML = `<!DOCTYPE html>
 export async function writePrepareEvalStub(
   ctx: RunFinalizeContext,
 ): Promise<void> {
-  const abs = path.join(ctx.workspacePath, ".jeeves", "eval.html");
+  const abs = path.join(ctx.workspacePath, ...PREPEVAL_STUB_EXCHANGE.split("/"));
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   fs.writeFileSync(abs, PREPEVAL_STUB_HTML, "utf8");
 }

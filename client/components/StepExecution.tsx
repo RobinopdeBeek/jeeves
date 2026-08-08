@@ -218,7 +218,7 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
             )}
             {mode === "live" && stepKey === "prepeval" && (
               <div className="text-muted-foreground">
-                Preparing interactive evaluation…
+                {liveWorkingMessage(stepKey)}
               </div>
             )}
             {mode === "live" && !logText && stepKey !== "prepeval" && (

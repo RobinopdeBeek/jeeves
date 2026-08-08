@@ -25,19 +25,48 @@ export function usesFrozenArtifacts(mode: StepExecutionMode): boolean {
   return mode === "frozen";
 }
 
-/** Whether to fetch the plan artifact from the API (successful runs only). */
+/** Markdown overview kinds shown after a successful execution step. */
+const MARKDOWN_ARTIFACT_BY_STEP: Record<string, string> = {
+  plan: "plan",
+  airev: "review",
+};
+
+/** Whether to fetch the step's markdown overview artifact (successful runs only). */
+export function shouldLoadMarkdownArtifact(
+  stepKey: string,
+  stepStatus: StepStatus | undefined,
+): boolean {
+  return stepKey in MARKDOWN_ARTIFACT_BY_STEP && stepStatus === "done";
+}
+
+/** Artifact kind to load for a step's frozen markdown overview, if any. */
+export function markdownArtifactKind(stepKey: string): string | undefined {
+  return MARKDOWN_ARTIFACT_BY_STEP[stepKey];
+}
+
+/** Markdown overview is shown only after a successful run — not on failed attempts. */
+export function showMarkdownArtifact(
+  stepKey: string,
+  stepStatus: StepStatus | undefined,
+  artifact: unknown,
+): boolean {
+  return shouldLoadMarkdownArtifact(stepKey, stepStatus) && artifact != null;
+}
+
+/** @deprecated Prefer shouldLoadMarkdownArtifact — kept for Plan call sites. */
 export function shouldLoadPlanArtifact(
   stepKey: string,
   stepStatus: StepStatus | undefined,
 ): boolean {
-  return stepKey === "plan" && stepStatus === "done";
+  return stepKey === "plan" && shouldLoadMarkdownArtifact(stepKey, stepStatus);
 }
 
-/** Plan markdown is shown only after a successful run — not on failed attempts. */
+/** @deprecated Prefer showMarkdownArtifact — kept for Plan call sites. */
 export function showPlanArtifact(
   stepKey: string,
   stepStatus: StepStatus | undefined,
   planArtifact: unknown,
 ): boolean {
-  return stepKey === "plan" && stepStatus === "done" && planArtifact != null;
+  return stepKey === "plan" && showMarkdownArtifact(stepKey, stepStatus, planArtifact);
 }
+

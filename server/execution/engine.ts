@@ -10,6 +10,7 @@ import {
   buildImplementTaskPrompt,
   type ImplementAttachmentInput,
 } from "./implement-task.js";
+import { buildAiReviewPrompt } from "./ai-review.js";
 import { buildPlanImplementationPrompt } from "./plan-implementation.js";
 import type { RunStore } from "./run-store.js";
 import type { AgentRunner, RunEvent } from "./runner.js";
@@ -226,6 +227,7 @@ export class ExecutionEngine {
           stepKey,
           worktreePath,
           logPath,
+          headSha !== undefined && headSha !== baseSha,
         );
         if (verify.status === "failed") {
           await fail(verify.message);
@@ -410,6 +412,19 @@ export class ExecutionEngine {
       );
     }
 
+    if (stepKey === "airev") {
+      return buildAiReviewPrompt(
+        {
+          cardTitle: card.title,
+          cardDescription: card.description,
+          plan: this.planArtifactBody(card.id),
+          manifestPath: artifacts.manifestAbsolutePath(card.id),
+          attachments: this.cardLibraryAttachments(card.id),
+        },
+        templatePath,
+      );
+    }
+
     return fs.readFileSync(templatePath, "utf8");
   }
 
@@ -453,6 +468,7 @@ export class ExecutionEngine {
   /**
    * Host gate after a successful agent finalize when the step policy opts in.
    * Null/empty `projects.verify_commands` skips with a warning on the run log.
+   * `"if-committed"` skips entirely when the step made no commits.
    */
   private async runHostVerifyIfNeeded(
     runId: string,
@@ -460,9 +476,13 @@ export class ExecutionEngine {
     stepKey: StepKey,
     worktreePath: string,
     logPath: string,
+    committed: boolean,
   ): Promise<{ status: "passed" | "skipped" } | { status: "failed"; message: string }> {
     const policy = stepPolicy(stepKey);
     if (!policy?.hostVerify) return { status: "skipped" };
+    if (policy.hostVerify === "if-committed" && !committed) {
+      return { status: "skipped" };
+    }
 
     const appendLog = (line: string) => {
       try {

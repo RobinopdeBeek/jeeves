@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   initialLogOpen,
   logOpenAfterFinish,
+  markdownArtifactKind,
+  shouldLoadMarkdownArtifact,
   shouldLoadPlanArtifact,
+  showMarkdownArtifact,
   showPlanArtifact,
   stepExecutionMode,
   usesFrozenArtifacts,
@@ -50,18 +53,29 @@ describe("step-execution-view", () => {
     });
   });
 
-  describe("plan artifact visibility", () => {
-    it("loads plan artifacts only after a successful run", () => {
-      expect(shouldLoadPlanArtifact("plan", "done")).toBe(true);
-      expect(shouldLoadPlanArtifact("plan", "needs-user")).toBe(false);
-      expect(shouldLoadPlanArtifact("plan", "ai-working")).toBe(false);
-      expect(shouldLoadPlanArtifact("impl", "done")).toBe(false);
+  describe("markdown overview artifact visibility", () => {
+    it("loads plan and review artifacts only after a successful run", () => {
+      expect(shouldLoadMarkdownArtifact("plan", "done")).toBe(true);
+      expect(shouldLoadMarkdownArtifact("airev", "done")).toBe(true);
+      expect(shouldLoadMarkdownArtifact("plan", "needs-user")).toBe(false);
+      expect(shouldLoadMarkdownArtifact("airev", "ai-working")).toBe(false);
+      expect(shouldLoadMarkdownArtifact("impl", "done")).toBe(false);
+      expect(markdownArtifactKind("plan")).toBe("plan");
+      expect(markdownArtifactKind("airev")).toBe("review");
     });
 
-    it("shows plan markdown only when the step succeeded", () => {
+    it("shows markdown only when the step succeeded", () => {
+      expect(showMarkdownArtifact("plan", "done", { content: "# Plan" })).toBe(true);
+      expect(showMarkdownArtifact("airev", "done", { content: "# Review" })).toBe(true);
+      expect(showMarkdownArtifact("airev", "needs-user", { content: "# Review" })).toBe(false);
+      expect(showMarkdownArtifact("plan", "done", null)).toBe(false);
+    });
+
+    it("keeps Plan-named helpers scoped to the plan step", () => {
+      expect(shouldLoadPlanArtifact("plan", "done")).toBe(true);
+      expect(shouldLoadPlanArtifact("airev", "done")).toBe(false);
       expect(showPlanArtifact("plan", "done", { content: "# Plan" })).toBe(true);
-      expect(showPlanArtifact("plan", "needs-user", { content: "# Plan" })).toBe(false);
-      expect(showPlanArtifact("plan", "done", null)).toBe(false);
+      expect(showPlanArtifact("airev", "done", { content: "# Review" })).toBe(false);
     });
   });
 });

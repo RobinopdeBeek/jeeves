@@ -13,9 +13,9 @@ import type { AgentRunner, RunAgentOptions, RunEvent } from "./runner.js";
 import type { WorktreeLifecycle } from "./worktree-manager.js";
 
 export type Script =
-  | { events: RunEvent[]; finalize?: "plan" | "implement" }
+  | { events: RunEvent[]; finalize?: "plan" | "implement" | "airev" | "airev-rework" }
   | { error: Error }
-  | { gate: Promise<RunEvent[]>; finalize?: "plan" | "implement" };
+  | { gate: Promise<RunEvent[]>; finalize?: "plan" | "implement" | "airev" | "airev-rework" };
 
 export const ok = (): RunEvent[] => [
   { type: "log", line: "working…" },
@@ -29,6 +29,15 @@ export const planOk = (): Script => ({ events: ok(), finalize: "plan" });
 export const implementOk = (): Script => ({
   events: ok(),
   finalize: "implement",
+});
+
+/** Successful clean AI Review — review.md, no rework commits. */
+export const airevOk = (): Script => ({ events: ok(), finalize: "airev" });
+
+/** AI Review with rework commits. */
+export const airevReworkOk = (): Script => ({
+  events: ok(),
+  finalize: "airev-rework",
 });
 
 export function fakeRunner(scripts: Script[]) {
@@ -60,6 +69,22 @@ export function fakeRunner(scripts: Script[]) {
             await options.onFinalize({
               workspacePath: options.worktreePath,
               headSha: options.baseSha,
+              baseSha: options.baseSha,
+            });
+          } else if (kind === "airev" || kind === "airev-rework") {
+            const reviewDir = path.join(options.worktreePath, ".jeeves");
+            fs.mkdirSync(reviewDir, { recursive: true });
+            fs.writeFileSync(
+              path.join(reviewDir, "review.md"),
+              "# AI Review\n\nClean review — no findings.\n",
+            );
+            const headSha =
+              kind === "airev-rework"
+                ? `${options.baseSha}-airev`
+                : options.baseSha;
+            await options.onFinalize({
+              workspacePath: options.worktreePath,
+              headSha,
               baseSha: options.baseSha,
             });
           } else {

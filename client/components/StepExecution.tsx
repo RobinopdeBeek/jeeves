@@ -8,8 +8,9 @@ import { appendLogLine, formatRunLogText } from "@/lib/run-log";
 import {
   initialLogOpen,
   logOpenAfterFinish,
-  shouldLoadPlanArtifact,
-  showPlanArtifact,
+  markdownArtifactKind,
+  shouldLoadMarkdownArtifact,
+  showMarkdownArtifact,
   stepExecutionMode,
   usesFrozenArtifacts,
 } from "@/lib/step-execution-view";
@@ -45,7 +46,7 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
 
   const [logText, setLogText] = useState("");
   const [latestRun, setLatestRun] = useState<Run | null>(null);
-  const [planArtifact, setPlanArtifact] = useState<ArtifactContent | null>(null);
+  const [markdownArtifact, setMarkdownArtifact] = useState<ArtifactContent | null>(null);
   const [logOpen, setLogOpen] = useState(() => initialLogOpen(step?.status));
   const [retrying, setRetrying] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -53,13 +54,14 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
   const wasLiveRef = useRef(step?.status === "ai-working");
 
   async function loadArtifacts() {
-    const [plan, runlog] = await Promise.all([
-      shouldLoadPlanArtifact(stepKey, step?.status)
-        ? fetchArtifact(card.id, stepKey, round, "plan")
+    const kind = markdownArtifactKind(stepKey);
+    const [markdown, runlog] = await Promise.all([
+      shouldLoadMarkdownArtifact(stepKey, step?.status) && kind
+        ? fetchArtifact(card.id, stepKey, round, kind)
         : Promise.resolve(null),
       fetchArtifact(card.id, stepKey, round, "runlog"),
     ]);
-    setPlanArtifact(plan);
+    setMarkdownArtifact(markdown);
     if (runlog?.content) {
       setLogText(toDisplayLog(runlog.content));
     }
@@ -142,7 +144,7 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
       wasLiveRef.current = false;
       setLogText("");
       setLatestRun(null);
-      setPlanArtifact(null);
+      setMarkdownArtifact(null);
       setLogOpen(false);
     } catch (err) {
       console.error(err);
@@ -153,7 +155,8 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
 
   const failed = step?.status === "needs-user" && latestRun?.status === "failed";
   const frozen = usesFrozenArtifacts(mode);
-  const showPlan = frozen && showPlanArtifact(stepKey, step?.status, planArtifact);
+  const showMarkdown =
+    frozen && showMarkdownArtifact(stepKey, step?.status, markdownArtifact);
 
   function renderLogBody() {
     return (
@@ -198,9 +201,9 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
             )}
           </div>
 
-          {showPlan && planArtifact ? (
+          {showMarkdown && markdownArtifact ? (
             <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border p-4 text-sm">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{planArtifact.content}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdownArtifact.content}</ReactMarkdown>
             </div>
           ) : null}
         </>

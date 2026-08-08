@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { projects } from "../db/schema.js";
+import { projects, runs } from "../db/schema.js";
 import type { AgentRunner, RunAgentOptions, RunEvent } from "./runner.js";
 import type { WorktreeLifecycle } from "./worktree-manager.js";
 import {
@@ -327,14 +327,13 @@ describe("ExecutionEngine", () => {
     const second = queuedCard(harness, "Second");
     let release!: (events: RunEvent[]) => void;
     const gate = new Promise<RunEvent[]>((r) => (release = r));
-    // Queue after first Plan succeeds: second Plan, then first Implement.
-    // After both Implements: first AI Review, then second AI Review.
+    // Depth-first: first card finishes Implement-column steps before second Plan.
     const { engine } = makeEngine(harness, [
       { gate, finalize: "plan" },
-      planOk(),
-      implementOk(),
       implementOk(),
       airevOk(),
+      planOk(),
+      implementOk(),
       airevOk(),
     ]);
 
@@ -352,6 +351,89 @@ describe("ExecutionEngine", () => {
     expect(stepStatus(harness, second.id, "plan")).toBe("done");
     expect(stepStatus(harness, first.id, "impl")).toBe("done");
     expect(stepStatus(harness, second.id, "impl")).toBe("done");
+  });
+
+  it("runs unblocked siblings depth-first: child 1 Implement-column before child 2 Plan", async () => {
+    const feature = harness.store.createCard(
+      harness.store.ensureDefaultProject("jeeves", "C:/target-repo").id,
+    );
+    harness.store.updateCard(feature.id, { title: "Feature" });
+    const featureId = harness.store.decideKind(feature.id, "feature").card.id;
+    harness.store.handOffGrillToSpec(featureId);
+    harness.store.handOffSpecToTasks(featureId);
+    harness.artifactStore.appendTasksDraft(featureId, 0, {
+      tasks: [
+        { id: "a", title: "First", description: "", dependsOn: [] },
+        { id: "b", title: "Second", description: "", dependsOn: [] },
+      ],
+    });
+    harness.store.setCardBranch(featureId, "jeeves/card-feature");
+    const { children } = harness.store.fanOut(featureId);
+    const [child1, child2] = children;
+
+    // Scripts match depth-first consumption (fails under plans-first FIFO).
+    const { engine } = makeEngine(harness, [
+      planOk(),
+      implementOk(),
+      airevOk(),
+      planOk(),
+      implementOk(),
+      airevOk(),
+    ]);
+    engine.enqueue(child1!.id, "plan");
+    engine.enqueue(child2!.id, "plan");
+    await engine.whenIdle();
+
+    const order = harness.db
+      .select()
+      .from(runs)
+      .orderBy(asc(runs.startedAt))
+      .all()
+      .map((r) => `${r.cardId}:${r.stepKey}`);
+
+    const child1Pipeline = order.filter((id) => id.startsWith(`${child1!.id}:`));
+    expect(child1Pipeline).toEqual([
+      `${child1!.id}:plan`,
+      `${child1!.id}:impl`,
+      `${child1!.id}:airev`,
+      `${child1!.id}:prepeval`,
+    ]);
+    const child2PlanIdx = order.indexOf(`${child2!.id}:plan`);
+    const child1PrepIdx = order.indexOf(`${child1!.id}:prepeval`);
+    expect(child2PlanIdx).toBeGreaterThan(child1PrepIdx);
+  });
+
+  it("skips blocked children even when incorrectly marked queued", async () => {
+    const feature = harness.store.createCard(
+      harness.store.ensureDefaultProject("jeeves", "C:/target-repo").id,
+    );
+    harness.store.updateCard(feature.id, { title: "Feature" });
+    const featureId = harness.store.decideKind(feature.id, "feature").card.id;
+    harness.store.handOffGrillToSpec(featureId);
+    harness.store.handOffSpecToTasks(featureId);
+    harness.artifactStore.appendTasksDraft(featureId, 0, {
+      tasks: [
+        { id: "a", title: "API", description: "", dependsOn: [] },
+        { id: "b", title: "UI", description: "", dependsOn: ["a"] },
+      ],
+    });
+    harness.store.setCardBranch(featureId, "jeeves/card-feature");
+    const { children } = harness.store.fanOut(featureId);
+    const blocked = children[1]!;
+    harness.store.setStepStatus(blocked.id, "plan", "queued");
+
+    const { engine, calls } = makeEngine(harness, [planOk(), implementOk(), airevOk()]);
+    engine.enqueue(children[0]!.id, "plan");
+    engine.enqueue(blocked.id, "plan");
+    await engine.whenIdle();
+
+    expect(stepStatus(harness, blocked.id, "plan")).toBe("queued");
+    expect(
+      harness.runStore.listForCard(blocked.id),
+    ).toHaveLength(0);
+    expect(calls.every((c) => !c.options.worktreePath.endsWith(blocked.id))).toBe(
+      true,
+    );
   });
 
   it("emits card.updated, run.log, and run.finished to subscribers", async () => {
@@ -432,6 +514,54 @@ describe("ExecutionEngine", () => {
 
       expect(stepStatus(harness, card.id, "plan")).toBe("done");
       expect(stepStatus(harness, card.id, "impl")).toBe("done");
+    });
+
+    it("rebuilds depth-first order from the DB (not plans-first FIFO)", async () => {
+      const feature = harness.store.createCard(
+        harness.store.ensureDefaultProject("jeeves", "C:/target-repo").id,
+      );
+      harness.store.updateCard(feature.id, { title: "Feature" });
+      const featureId = harness.store.decideKind(feature.id, "feature").card.id;
+      harness.store.handOffGrillToSpec(featureId);
+      harness.store.handOffSpecToTasks(featureId);
+      harness.artifactStore.appendTasksDraft(featureId, 0, {
+        tasks: [
+          { id: "a", title: "First", description: "", dependsOn: [] },
+          { id: "b", title: "Second", description: "", dependsOn: [] },
+        ],
+      });
+      harness.store.setCardBranch(featureId, "jeeves/card-feature");
+      const { children } = harness.store.fanOut(featureId);
+      const [child1, child2] = children;
+
+      // Simulate restart mid-pipeline: child 1 Implement queued, child 2 Plan queued.
+      harness.store.setStepStatus(child1!.id, "plan", "done");
+      harness.store.setStepStatus(child1!.id, "impl", "queued");
+      harness.store.setCardBranch(child1!.id, `jeeves/card-${child1!.id}`);
+
+      const { engine } = makeEngine(harness, [
+        implementOk(),
+        airevOk(),
+        planOk(),
+        implementOk(),
+        airevOk(),
+      ]);
+      engine.boot();
+      await engine.whenIdle();
+
+      const order = harness.db
+        .select()
+        .from(runs)
+        .orderBy(asc(runs.startedAt))
+        .all()
+        .map((r) => `${r.cardId}:${r.stepKey}`);
+
+      expect(order.indexOf(`${child1!.id}:impl`)).toBeLessThan(
+        order.indexOf(`${child2!.id}:plan`),
+      );
+      expect(order.indexOf(`${child1!.id}:airev`)).toBeLessThan(
+        order.indexOf(`${child2!.id}:plan`),
+      );
     });
   });
 

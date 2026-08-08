@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { ArtifactStore } from "../artifacts/store.js";
 import { openDb, type Db } from "../db/index.js";
-import { cardSteps } from "../db/schema.js";
+import { cardSteps, cards } from "../db/schema.js";
 import { CardStore } from "./store.js";
 
 describe("CardStore", () => {
@@ -494,6 +494,132 @@ describe("CardStore", () => {
       expect(() => fanStore.fanOut(okId)).toThrow(
         expect.objectContaining({ status: 409 }),
       );
+    });
+  });
+
+  describe("listQueuedSteps", () => {
+    let artifactRoot: string;
+    let artifacts: ArtifactStore;
+    let queueStore: CardStore;
+
+    beforeEach(() => {
+      artifactRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-queue-"));
+      artifacts = new ArtifactStore(db, artifactRoot);
+      queueStore = new CardStore(db, artifacts);
+    });
+
+    afterEach(() => {
+      fs.rmSync(artifactRoot, { recursive: true, force: true });
+    });
+
+    function featureWithTip(tip: {
+      tasks: Array<{
+        id: string;
+        title: string;
+        description: string;
+        dependsOn: string[];
+      }>;
+    }): string {
+      const card = queueStore.createCard(projectId);
+      queueStore.updateCard(card.id, { title: "Feature" });
+      const id = queueStore.decideKind(card.id, "feature").card.id;
+      queueStore.handOffGrillToSpec(id);
+      queueStore.handOffSpecToTasks(id);
+      artifacts.appendTasksDraft(id, 0, tip);
+      return id;
+    }
+
+    it("orders eligible steps by sibling position then plan < impl < airev < prepeval", () => {
+      const earlier = queueStore.createCard(projectId);
+      queueStore.updateCard(earlier.id, { title: "Created first" });
+      const earlierId = queueStore.decideKind(earlier.id, "standalone").card.id;
+
+      const later = queueStore.createCard(projectId);
+      queueStore.updateCard(later.id, { title: "Created second" });
+      const laterId = queueStore.decideKind(later.id, "standalone").card.id;
+
+      // Invert board positions so createdAt order ≠ sibling position order.
+      db.update(cards)
+        .set({ position: 10 })
+        .where(eq(cards.id, earlierId))
+        .run();
+      db.update(cards)
+        .set({ position: 1 })
+        .where(eq(cards.id, laterId))
+        .run();
+
+      queueStore.setStepStatus(earlierId, "plan", "queued");
+      queueStore.setStepStatus(laterId, "plan", "done");
+      queueStore.setStepStatus(laterId, "impl", "queued");
+
+      expect(queueStore.listQueuedSteps()).toEqual([
+        { cardId: laterId, stepKey: "impl" },
+        { cardId: earlierId, stepKey: "plan" },
+      ]);
+    });
+
+    it("orders multiple queued steps on one card by step index", () => {
+      const card = queueStore.createCard(projectId);
+      queueStore.updateCard(card.id, { title: "Standalone" });
+      const id = queueStore.decideKind(card.id, "standalone").card.id;
+      queueStore.setStepStatus(id, "plan", "done");
+      queueStore.setStepStatus(id, "impl", "queued");
+      queueStore.setStepStatus(id, "airev", "queued");
+      // prepeval row appears only after AI Review advance — insert for the seam.
+      db.insert(cardSteps)
+        .values({
+          id: "prepeval-row",
+          cardId: id,
+          stepKey: "prepeval",
+          status: "queued",
+        })
+        .run();
+
+      expect(queueStore.listQueuedSteps()).toEqual([
+        { cardId: id, stepKey: "impl" },
+        { cardId: id, stepKey: "airev" },
+        { cardId: id, stepKey: "prepeval" },
+      ]);
+    });
+
+    it("omits cards with unmerged blockers even when marked queued", () => {
+      const id = featureWithTip({
+        tasks: [
+          { id: "a", title: "API", description: "", dependsOn: [] },
+          { id: "b", title: "UI", description: "", dependsOn: ["a"] },
+        ],
+      });
+      const { children } = queueStore.fanOut(id);
+      const blocked = children[1]!;
+      queueStore.setStepStatus(blocked.id, "plan", "queued");
+
+      expect(queueStore.listQueuedSteps()).toEqual([
+        { cardId: children[0]!.id, stepKey: "plan" },
+      ]);
+    });
+
+    it("keeps each feature's children together by parent board position", () => {
+      const featureA = featureWithTip({
+        tasks: [
+          { id: "a1", title: "A1", description: "", dependsOn: [] },
+          { id: "a2", title: "A2", description: "", dependsOn: [] },
+        ],
+      });
+      const featureB = featureWithTip({
+        tasks: [{ id: "b1", title: "B1", description: "", dependsOn: [] }],
+      });
+      // featureA was created first → lower board position than featureB.
+      const { children: kidsA } = queueStore.fanOut(featureA);
+      const { children: kidsB } = queueStore.fanOut(featureB);
+
+      queueStore.setStepStatus(kidsA[0]!.id, "plan", "done");
+      queueStore.setStepStatus(kidsA[0]!.id, "impl", "queued");
+      // Child A2 still Plan queued; B1 Plan queued at sibling position 0.
+      expect(queueStore.listQueuedSteps()).toEqual([
+        { cardId: kidsA[0]!.id, stepKey: "impl" },
+        { cardId: kidsA[1]!.id, stepKey: "plan" },
+        { cardId: kidsB[0]!.id, stepKey: "plan" },
+      ]);
     });
   });
 });

@@ -119,6 +119,38 @@ export interface ArtifactContent {
   content: string;
 }
 
+export type DiffFileStatus =
+  | "added"
+  | "modified"
+  | "deleted"
+  | "renamed"
+  | "copied"
+  | "typechange";
+
+export type DiffFileEntry = {
+  path: string;
+  oldPath?: string;
+  status: DiffFileStatus;
+  additions: number;
+  deletions: number;
+};
+
+/** Live three-dot summary for the Implement DiffViewer. */
+export type CardDiffSummary = {
+  upstreamRef: string;
+  cardBranch: string;
+  baseSha: string;
+  tipSha: string;
+  files: DiffFileEntry[];
+  totalAdditions: number;
+  totalDeletions: number;
+};
+
+export type CardDiffFilePatch = {
+  path: string;
+  patch: string;
+};
+
 export interface TasksDraftTask {
   id: string;
   title: string;
@@ -256,6 +288,12 @@ export const api = {
       kind: params.kind,
     });
     return request<ArtifactContent>(`/api/cards/${cardId}/artifacts/latest?${qs}`);
+  },
+  getCardDiff: (cardId: string) =>
+    request<CardDiffSummary>(`/api/cards/${cardId}/diff`),
+  getCardDiffFile: (cardId: string, filePath: string) => {
+    const qs = new URLSearchParams({ path: filePath });
+    return request<CardDiffFilePatch>(`/api/cards/${cardId}/diff/file?${qs}`);
   },
   retryStep: (cardId: string, stepKey: string) =>
     request<Card>(`/api/cards/${cardId}/steps/${stepKey}/retry`, {

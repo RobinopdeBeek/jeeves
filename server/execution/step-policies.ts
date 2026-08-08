@@ -17,12 +17,15 @@ export interface StepExecutionPolicy {
     cardId: string,
     round: number,
   ) => boolean;
-  /** When true, host runs `projects.verify_commands` after a successful finalize. */
-  hostVerify?: boolean;
+  /**
+   * Host `projects.verify_commands` after a successful finalize.
+   * `true` always; `"if-committed"` only when headSha !== baseSha.
+   */
+  hostVerify?: boolean | "if-committed";
 }
 
-/** Plan exchange files need prose beyond headings and empty bullets. */
-export function assertPlanHasUsefulContent(raw: string): void {
+/** Exchange markdown needs prose beyond headings and empty bullets. */
+export function assertExchangeHasUsefulContent(raw: string): void {
   const body = stripFrontmatter(raw)
     .replace(/^#+\s+.*$/gm, "")
     .replace(/^[-*]\s*$/gm, "")
@@ -31,6 +34,9 @@ export function assertPlanHasUsefulContent(raw: string): void {
     throw new Error("exchange file has no useful content");
   }
 }
+
+/** @deprecated Prefer assertExchangeHasUsefulContent. */
+export const assertPlanHasUsefulContent = assertExchangeHasUsefulContent;
 
 function stripFrontmatter(raw: string): string {
   if (!raw.startsWith("---\n")) return raw;
@@ -48,7 +54,7 @@ export const STEP_POLICIES: Partial<Record<StepKey, StepExecutionPolicy>> = {
         exchangePath: ".jeeves/plan.md",
         kind: "plan",
         stepKey: "plan",
-        validate: assertPlanHasUsefulContent,
+        validate: assertExchangeHasUsefulContent,
       },
     ],
     assertWorkspace: assertPlanWorkspaceClean,
@@ -62,6 +68,23 @@ export const STEP_POLICIES: Partial<Record<StepKey, StepExecutionPolicy>> = {
     harvest: [],
     assertWorkspace: assertImplementWorkspace,
     hostVerify: true,
+  },
+  airev: {
+    skill: "ai-review",
+    promptFile: path.join("prompts", "execution", "ai-review.md"),
+    harvest: [
+      {
+        exchangePath: ".jeeves/review.md",
+        kind: "review",
+        stepKey: "airev",
+        validate: assertExchangeHasUsefulContent,
+      },
+    ],
+    assertWorkspace: assertAiReviewWorkspace,
+    postcondition: (artifacts, cardId, round) =>
+      artifacts.latest(cardId, { stepKey: "airev", round, kind: "review" }) !==
+      undefined,
+    hostVerify: "if-committed",
   },
 };
 
@@ -110,5 +133,22 @@ async function assertImplementWorkspace(
   if (status) {
     const summary = status.split("\n")[0] ?? "dirty tree";
     throw new Error(`implement step left source tree dirty: ${summary}`);
+  }
+}
+
+/**
+ * AI Review: review artifact harvested separately; zero or more commits OK;
+ * tree must be clean after exchange removal.
+ */
+async function assertAiReviewWorkspace(
+  worktrees: WorktreeLifecycle,
+  ctx: RunFinalizeContext,
+): Promise<void> {
+  const status = await worktrees.worktreeStatus(ctx.workspacePath, {
+    ignorePathPrefixes: [".jeeves"],
+  });
+  if (status) {
+    const summary = status.split("\n")[0] ?? "dirty tree";
+    throw new Error(`ai-review step left source tree dirty: ${summary}`);
   }
 }

@@ -10,6 +10,8 @@ import {
   expectDiagnosticAttachment,
   fakeRunner,
   fakeWorktrees,
+  airevOk,
+  airevReworkOk,
   implementOk,
   makeEngine,
   makeEngineWithRunner,
@@ -35,21 +37,21 @@ describe("ExecutionEngine", () => {
 
   it("runs a queued Plan to done when the agent succeeds", async () => {
     const card = queuedCard(harness);
-    const { engine, calls } = makeEngine(harness, [planOk(), implementOk()]);
+    const { engine, calls } = makeEngine(harness, [planOk(), implementOk(), airevOk()]);
 
     engine.enqueue(card.id, "plan");
     await engine.whenIdle();
 
     expect(stepStatus(harness, card.id, "plan")).toBe("done");
     expect(stepStatus(harness, card.id, "impl")).toBe("done");
-    expect(stepStatus(harness, card.id, "airev")).toBe("pending");
+    expect(stepStatus(harness, card.id, "airev")).toBe("done");
 
     const run = harness.runStore.latestForStep(card.id, "plan");
     expect(run?.status).toBe("succeeded");
     expect(run?.skill).toBe("plan-implementation");
     expect(run?.logPath).toContain(path.join("cards", card.id, "0"));
 
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
     expect(calls[0].prompt).toContain("Plan implementation");
     expect(calls[0].prompt).toContain("Rest timer");
     expect(calls[0].prompt).toContain("manifest.json");
@@ -74,6 +76,7 @@ describe("ExecutionEngine", () => {
       { error: new Error("agent crashed") },
       planOk(),
       implementOk(),
+      airevOk(),
     ]);
 
     engine.enqueue(card.id, "plan");
@@ -105,7 +108,7 @@ describe("ExecutionEngine", () => {
     });
     const { engine, calls } = makeEngine(
       harness,
-      [planOk(), implementOk()],
+      [planOk(), implementOk(), airevOk()],
       cardAttachments,
     );
 
@@ -126,7 +129,7 @@ describe("ExecutionEngine", () => {
     const card = queuedCard(harness);
     const { engine, calls } = makeEngine(
       harness,
-      [planOk(), implementOk()],
+      [planOk(), implementOk(), airevOk()],
       cardAttachments,
     );
 
@@ -167,7 +170,7 @@ describe("ExecutionEngine", () => {
     const { children } = harness.store.fanOut(featureId);
     const child = children[0]!;
 
-    const { engine, calls } = makeEngine(harness, [planOk(), implementOk()]);
+    const { engine, calls } = makeEngine(harness, [planOk(), implementOk(), airevOk()]);
     engine.enqueue(child.id, "plan");
     await engine.whenIdle();
 
@@ -324,12 +327,15 @@ describe("ExecutionEngine", () => {
     const second = queuedCard(harness, "Second");
     let release!: (events: RunEvent[]) => void;
     const gate = new Promise<RunEvent[]>((r) => (release = r));
-    // Queue order after first Plan succeeds: second Plan, then first Implement.
+    // Queue after first Plan succeeds: second Plan, then first Implement.
+    // After both Implements: first AI Review, then second AI Review.
     const { engine } = makeEngine(harness, [
       { gate, finalize: "plan" },
       planOk(),
       implementOk(),
       implementOk(),
+      airevOk(),
+      airevOk(),
     ]);
 
     engine.enqueue(first.id, "plan");
@@ -350,7 +356,7 @@ describe("ExecutionEngine", () => {
 
   it("emits card.updated, run.log, and run.finished to subscribers", async () => {
     const card = queuedCard(harness);
-    const { engine } = makeEngine(harness, [planOk(), implementOk()]);
+    const { engine } = makeEngine(harness, [planOk(), implementOk(), airevOk()]);
 
     engine.enqueue(card.id, "plan");
     await engine.whenIdle();
@@ -419,7 +425,7 @@ describe("ExecutionEngine", () => {
 
     it("re-enqueues steps left queued by a restart", async () => {
       const card = queuedCard(harness);
-      const { engine } = makeEngine(harness, [planOk(), implementOk()]);
+      const { engine } = makeEngine(harness, [planOk(), implementOk(), airevOk()]);
 
       engine.boot();
       await engine.whenIdle();
@@ -450,6 +456,7 @@ describe("ExecutionEngine", () => {
       { error: new Error("first attempt died") },
       planOk(),
       implementOk(),
+      airevOk(),
     ]);
 
     engine.enqueue(card.id, "plan");
@@ -475,12 +482,13 @@ describe("ExecutionEngine", () => {
     expect(stepStatus(harness, card.id, "plan")).toBe("done");
     expect(stepStatus(harness, card.id, "impl")).toBe("done");
     const runsForCard = harness.runStore.listForCard(card.id);
-    expect(runsForCard).toHaveLength(3);
+    expect(runsForCard).toHaveLength(4);
     expect(runsForCard.filter((r) => r.stepKey === "plan").map((r) => r.status).sort()).toEqual([
       "failed",
       "succeeded",
     ]);
     expect(runsForCard.find((r) => r.stepKey === "impl")?.status).toBe("succeeded");
+    expect(runsForCard.find((r) => r.stepKey === "airev")?.status).toBe("succeeded");
   });
 
   it("rejects retry when the step has no failed run", () => {
@@ -522,6 +530,7 @@ describe("ExecutionEngine", () => {
         { error: new Error("first attempt died") },
         planOk(),
         implementOk(),
+        airevOk(),
       ]);
       const engine = makeEngineWithRunner(harness, runner, worktrees);
 
@@ -611,6 +620,7 @@ describe("ExecutionEngine", () => {
         { error: new Error("first attempt died") },
         planOk(),
         implementOk(),
+        airevOk(),
       ]);
 
       engine.enqueue(card.id, "plan");
@@ -731,7 +741,7 @@ describe("ExecutionEngine", () => {
       harness.store.setStepStatus(card.id, "plan", "queued");
       const engine2 = makeEngineWithRunner(
         harness,
-        fakeRunner([planOk(), implementOk()]).runner,
+        fakeRunner([planOk(), implementOk(), airevOk()]).runner,
         worktrees,
       );
       engine2.boot();
@@ -771,19 +781,20 @@ describe("ExecutionEngine", () => {
       const card = queuedCard(harness);
       const { worktrees, createFromCalls, checkoutCalls, resolvedRefs } =
         trackingWorktrees(harness.artifactRoot);
-      const { runner } = fakeRunner([planOk(), implementOk()]);
+      const { runner } = fakeRunner([planOk(), implementOk(), airevOk()]);
       const engine = makeEngineWithRunner(harness, runner, worktrees);
 
       engine.enqueue(card.id, "plan");
       await engine.whenIdle();
 
       const branch = `jeeves/card-${card.id}`;
-      expect(resolvedRefs).toEqual(["main", branch]);
+      expect(resolvedRefs).toEqual(["main", branch, branch]);
       expect(createFromCalls).toEqual([{ branch, baseSha: "sha-of-main" }]);
-      expect(checkoutCalls).toEqual([{ branch }]);
+      expect(checkoutCalls).toEqual([{ branch }, { branch }]);
       expect(harness.store.getCard(card.id)?.branch).toBe(branch);
       expect(harness.runStore.latestForStep(card.id, "plan")?.baseSha).toBe("sha-of-main");
       expect(stepStatus(harness, card.id, "impl")).toBe("done");
+      expect(stepStatus(harness, card.id, "airev")).toBe("done");
     });
 
     it("uses a non-main projects.default_branch as the upstream ref", async () => {
@@ -802,7 +813,7 @@ describe("ExecutionEngine", () => {
       );
       const engine = makeEngineWithRunner(
         harness,
-        fakeRunner([planOk(), implementOk()]).runner,
+        fakeRunner([planOk(), implementOk(), airevOk()]).runner,
         worktrees,
       );
 
@@ -818,7 +829,7 @@ describe("ExecutionEngine", () => {
       const tracked = trackingWorktrees(harness.artifactRoot);
       const engine = makeEngineWithRunner(
         harness,
-        fakeRunner([planOk(), implementOk(), planOk(), implementOk()]).runner,
+        fakeRunner([planOk(), implementOk(), airevOk(), planOk(), implementOk(), airevOk()]).runner,
         tracked.worktrees,
       );
 
@@ -857,6 +868,7 @@ describe("ExecutionEngine", () => {
           { error: new Error("first attempt died") },
           planOk(),
           implementOk(),
+          airevOk(),
         ]).runner,
         tracked.worktrees,
       );
@@ -876,9 +888,15 @@ describe("ExecutionEngine", () => {
       expect(tracked.createFromCalls).toEqual([
         { branch: `jeeves/card-${card.id}`, baseSha: "sha-of-main" },
       ]);
-      // Implement continuation after successful Plan retry.
-      expect(tracked.checkoutCalls).toEqual([{ branch: `jeeves/card-${card.id}` }]);
-      expect(tracked.resolvedRefs).toEqual([`jeeves/card-${card.id}`]);
+      // Implement + AI Review continuations after successful Plan retry.
+      expect(tracked.checkoutCalls).toEqual([
+        { branch: `jeeves/card-${card.id}` },
+        { branch: `jeeves/card-${card.id}` },
+      ]);
+      expect(tracked.resolvedRefs).toEqual([
+        `jeeves/card-${card.id}`,
+        `jeeves/card-${card.id}`,
+      ]);
     });
 
     it("child first run resolves the parent feature branch tip", async () => {
@@ -901,7 +919,7 @@ describe("ExecutionEngine", () => {
       const tracked = trackingWorktrees(harness.artifactRoot);
       const engine = makeEngineWithRunner(
         harness,
-        fakeRunner([planOk(), implementOk()]).runner,
+        fakeRunner([planOk(), implementOk(), airevOk()]).runner,
         tracked.worktrees,
       );
 
@@ -909,7 +927,11 @@ describe("ExecutionEngine", () => {
       await engine.whenIdle();
 
       const childBranch = `jeeves/card-${child.id}`;
-      expect(tracked.resolvedRefs).toEqual(["jeeves/card-feature", childBranch]);
+      expect(tracked.resolvedRefs).toEqual([
+        "jeeves/card-feature",
+        childBranch,
+        childBranch,
+      ]);
       expect(tracked.createFromCalls).toEqual([
         {
           branch: childBranch,
@@ -958,7 +980,7 @@ describe("ExecutionEngine", () => {
       const card = queuedCard(harness);
       let release!: (events: RunEvent[]) => void;
       const gate = new Promise<RunEvent[]>((r) => (release = r));
-      const { engine } = makeEngine(harness, [{ gate, finalize: "plan" }, implementOk()]);
+      const { engine } = makeEngine(harness, [{ gate, finalize: "plan" }, implementOk(), airevOk()]);
 
       engine.enqueue(card.id, "plan");
       await tick();
@@ -974,7 +996,7 @@ describe("ExecutionEngine", () => {
 
     it("freezes the final log as a runlog artifact after a successful run", async () => {
       const card = queuedCard(harness);
-      const { engine } = makeEngine(harness, [planOk(), implementOk()]);
+      const { engine } = makeEngine(harness, [planOk(), implementOk(), airevOk()]);
 
       engine.enqueue(card.id, "plan");
       await engine.whenIdle();
@@ -1015,7 +1037,7 @@ describe("ExecutionEngine", () => {
 
     it("does not index a runlog while the step is still queued", async () => {
       const card = queuedCard(harness);
-      const { engine } = makeEngine(harness, [planOk(), implementOk()]);
+      const { engine } = makeEngine(harness, [planOk(), implementOk(), airevOk()]);
       expect(harness.runStore.latestForStep(card.id, "plan")).toBeUndefined();
       expect(
         harness.artifactStore.latest(card.id, { stepKey: "plan", round: 0, kind: "runlog" }),
@@ -1043,14 +1065,14 @@ describe("ExecutionEngine", () => {
       });
       const { engine, calls } = makeEngine(
         harness,
-        [planOk(), implementOk()],
+        [planOk(), implementOk(), airevOk()],
         cardAttachments,
       );
 
       engine.enqueue(card.id, "plan");
       await engine.whenIdle();
 
-      expect(calls).toHaveLength(2);
+      expect(calls).toHaveLength(3);
       expect(calls[1]!.prompt).toContain("Implement task");
       expect(calls[1]!.prompt).toContain("Tracer plan.");
       expect(calls[1]!.prompt).toContain("Persist countdown across reloads.");
@@ -1060,7 +1082,7 @@ describe("ExecutionEngine", () => {
       expect(calls[1]!.prompt).toContain("/tdd");
       expect(harness.runStore.latestForStep(card.id, "impl")?.skill).toBe("implement-task");
       expect(stepStatus(harness, card.id, "impl")).toBe("done");
-      expect(stepStatus(harness, card.id, "airev")).toBe("pending");
+      expect(stepStatus(harness, card.id, "airev")).toBe("done");
     });
 
     it("uses checkoutExisting for Implement so Plan commits survive on the tip", async () => {
@@ -1081,7 +1103,7 @@ describe("ExecutionEngine", () => {
       };
       const engine = makeEngineWithRunner(
         harness,
-        fakeRunner([planOk(), implementOk()]).runner,
+        fakeRunner([planOk(), implementOk(), airevOk()]).runner,
         worktrees,
       );
 
@@ -1089,8 +1111,12 @@ describe("ExecutionEngine", () => {
       await engine.whenIdle();
 
       expect(createFromCalls).toEqual([`jeeves/card-${card.id}`]);
-      expect(checkoutCalls).toEqual([`jeeves/card-${card.id}`]);
+      expect(checkoutCalls).toEqual([
+        `jeeves/card-${card.id}`,
+        `jeeves/card-${card.id}`,
+      ]);
       expect(stepStatus(harness, card.id, "impl")).toBe("done");
+      expect(stepStatus(harness, card.id, "airev")).toBe("done");
     });
 
     it("fails Implement when the agent leaves no commits", async () => {
@@ -1153,7 +1179,7 @@ describe("ExecutionEngine", () => {
 
     it("skips verify_commands with a warning when null/empty", async () => {
       const card = queuedCard(harness);
-      const { engine } = makeEngine(harness, [planOk(), implementOk()]);
+      const { engine } = makeEngine(harness, [planOk(), implementOk(), airevOk()]);
 
       engine.enqueue(card.id, "plan");
       await engine.whenIdle();
@@ -1178,7 +1204,7 @@ describe("ExecutionEngine", () => {
         .where(eq(projects.id, project.id))
         .run();
       const card = queuedCard(harness);
-      const { engine } = makeEngine(harness, [planOk(), implementOk()]);
+      const { engine } = makeEngine(harness, [planOk(), implementOk(), airevOk()]);
 
       engine.enqueue(card.id, "plan");
       await engine.whenIdle();
@@ -1203,7 +1229,7 @@ describe("ExecutionEngine", () => {
         .where(eq(projects.id, project.id))
         .run();
       const card = queuedCard(harness);
-      const { engine } = makeEngine(harness, [planOk(), implementOk()]);
+      const { engine } = makeEngine(harness, [planOk(), implementOk(), airevOk()]);
 
       engine.enqueue(card.id, "plan");
       await engine.whenIdle();
@@ -1217,6 +1243,240 @@ describe("ExecutionEngine", () => {
       expect(harness.artifactStore.readBody(runlog!)).toMatch(
         /verify_commands: all commands passed/i,
       );
+    });
+  });
+
+  describe("AI Review (slice 8.4)", () => {
+    it("runs ai-review with plan and card-library attachments injected", async () => {
+      const { CardAttachmentStore } = await import("../attachments/card-library.js");
+      const cardAttachments = new CardAttachmentStore(harness.db, harness.artifactRoot);
+      const card = queuedCard(harness);
+      harness.store.updateCard(card.id, {
+        description: "Persist countdown across reloads.",
+      });
+      const att = cardAttachments.add({
+        cardId: card.id,
+        filename: "wire.png",
+        mediaType: "image/png",
+        bytes: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+        instruction: "Match this layout",
+      });
+      const { engine, calls } = makeEngine(
+        harness,
+        [planOk(), implementOk(), airevOk()],
+        cardAttachments,
+      );
+
+      engine.enqueue(card.id, "plan");
+      await engine.whenIdle();
+
+      expect(calls).toHaveLength(3);
+      expect(calls[2]!.prompt).toContain("AI Review");
+      expect(calls[2]!.prompt).toContain("Tracer plan.");
+      expect(calls[2]!.prompt).toContain("Persist countdown across reloads.");
+      expect(calls[2]!.prompt).toContain("wire.png");
+      expect(calls[2]!.prompt).toContain("Match this layout");
+      expect(calls[2]!.prompt).toContain(cardAttachments.absolutePath(card.id, att.id)!);
+      expect(calls[2]!.prompt).toContain(".jeeves/review.md");
+      expect(harness.runStore.latestForStep(card.id, "airev")?.skill).toBe("ai-review");
+      expect(harness.runStore.listForCard(card.id).filter((r) => r.stepKey === "airev")).toHaveLength(
+        1,
+      );
+    });
+
+    it("harvests review.md and advances to Review with prepeval queued on clean review", async () => {
+      const card = queuedCard(harness);
+      const { engine } = makeEngine(harness, [planOk(), implementOk(), airevOk()]);
+
+      engine.enqueue(card.id, "plan");
+      await engine.whenIdle();
+
+      const review = harness.artifactStore.latest(card.id, {
+        stepKey: "airev",
+        round: 0,
+        kind: "review",
+      });
+      expect(review).toBeDefined();
+      expect(harness.artifactStore.readBody(review!)).toContain("Clean review");
+      expect(stepStatus(harness, card.id, "airev")).toBe("done");
+      expect(harness.store.getCard(card.id)?.column).toBe("review");
+      expect(stepStatus(harness, card.id, "prepeval")).toBe("queued");
+      expect(stepStatus(harness, card.id, "review")).toBe("pending");
+    });
+
+    it("allows zero commits on a clean review and skips host verify", async () => {
+      const card = queuedCard(harness);
+      const { engine: setup } = makeEngine(harness, [planOk(), implementOk()]);
+      // Stop after Implement by not providing airevOk — Implement still enqueues airev,
+      // which fails without a script. Reset to a clean airev queued state instead.
+      setup.enqueue(card.id, "plan");
+      await setup.whenIdle();
+
+      // Leave Implement done; park AI Review as queued with a branch tip ready.
+      harness.store.setStepStatus(card.id, "airev", "queued");
+      const project = harness.store.ensureDefaultProject("jeeves", "C:/target-repo");
+      harness.db
+        .update(projects)
+        .set({ verifyCommands: JSON.stringify(["false"]) })
+        .where(eq(projects.id, project.id))
+        .run();
+
+      const { engine } = makeEngine(harness, [airevOk()]);
+      engine.enqueue(card.id, "airev");
+      await engine.whenIdle();
+
+      // Clean airev made no commits — verify_commands must not run (would fail).
+      expect(stepStatus(harness, card.id, "airev")).toBe("done");
+      const runlog = harness.artifactStore.latest(card.id, {
+        stepKey: "airev",
+        round: 0,
+        kind: "runlog",
+      });
+      expect(harness.artifactStore.readBody(runlog!)).not.toMatch(/verify_commands failed/i);
+      expect(harness.artifactStore.readBody(runlog!)).not.toMatch(
+        /verify_commands: all commands passed/i,
+      );
+    });
+
+    it("runs host verify when AI Review commits rework; verify fail → needs-user", async () => {
+      const card = queuedCard(harness);
+      const { engine: setup } = makeEngine(harness, [planOk(), implementOk()]);
+      setup.enqueue(card.id, "plan");
+      await setup.whenIdle();
+
+      harness.store.setStepStatus(card.id, "airev", "queued");
+      const project = harness.store.ensureDefaultProject("jeeves", "C:/target-repo");
+      harness.db
+        .update(projects)
+        .set({ verifyCommands: JSON.stringify(["false"]) })
+        .where(eq(projects.id, project.id))
+        .run();
+
+      const { engine } = makeEngine(harness, [airevReworkOk()]);
+      engine.enqueue(card.id, "airev");
+      await engine.whenIdle();
+
+      expect(stepStatus(harness, card.id, "airev")).toBe("needs-user");
+      expect(harness.store.getCard(card.id)?.column).toBe("implement");
+      const run = harness.runStore.latestForStep(card.id, "airev");
+      expect(run?.status).toBe("failed");
+      expect(run?.error).toMatch(/verify_commands failed/i);
+    });
+
+    it("passes AI Review with rework commits when verify_commands succeed", async () => {
+      const project = harness.store.ensureDefaultProject("jeeves", "C:/target-repo");
+      harness.db
+        .update(projects)
+        .set({ verifyCommands: JSON.stringify(["true"]) })
+        .where(eq(projects.id, project.id))
+        .run();
+      const card = queuedCard(harness);
+      const { engine } = makeEngine(harness, [
+        planOk(),
+        implementOk(),
+        airevReworkOk(),
+      ]);
+
+      engine.enqueue(card.id, "plan");
+      await engine.whenIdle();
+
+      expect(stepStatus(harness, card.id, "airev")).toBe("done");
+      expect(harness.store.getCard(card.id)?.column).toBe("review");
+      const runlog = harness.artifactStore.latest(card.id, {
+        stepKey: "airev",
+        round: 0,
+        kind: "runlog",
+      });
+      expect(harness.artifactStore.readBody(runlog!)).toMatch(
+        /verify_commands: all commands passed/i,
+      );
+    });
+
+    it("fails AI Review when review.md is missing", async () => {
+      const card = queuedCard(harness);
+      const engine = makeEngineWithRunner(
+        harness,
+        fakeRunner([
+          planOk(),
+          implementOk(),
+          { events: ok(), finalize: "implement" }, // commits but no review.md
+        ]).runner,
+      );
+
+      engine.enqueue(card.id, "plan");
+      await engine.whenIdle();
+
+      expect(stepStatus(harness, card.id, "airev")).toBe("needs-user");
+      expect(harness.runStore.latestForStep(card.id, "airev")?.error).toMatch(
+        /required exchange|postconditions|review/i,
+      );
+    });
+
+    it("fails AI Review when the source tree is dirty after finalize", async () => {
+      const card = queuedCard(harness);
+      const runner: AgentRunner = {
+        async *run(prompt, options) {
+          if (prompt.includes("Plan implementation")) {
+            const planDir = path.join(options.worktreePath, ".jeeves");
+            fs.mkdirSync(planDir, { recursive: true });
+            fs.writeFileSync(path.join(planDir, "plan.md"), "# Plan\n\nDo it.\n");
+            if (options.onFinalize) {
+              await options.onFinalize({
+                workspacePath: options.worktreePath,
+                headSha: options.baseSha,
+                baseSha: options.baseSha,
+              });
+            }
+            yield { type: "result", status: "finished" };
+            return;
+          }
+          if (prompt.includes("Implement task")) {
+            if (options.onFinalize) {
+              await options.onFinalize({
+                workspacePath: options.worktreePath,
+                headSha: `${options.baseSha}-impl`,
+                baseSha: options.baseSha,
+              });
+            }
+            yield { type: "result", status: "finished" };
+            return;
+          }
+          const reviewDir = path.join(options.worktreePath, ".jeeves");
+          fs.mkdirSync(reviewDir, { recursive: true });
+          fs.writeFileSync(
+            path.join(reviewDir, "review.md"),
+            "# AI Review\n\nFindings noted.\n",
+          );
+          fs.writeFileSync(path.join(options.worktreePath, "leftover.ts"), "oops\n");
+          if (options.onFinalize) {
+            await options.onFinalize({
+              workspacePath: options.worktreePath,
+              headSha: options.baseSha,
+              baseSha: options.baseSha,
+            });
+          }
+          yield { type: "result", status: "finished" };
+        },
+      };
+      const engine = makeEngineWithRunner(harness, runner);
+
+      engine.enqueue(card.id, "plan");
+      await engine.whenIdle();
+
+      expect(stepStatus(harness, card.id, "airev")).toBe("needs-user");
+      expect(harness.runStore.latestForStep(card.id, "airev")?.error).toMatch(/dirty/i);
+    });
+
+    it("does not produce Evaluation HTML or eval artifacts", async () => {
+      const card = queuedCard(harness);
+      const { engine } = makeEngine(harness, [planOk(), implementOk(), airevOk()]);
+
+      engine.enqueue(card.id, "plan");
+      await engine.whenIdle();
+
+      const kinds = harness.artifactStore.list(card.id).map((a) => a.kind);
+      expect(kinds).toContain("review");
+      expect(kinds).not.toContain("eval");
     });
   });
 });

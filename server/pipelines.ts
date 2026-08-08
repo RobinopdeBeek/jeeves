@@ -18,6 +18,7 @@ export type StepKey =
   | "plan"
   | "impl"
   | "airev"
+  | "prepeval"
   | "review"
   | "document"
   | "deploy";
@@ -40,6 +41,7 @@ export const stepKeys = [
   "plan",
   "impl",
   "airev",
+  "prepeval",
   "review",
   "document",
   "deploy",
@@ -75,6 +77,7 @@ const STEP_DEFS: Record<StepKey, StepDef> = {
   plan: { label: "Plan", stepKind: "ai-execution", column: "implement" },
   impl: { label: "Implement", stepKind: "ai-execution", column: "implement" },
   airev: { label: "AI Review", stepKind: "ai-execution", column: "implement" },
+  prepeval: { label: "Prepare Eval", stepKind: "ai-execution", column: "review" },
   review: { label: "Human Review", stepKind: "human", column: "review" },
   document: { label: "Document", stepKind: "ai-execution", column: "finalize" },
   deploy: { label: "Deploy", stepKind: "ai-execution", column: "finalize" },
@@ -84,7 +87,7 @@ const COLUMN_STEPS: Record<ColumnId, StepKey[]> = {
   backlog: ["info"],
   define: ["grill", "spec", "tasks"],
   implement: ["plan", "impl", "airev"],
-  review: ["review"],
+  review: ["prepeval", "review"],
   finalize: ["document", "deploy"],
 };
 
@@ -384,8 +387,9 @@ export function advance(
     };
   }
 
-  // step-finished: status patch for the completed step; Plan success chains
-  // to Implement on the same card so the task pipeline advances unattended.
+  // step-finished: status patch for the completed step; Plan → Implement →
+  // AI Review chain on the same card; AI Review success enters Review with
+  // Prepare Eval queued (stub body lands in slice 8.5).
   if (trigger.stepKey === "plan" && trigger.outcome === "succeeded") {
     return {
       ok: true,
@@ -395,6 +399,37 @@ export function advance(
       ],
       sideEffects: [
         { type: "enqueue", cardId: card.id, stepKey: "impl" },
+      ],
+    };
+  }
+
+  if (trigger.stepKey === "impl" && trigger.outcome === "succeeded") {
+    return {
+      ok: true,
+      stepPatches: [
+        { key: "impl", status: "done" },
+        { key: "airev", status: "queued" },
+      ],
+      sideEffects: [
+        { type: "enqueue", cardId: card.id, stepKey: "airev" },
+      ],
+    };
+  }
+
+  if (trigger.stepKey === "airev" && trigger.outcome === "succeeded") {
+    if (card.kind !== "task") {
+      return { ok: false, reason: "AI Review advance requires a task card" };
+    }
+    return {
+      ok: true,
+      cardPatch: { kind: "task", column: "review" },
+      ensureSteps: [
+        { key: "prepeval", status: "queued" },
+        { key: "review", status: "pending" },
+      ],
+      stepPatches: [{ key: "airev", status: "done" }],
+      sideEffects: [
+        { type: "enqueue", cardId: card.id, stepKey: "prepeval" },
       ],
     };
   }

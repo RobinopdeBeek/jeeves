@@ -52,21 +52,3 @@ export function showMarkdownArtifact(
 ): boolean {
   return shouldLoadMarkdownArtifact(stepKey, stepStatus) && artifact != null;
 }
-
-/** @deprecated Prefer shouldLoadMarkdownArtifact — kept for Plan call sites. */
-export function shouldLoadPlanArtifact(
-  stepKey: string,
-  stepStatus: StepStatus | undefined,
-): boolean {
-  return stepKey === "plan" && shouldLoadMarkdownArtifact(stepKey, stepStatus);
-}
-
-/** @deprecated Prefer showMarkdownArtifact — kept for Plan call sites. */
-export function showPlanArtifact(
-  stepKey: string,
-  stepStatus: StepStatus | undefined,
-  planArtifact: unknown,
-): boolean {
-  return stepKey === "plan" && showMarkdownArtifact(stepKey, stepStatus, planArtifact);
-}
-

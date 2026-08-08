@@ -24,8 +24,8 @@ export interface StepExecutionPolicy {
   hostVerify?: boolean | "if-committed";
 }
 
-/** Plan exchange files need prose beyond headings and empty bullets. */
-export function assertPlanHasUsefulContent(raw: string): void {
+/** Exchange markdown needs prose beyond headings and empty bullets. */
+export function assertExchangeHasUsefulContent(raw: string): void {
   const body = stripFrontmatter(raw)
     .replace(/^#+\s+.*$/gm, "")
     .replace(/^[-*]\s*$/gm, "")
@@ -34,6 +34,9 @@ export function assertPlanHasUsefulContent(raw: string): void {
     throw new Error("exchange file has no useful content");
   }
 }
+
+/** @deprecated Prefer assertExchangeHasUsefulContent. */
+export const assertPlanHasUsefulContent = assertExchangeHasUsefulContent;
 
 function stripFrontmatter(raw: string): string {
   if (!raw.startsWith("---\n")) return raw;
@@ -51,7 +54,7 @@ export const STEP_POLICIES: Partial<Record<StepKey, StepExecutionPolicy>> = {
         exchangePath: ".jeeves/plan.md",
         kind: "plan",
         stepKey: "plan",
-        validate: assertPlanHasUsefulContent,
+        validate: assertExchangeHasUsefulContent,
       },
     ],
     assertWorkspace: assertPlanWorkspaceClean,
@@ -74,7 +77,7 @@ export const STEP_POLICIES: Partial<Record<StepKey, StepExecutionPolicy>> = {
         exchangePath: ".jeeves/review.md",
         kind: "review",
         stepKey: "airev",
-        validate: assertPlanHasUsefulContent,
+        validate: assertExchangeHasUsefulContent,
       },
     ],
     assertWorkspace: assertAiReviewWorkspace,

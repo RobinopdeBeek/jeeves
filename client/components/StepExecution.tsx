@@ -37,7 +37,7 @@ function toDisplayLog(raw: string): string {
 
 /**
  * Plan / Implement / AI Review run-log panel: queued message → live SSE
- * stream while ai-working → run log above formatted plan when finished.
+ * stream while ai-working → run log above formatted markdown when finished.
  */
 export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
   const step = card.steps.find((s) => s.key === stepKey);

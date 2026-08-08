@@ -4,9 +4,7 @@ import {
   logOpenAfterFinish,
   markdownArtifactKind,
   shouldLoadMarkdownArtifact,
-  shouldLoadPlanArtifact,
   showMarkdownArtifact,
-  showPlanArtifact,
   stepExecutionMode,
   usesFrozenArtifacts,
 } from "./step-execution-view";
@@ -69,13 +67,6 @@ describe("step-execution-view", () => {
       expect(showMarkdownArtifact("airev", "done", { content: "# Review" })).toBe(true);
       expect(showMarkdownArtifact("airev", "needs-user", { content: "# Review" })).toBe(false);
       expect(showMarkdownArtifact("plan", "done", null)).toBe(false);
-    });
-
-    it("keeps Plan-named helpers scoped to the plan step", () => {
-      expect(shouldLoadPlanArtifact("plan", "done")).toBe(true);
-      expect(shouldLoadPlanArtifact("airev", "done")).toBe(false);
-      expect(showPlanArtifact("plan", "done", { content: "# Plan" })).toBe(true);
-      expect(showPlanArtifact("airev", "done", { content: "# Review" })).toBe(false);
     });
   });
 });

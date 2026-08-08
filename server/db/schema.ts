@@ -9,6 +9,11 @@ export const projects = sqliteTable("projects", {
   repoPath: text("repo_path").notNull(),
   /** Explicit local base ref — never inferred from host HEAD (ADR 0009). */
   defaultBranch: text("default_branch").notNull().default("main"),
+  /**
+   * Ordered Jeeves-owned shell commands (JSON string array). Host gate after
+   * Implement (and AI Review when it commits). Null/empty skips with a warning.
+   */
+  verifyCommands: text("verify_commands"),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 });
 

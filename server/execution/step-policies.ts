@@ -17,6 +17,8 @@ export interface StepExecutionPolicy {
     cardId: string,
     round: number,
   ) => boolean;
+  /** When true, host runs `projects.verify_commands` after a successful finalize. */
+  hostVerify?: boolean;
 }
 
 /** Plan exchange files need prose beyond headings and empty bullets. */
@@ -53,6 +55,14 @@ export const STEP_POLICIES: Partial<Record<StepKey, StepExecutionPolicy>> = {
     postcondition: (artifacts, cardId, round) =>
       artifacts.latest(cardId, { stepKey: "plan", round, kind: "plan" }) !== undefined,
   },
+  impl: {
+    skill: "implement-task",
+    promptFile: path.join("prompts", "execution", "implement-task.md"),
+    // Empty harvest still runs assertWorkspace (truthy array); Implement outputs are commits.
+    harvest: [],
+    assertWorkspace: assertImplementWorkspace,
+    hostVerify: true,
+  },
 };
 
 export function stepPolicy(stepKey: StepKey): StepExecutionPolicy | undefined {
@@ -83,5 +93,22 @@ async function assertPlanWorkspaceClean(
   if (status) {
     const summary = status.split("\n")[0] ?? "dirty tree";
     throw new Error(`plan step left source tree dirty: ${summary}`);
+  }
+}
+
+/** Implement must leave ≥1 commit and a clean tree after exchange cleanup. */
+async function assertImplementWorkspace(
+  worktrees: WorktreeLifecycle,
+  ctx: RunFinalizeContext,
+): Promise<void> {
+  if (ctx.headSha === ctx.baseSha) {
+    throw new Error("implement step must create at least one commit on the card branch");
+  }
+  const status = await worktrees.worktreeStatus(ctx.workspacePath, {
+    ignorePathPrefixes: [".jeeves"],
+  });
+  if (status) {
+    const summary = status.split("\n")[0] ?? "dirty tree";
+    throw new Error(`implement step left source tree dirty: ${summary}`);
   }
 }

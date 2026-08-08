@@ -1,6 +1,14 @@
 # Self-managed worktrees and @cursor/sdk for agent execution
 
-Jeeves replaces Sandcastle + Docker as the autonomous execution path. **Jeeves owns git worktree lifecycle** (`WorktreeManager`: create at recorded base SHA, remove after run, capture diagnostics, boot-time orphan cleanup). **`@cursor/sdk` local** is the `AgentRunner` implementation — `Agent.create({ local: { cwd: worktreePath, settingSources: [] } })` with `composer-2.5`. **No Docker for agent runs.** Sandcastle's container sandbox, image build, and `logging.type: "file"` are retired; Jeeves tees `run.stream()` to the run log file on the host.
+Jeeves replaces Sandcastle + Docker as the autonomous execution path. **Jeeves owns git worktree lifecycle** (`WorktreeManager`: create at recorded base SHA, remove after run, capture diagnostics, boot-time orphan cleanup). **`@cursor/sdk` local** is the `AgentRunner` implementation — `Agent.create({ local: { cwd: worktreePath, settingSources: ["project", "user"] } })` with `composer-2.5`. **No Docker for agent runs.** Sandcastle's container sandbox, image build, and `logging.type: "file"` are retired; Jeeves tees `run.stream()` to the run log file on the host.
+
+## Local execution `settingSources` (MCP)
+
+Execution SDK runs (`CursorSdkAgentRunner`) load ambient Cursor settings from **`project`** and **`user`** only (`EXECUTION_SETTING_SOURCES` in `server/execution/cursor-sdk-runner.ts`). That is enough for host/project `mcp.json` (including Context7 when configured). **`team` / `mdm` / `plugins` / `all` are not enabled** — keep the ambient surface narrow for unattended Plan → Implement → AI Review.
+
+Missing Context7 or other MCP is **non-fatal**: the SDK typically surfaces "no tool" rather than failing `Agent.create`, and the Plan prompt tells the agent to continue with repo sources. Do not treat MCP availability as a run postcondition.
+
+This is separate from ACP Project Chat / step-chat MCP (ADR 0017). Grill session extract and other non-execution SDK callers keep their own `settingSources` policy.
 
 This supersedes the Docker-only Sandcastle consequences recorded in [ADR 0008](./0008-ai-sdk-assistant-ui-agent-runner.md) and the Docker preview requirement in [ADR 0009](./0009-branches-durable-worktrees-ephemeral.md) for the v1 path.
 

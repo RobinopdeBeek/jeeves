@@ -4,13 +4,30 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { Code, ConnectError } from "@connectrpc/connect";
 import { Agent, CursorAgentError } from "@cursor/sdk";
-import type { LocalAgentOptions, Run } from "@cursor/sdk";
+import type { LocalAgentOptions, Run, SettingSource } from "@cursor/sdk";
 import type { AgentRunner, RunAgentOptions, RunEvent } from "./runner.js";
 import { RunLogWriter } from "./run-log.js";
 
 const execFileAsync = promisify(execFile);
 
 const MODEL = "composer-2.5";
+
+/**
+ * Ambient Cursor settings layers for local **execution** SDK runs
+ * (`CursorSdkAgentRunner` / Plan · Implement · AI Review).
+ *
+ * - `project` — `.cursor/mcp.json` (and related) in the worktree / repo
+ * - `user` — host `~/.cursor/mcp.json` (typical Context7 install)
+ *
+ * Not enabled: `team`, `mdm`, `plugins`, or `all` — keep execution ambient
+ * config narrow. Missing MCP / Context7 is non-fatal (agent continues;
+ * Plan prompt says so). ACP Project Chat / step-chat MCP is a separate path
+ * (ADR 0017) and is unchanged by this list.
+ */
+export const EXECUTION_SETTING_SOURCES: readonly SettingSource[] = [
+  "project",
+  "user",
+];
 
 /**
  * AgentRunner over @cursor/sdk local agents (ADR 0010). Each run works in a
@@ -102,7 +119,7 @@ export class CursorSdkAgentRunner implements AgentRunner {
 function localOptions(worktreePath: string): LocalAgentOptions {
   const local: LocalAgentOptions = {
     cwd: worktreePath,
-    settingSources: [],
+    settingSources: [...EXECUTION_SETTING_SOURCES],
   };
   if (process.platform !== "win32") {
     local.sandboxOptions = { enabled: true };

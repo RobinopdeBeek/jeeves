@@ -789,7 +789,7 @@ describe("ExecutionEngine", () => {
       await engine.whenIdle();
 
       const branch = `jeeves/card-${card.id}`;
-      expect(resolvedRefs).toEqual(["main", branch, branch, branch]);
+      expect(resolvedRefs).toEqual(["main", branch, branch, branch, branch]);
       expect(createFromCalls).toEqual([{ branch, baseSha: "sha-of-main" }]);
       expect(checkoutCalls).toEqual([{ branch }, { branch }, { branch }]);
       expect(harness.store.getCard(card.id)?.branch).toBe(branch);
@@ -900,6 +900,8 @@ describe("ExecutionEngine", () => {
         `jeeves/card-${card.id}`,
         `jeeves/card-${card.id}`,
         `jeeves/card-${card.id}`,
+        // Prepare Eval host stub re-resolves tip after writing the placeholder.
+        `jeeves/card-${card.id}`,
       ]);
     });
 
@@ -935,6 +937,8 @@ describe("ExecutionEngine", () => {
         "jeeves/card-feature",
         childBranch,
         childBranch,
+        childBranch,
+        // Prepare Eval host stub re-resolves tip after writing the placeholder.
         childBranch,
       ]);
       expect(tracked.createFromCalls).toEqual([
@@ -1575,6 +1579,37 @@ describe("ExecutionEngine", () => {
       expect(stepStatus(harness, card.id, "review")).toBe("pending");
       expect(harness.runStore.latestForStep(card.id, "prepeval")?.error).toMatch(
         /dirty|source tree/i,
+      );
+    });
+
+    it("fails Prepare Eval when the tip moves (source commit)", async () => {
+      const card = queuedCard(harness);
+      const { engine: setup } = makeEngine(harness, [planOk(), implementOk(), airevOk()]);
+      setup.enqueue(card.id, "plan");
+      await setup.whenIdle();
+
+      harness.store.setStepStatus(card.id, "prepeval", "queued");
+      harness.store.setStepStatus(card.id, "review", "pending");
+
+      const base = fakeWorktrees(harness.artifactRoot);
+      let resolveCount = 0;
+      const engine = makeEngineWithRunner(harness, fakeRunner([]).runner, {
+        ...base,
+        async resolveRef(_ref) {
+          resolveCount += 1;
+          // First resolve is tip-at-start; second is post-hostBody tip check.
+          if (resolveCount === 1) return "tip-before";
+          return "tip-after-commit";
+        },
+      });
+
+      engine.enqueue(card.id, "prepeval");
+      await engine.whenIdle();
+
+      expect(stepStatus(harness, card.id, "prepeval")).toBe("needs-user");
+      expect(stepStatus(harness, card.id, "review")).toBe("pending");
+      expect(harness.runStore.latestForStep(card.id, "prepeval")?.error).toMatch(
+        /must not create commits/i,
       );
     });
   });

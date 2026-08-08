@@ -197,7 +197,7 @@ export class ExecutionEngine {
       }
 
       if (policy.hostBody) {
-        const line = "Preparing interactive evaluation…";
+        const line = policy.hostStatusLine ?? "Host step running…";
         try {
           fs.appendFileSync(logPath, `${line}\n`);
         } catch {
@@ -205,14 +205,19 @@ export class ExecutionEngine {
         }
         events.emit({ type: "run.log", runId: run.id, cardId, line });
 
-        // Stub creates no commits — pin eval to tip-at-start.
-        headSha = baseSha;
+        const tipBefore = baseSha;
+        await policy.hostBody({
+          workspacePath: worktreePath,
+          headSha: tipBefore,
+          baseSha,
+        });
+        // Re-resolve tip so "no commits" is checked against the real worktree.
+        headSha = await worktrees.resolveRef(branch);
         const ctx = {
           workspacePath: worktreePath,
           headSha,
-          baseSha,
+          baseSha: tipBefore,
         };
-        await policy.hostBody(ctx);
         await this.finalizeStep(cardId, stepKey, round, policy.skill, ctx);
 
         if (!meetsPostconditions(stepKey, artifacts, cardId, round)) {

@@ -216,12 +216,17 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
                 [queued] {step?.label} step waiting in queue…
               </div>
             )}
-            {renderLogBody()}
-            {mode === "live" && !logText && (
+            {mode === "live" && stepKey === "prepeval" && (
+              <div className="text-muted-foreground">
+                Preparing interactive evaluation…
+              </div>
+            )}
+            {mode === "live" && !logText && stepKey !== "prepeval" && (
               <div className="text-muted-foreground">
                 [starting] {liveWorkingMessage(stepKey)}
               </div>
             )}
+            {renderLogBody()}
           </div>
         </div>
       )}

@@ -81,15 +81,35 @@ A free-text item raised during review, scoped to a round, moving open → consum
 A file produced by a step, stored in the project store's artifact folder and indexed by a database row holding metadata and a path — never content. Self-describing via frontmatter; lineage recorded as derived-from links.
 
 **Transcript**:
-The mutable `UIMessage[]` chat log for an AI chat step, stored as an artifact so the session can resume and be reviewed. Not the Grill hand-off document Spec consumes.
+The mutable chat log for an AI chat step or Chat Thread, stored so the session can resume and be reviewed. Step transcripts are artifacts under a card (flat `UIMessage[]`). Project Chat transcripts are branch-aware (message tree + active head) under the project store's chat data area (`data/chat/<threadId>/`); the active path is what the agent sees. Not the Grill hand-off document Spec consumes.
 _Avoid_: Using "transcript" to mean the durable Grill Q&A artifact
+
+**Chat attachment**:
+A user-attached file on one Project Chat or step-chat turn. Bytes live as sidecars on disk; the transcript file part stores a `jeeves-attachment://` pointer ([ADR 0017](docs/adr/0017-chat-attachment-sidecars.md)). Distinct from execution failure diagnostic artifacts (`kind: "attachment"`) and from Card attachments.
+_Avoid_: Calling these "artifacts" without qualification; reusing the diagnostic `attachment` kind; using `jeeves-attachment://` for Card attachments
+
+**Card attachment**:
+A first-class file on a Card (Info / Backlog), with optional per-file instruction for downstream steps. Metadata in SQLite `card_attachments`; bytes under `data/cards/<cardId>/attachments/`. Managed via `/api/cards/:id/attachments`. Not a Chat attachment sidecar and not an execution `kind: "attachment"` diagnostic.
+_Avoid_: Chat attachment; reusing `jeeves-attachment://` pointers for Card attachment files
+
+**Project Chat**:
+A freeform ACP conversation against the active Project's repo, owned by the Project rather than any Card or Step. Distinct from step chats (Grill, Spec assist, Tasks assist), which are pipeline-bound and keyed by card/step/round.
+_Avoid_: Using "chat" alone when the Card/Step vs Project distinction matters; Global chat
+
+**Chat Thread**:
+One conversation within Project Chat — its own transcript, title, optional pinned Cursor model (spawn-pinned via `agent --model`), and warm ACP session. A Project may have many Chat Threads; the user switches among them from the chat sidebar.
+_Avoid_: Thread (unqualified — ambiguous with OS/async threads); using "session" for the conversation itself (session is the live ACP process)
+
+**Rewind**:
+A server operation that truncates or switches a Project Chat transcript to a chosen branch, kills that thread's warm ACP process, and respawns so the next agent turn is seeded only from the kept path — never a client-only edit of the visible message list.
+_Avoid_: Client-side transcript edit; fake rewind
 
 **Grill session**:
 The durable Q&A markdown artifact from a completed Grill step (kind `grill`): resolved questions and answers, still-open questions, and a short list of glossary/ADR docs updated during the interview. Produced by a host extract on Grill → Spec; shown in the done Grill tab and consumed by Spec. Read-only after harvest — corrections require a new Grill. Not a synthesis or summary of the chat.
 _Avoid_: Grill summary (implies synthesis); using "transcript" for this document; inlining full ADR/glossary bodies here
 
 **Project store**:
-Per-target-repository workflow storage at `<repo>/.jeeves/` (gitignored on disk). Holds `jeeves.db`, the artifact tree under `data/`, and ephemeral agent worktrees under `worktrees/`. Jeeves creates it on first use and ensures `.jeeves/` is in the target repo's `.gitignore`. Application source stays git-clean — nothing in the store is committed.
+Per-target-repository workflow storage at `<repo>/.jeeves/` (gitignored on disk). Holds `jeeves.db`, the artifact tree under `data/` (including Project Chat transcripts under `data/chat/`), and ephemeral agent worktrees under `worktrees/`. Jeeves creates it on first use and ensures `.jeeves/` is in the target repo's `.gitignore`. Application source stays git-clean — nothing in the store is committed.
 _Avoid_: Data dir (ambiguous with app vs project)
 
 **Artifact folder**:

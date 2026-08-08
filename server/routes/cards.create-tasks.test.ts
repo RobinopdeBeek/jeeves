@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stepChatSessionId } from "../ws/chat-session.js";
 import { ArtifactStore } from "../artifacts/store.js";
 import { CardStore } from "../cards/store.js";
 import { createCreateTasks } from "../chat/create-tasks.js";
@@ -147,14 +148,14 @@ describe("POST /:id/create-tasks", () => {
     const cardId = featureInSpec();
     seedSpec(cardId, "# Spec\n\nShip it.\n");
     const conn = fakeConn();
-    sessions.claim({ cardId, stepKey: "spec", round: 0 }, conn);
+    sessions.claim(stepChatSessionId(cardId, "spec", 0), conn);
 
     const closeOrder: string[] = [];
     const originalClose = sessions.close.bind(sessions);
-    sessions.close = (key, reason) => {
+    sessions.close = (id, reason) => {
       closeOrder.push("close");
       callOrder.push("close");
-      originalClose(key, reason);
+      originalClose(id, reason);
     };
     const originalHandOff = store.handOffSpecToTasks.bind(store);
     store.handOffSpecToTasks = (id) => {
@@ -179,7 +180,7 @@ describe("POST /:id/create-tasks", () => {
     expect(body.creatingTasks).toBe(false);
 
     expect(conn.displacedWith).toEqual(["closing spec for tasks synthesis"]);
-    expect(sessions.get({ cardId, stepKey: "spec", round: 0 })).toBeUndefined();
+    expect(sessions.get(stepChatSessionId(cardId, "spec", 0))).toBeUndefined();
     expect(() => store.assertSpecMutable(cardId)).toThrow(/frozen/i);
 
     const tip = artifacts.readTasksDraftTip(cardId, 0);
@@ -212,7 +213,7 @@ describe("POST /:id/create-tasks", () => {
     const cardId = featureInSpec();
     seedSpec(cardId, "# Spec\n\nShip it.\n");
     const conn = fakeConn();
-    sessions.claim({ cardId, stepKey: "spec", round: 0 }, conn);
+    sessions.claim(stepChatSessionId(cardId, "spec", 0), conn);
 
     synthesizeTasksDraft.mockImplementation(async () => {
       callOrder.push("synthesize");
@@ -254,7 +255,7 @@ describe("POST /:id/create-tasks", () => {
     const cardId = featureInSpec();
     seedSpec(cardId, "   \n\n  ");
     const conn = fakeConn();
-    sessions.claim({ cardId, stepKey: "spec", round: 0 }, conn);
+    sessions.claim(stepChatSessionId(cardId, "spec", 0), conn);
 
     const app = cardRoutes(store, project, deps);
     const res = await app.request(`http://localhost/${cardId}/create-tasks`, {

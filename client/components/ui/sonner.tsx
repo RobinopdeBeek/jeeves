@@ -7,13 +7,25 @@ import {
   IconInfoCircle,
   IconLoader2,
   IconX,
-  IconXboxX,
 } from "@tabler/icons-react"
-import { useEffect, useState, type CSSProperties, type PointerEvent } from "react"
-import { toast, Toaster as Sonner, type ToasterProps } from "sonner"
+import {
+  useEffect,
+  useState,
+  type CSSProperties,
+  type PointerEvent,
+  type ReactNode,
+} from "react"
+import {
+  toast as sonnerToast,
+  Toaster as Sonner,
+  type ExternalToast,
+  type ToasterProps,
+} from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+
+type ToastKind = "default" | "success" | "info" | "warning" | "error" | "loading"
 
 /** Keep Sonner's swipe/drag from swallowing taps on toast controls. */
 function keepToastControlTap(event: PointerEvent) {
@@ -50,10 +62,38 @@ async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
-function ErrorToast({
+function resolveToastMessage(message: (() => ReactNode) | ReactNode): string {
+  if (typeof message === "function") return resolveToastMessage(message())
+  if (typeof message === "string") return message
+  if (typeof message === "number" || typeof message === "boolean") {
+    return String(message)
+  }
+  return ""
+}
+
+function ToastIcon({ kind }: { kind: ToastKind }) {
+  switch (kind) {
+    case "success":
+      return <IconCircleCheck className="shrink-0" />
+    case "info":
+      return <IconInfoCircle className="shrink-0" />
+    case "warning":
+      return <IconAlertTriangle className="shrink-0" />
+    case "error":
+      return <IconAlertCircle className="shrink-0 text-destructive" />
+    case "loading":
+      return <IconLoader2 className="shrink-0 animate-spin" />
+    default:
+      return <IconInfoCircle className="shrink-0" />
+  }
+}
+
+function AppToast({
+  kind,
   message,
   toastId,
 }: {
+  kind: ToastKind
   message: string
   toastId: string | number
 }) {
@@ -68,9 +108,9 @@ function ErrorToast({
   return (
     <div
       className="flex w-89 items-center gap-2 rounded-lg border bg-popover p-3 text-sm text-popover-foreground shadow-lg"
-      role="alert"
+      role={kind === "error" ? "alert" : "status"}
     >
-      <IconAlertCircle className="shrink-0 text-destructive" />
+      <ToastIcon kind={kind} />
       <p className="min-w-0 flex-1 line-clamp-2" title={message}>
         {message}
       </p>
@@ -80,7 +120,7 @@ function ErrorToast({
           variant="ghost"
           size="icon-sm"
           className="touch-manipulation"
-          aria-label="Copy error"
+          aria-label="Copy"
           title="Copy"
           onPointerDown={keepToastControlTap}
           onClick={() => {
@@ -103,7 +143,7 @@ function ErrorToast({
           aria-label="Dismiss"
           title="Dismiss"
           onPointerDown={keepToastControlTap}
-          onClick={() => toast.dismiss(toastId)}
+          onClick={() => sonnerToast.dismiss(toastId)}
         >
           <IconX className="text-muted-foreground" />
         </Button>
@@ -112,13 +152,46 @@ function ErrorToast({
   )
 }
 
-/** Persistent error toast: 2-line clamp, copy + dismiss. */
-function toastError(message: string) {
-  toast.custom(
-    (toastId) => <ErrorToast message={message} toastId={toastId} />,
-    { duration: Infinity },
+/** Persistent toast: 2-line clamp, copy + dismiss. Icon varies by kind. */
+function showToast(
+  kind: ToastKind,
+  message: (() => ReactNode) | ReactNode,
+  data?: ExternalToast,
+) {
+  const text = resolveToastMessage(message)
+  return sonnerToast.custom(
+    (toastId) => <AppToast kind={kind} message={text} toastId={toastId} />,
+    { duration: Infinity, ...data },
   )
 }
+
+const toast = Object.assign(
+  (message: Parameters<typeof sonnerToast>[0], data?: ExternalToast) =>
+    showToast("default", message, data),
+  sonnerToast,
+  {
+    success: (
+      message: (() => ReactNode) | ReactNode,
+      data?: ExternalToast,
+    ) => showToast("success", message, data),
+    info: (message: (() => ReactNode) | ReactNode, data?: ExternalToast) =>
+      showToast("info", message, data),
+    warning: (
+      message: (() => ReactNode) | ReactNode,
+      data?: ExternalToast,
+    ) => showToast("warning", message, data),
+    error: (message: (() => ReactNode) | ReactNode, data?: ExternalToast) =>
+      showToast("error", message, data),
+    message: (
+      message: (() => ReactNode) | ReactNode,
+      data?: ExternalToast,
+    ) => showToast("default", message, data),
+    loading: (
+      message: (() => ReactNode) | ReactNode,
+      data?: ExternalToast,
+    ) => showToast("loading", message, data),
+  },
+)
 
 const Toaster = ({ className, style, ...props }: ToasterProps) => {
   return (
@@ -126,13 +199,6 @@ const Toaster = ({ className, style, ...props }: ToasterProps) => {
       theme="system"
       // Stay interactive while Radix Dialog sets pointer-events:none on body.
       className={cn("toaster group pointer-events-auto", className)}
-      icons={{
-        success: <IconCircleCheck className="size-4" />,
-        info: <IconInfoCircle className="size-4" />,
-        warning: <IconAlertTriangle className="size-4" />,
-        error: <IconXboxX className="size-4 text-destructive" />,
-        loading: <IconLoader2 className="size-4 animate-spin" />,
-      }}
       style={
         {
           "--normal-bg": "var(--popover)",
@@ -147,4 +213,4 @@ const Toaster = ({ className, style, ...props }: ToasterProps) => {
   )
 }
 
-export { Toaster, toastError }
+export { Toaster, toast }

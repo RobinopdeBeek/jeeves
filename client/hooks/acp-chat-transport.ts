@@ -1,8 +1,21 @@
 import type { ChatTransport, UIMessage, UIMessageChunk } from "ai";
-import type { WsClientMessage, WsServerMessage } from "@shared/chat-ws";
+import { injectQuoteContext } from "@assistant-ui/react-ai-sdk";
+import type {
+  ChatAttachment,
+  PromptCapabilities,
+  WsClientMessage,
+  WsServerMessage,
+} from "@shared/chat-ws";
+import type { BranchableTranscript } from "@shared/branchable-transcript";
+import {
+  EMPTY_PROMPT_CAPABILITIES,
+  normalizePromptCapabilities,
+} from "@shared/prompt-capabilities";
 import type { TasksDraft } from "@/lib/api";
+import { deferred, sleep, type Deferred } from "./acp-transport-deferred";
 
 export type { PermissionOptionPart, PermissionRequestData } from "@shared/chat-ws";
+export type { PromptCapabilities } from "@shared/chat-ws";
 
 /** Socket health, for reconnect UI. */
 export type ChatConnectionState =
@@ -12,9 +25,12 @@ export type ChatConnectionState =
   | "closed";
 
 export interface AcpChatTransportOptions {
-  cardId: string;
-  stepKey: string;
+  /** Step chat coordinates (Grill / Spec / Tasks). Mutually exclusive with threadId. */
+  cardId?: string;
+  stepKey?: string;
   round?: number;
+  /** Project Chat Thread id. Mutually exclusive with cardId/stepKey. */
+  threadId?: string;
   onDisplaced?: (reason: string) => void;
   /** Live editor/tip draft body for Define assist (framed server-side by step profile). */
   getLiveDraftBody?: () => string;
@@ -27,13 +43,29 @@ export interface AcpChatTransportOptions {
   /** Socket health changed (reconnect banner, composer gating). */
   onConnectionChange?: (state: ChatConnectionState) => void;
   /**
+   * The agent session failed before it ever opened (spawn/auth/handshake).
+   * Surfaced as a recoverable banner + failed turn — never by unmounting the
+   * composer, which would throw away whatever the user had typed.
+   */
+  onSessionError?: (error: string) => void;
+  /**
    * A dropped socket came back. The `ready` transcript is authoritative — the
    * hook remounts the chat runtime with it rather than splicing streams.
    */
   onReconnected?: (
     history: UIMessage[],
-    opts: { streaming: boolean },
+    opts: { streaming: boolean; branchable?: BranchableTranscript },
   ) => void;
+  /**
+   * Project Chat branchable from `ready` / reconnect, and mid-session
+   * `branchable` pushes after each transcript save. Step chats omit it.
+   */
+  onBranchable?: (branchable: BranchableTranscript) => void;
+  /**
+   * Displace reasons that clear the latch and reconnect (Project Chat Rewind).
+   * Hard displace (continued elsewhere, model changed, …) still freezes.
+   */
+  softDisplaceReasons?: readonly string[];
 }
 
 /** Backoff for reconnect attempts; last value repeats. */
@@ -45,45 +77,14 @@ const PING_TIMEOUT_MS = 2000;
 const LIVENESS_FRESH_MS = 3000;
 /** Silent stretch during a turn before we probe the socket. */
 const TURN_LIVENESS_INTERVAL_MS = 8000;
-/** How long a send waits for a healthy session before failing loudly. */
+/** How long a reconnecting send waits for a healthy session before failing. */
 const ENSURE_LIVE_TIMEOUT_MS = 8000;
-
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (err: Error) => void;
-  settled: boolean;
-};
-
-function deferred<T>(): Deferred<T> {
-  let resolveFn!: (value: T) => void;
-  let rejectFn!: (err: Error) => void;
-  const promise = new Promise<T>((resolve, reject) => {
-    resolveFn = resolve;
-    rejectFn = reject;
-  });
-  // Nobody may be awaiting when a generation is torn down.
-  promise.catch(() => {});
-  const d: Deferred<T> = {
-    promise,
-    settled: false,
-    resolve: (value) => {
-      if (d.settled) return;
-      d.settled = true;
-      resolveFn(value);
-    },
-    reject: (err) => {
-      if (d.settled) return;
-      d.settled = true;
-      rejectFn(err);
-    },
-  };
-  return d;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+/**
+ * First open is different: the agent handshake takes seconds, so a prompt sent
+ * into a starting session is parked, not refused. Matches the server's own
+ * handshake ceiling, which fails first with a real diagnostic.
+ */
+const INITIAL_SESSION_TIMEOUT_MS = 60_000;
 
 function closedStream(): ReadableStream<UIMessageChunk> {
   return new ReadableStream({ start: (c) => c.close() });
@@ -108,11 +109,21 @@ export class AcpChatTransport {
   private sessionD = deferred<void>();
   private sessionOpen = false;
   private displaced = false;
+  /** Negotiated ACP prompt kinds from the session/open frame. */
+  private promptCapabilities: PromptCapabilities = {
+    ...EMPTY_PROMPT_CAPABILITIES,
+  };
   /** Set by close() — no reconnects after the hook tears us down. */
   private closedByUs = false;
-  /** Server rejected this session (bad card, …) — retrying cannot help. */
-  private fatal = false;
+  /**
+   * The agent session failed before it opened. Suspends reconnect backoff (a
+   * loop cannot help) but is cleared by the next send, which is what makes the
+   * transcript's Retry actually retry.
+   */
+  private sessionError: string | null = null;
   private hasConnected = false;
+  /** True once an ACP session has opened on any socket for this transport. */
+  private hasOpenedSession = false;
   private lastHistory: UIMessage[] = [];
   private lastServerMessageAt = 0;
   private reconnectAttempt = 0;
@@ -125,6 +136,13 @@ export class AcpChatTransport {
 
   /** Chunks for the current turn until a stream consumer attaches. */
   private chunkBuffer: UIMessageChunk[] = [];
+  /**
+   * Full turn log (mirrors server turnChunks). When an epoch remount abandons
+   * a resume stream without cancel, rebind replays this so the new useChat
+   * never sees a bare text-delta (AI SDK: Cannot read properties of undefined
+   * (reading 'text')).
+   */
+  private turnChunkLog: UIMessageChunk[] = [];
   private streamController: ReadableStreamDefaultController<UIMessageChunk> | null =
     null;
   private turnDone = false;
@@ -146,9 +164,36 @@ export class AcpChatTransport {
 
   constructor(private readonly options: AcpChatTransportOptions) {}
 
+  /** Owner coords for REST sidecar upload before the WS turn. */
+  attachmentUploadTarget():
+    | { kind: "chat"; threadId: string }
+    | { kind: "step"; cardId: string; stepKey: string }
+    | null {
+    if (this.options.threadId != null && this.options.threadId !== "") {
+      return { kind: "chat", threadId: this.options.threadId };
+    }
+    if (
+      this.options.cardId != null &&
+      this.options.cardId !== "" &&
+      this.options.stepKey != null &&
+      this.options.stepKey !== ""
+    ) {
+      return {
+        kind: "step",
+        cardId: this.options.cardId,
+        stepKey: this.options.stepKey,
+      };
+    }
+    return null;
+  }
+
   /** True once the ACP session handshake finished (send is allowed). */
   isSessionOpen(): boolean {
     return this.sessionOpen && this.isSocketUsable() && !this.displaced;
+  }
+
+  getPromptCapabilities(): PromptCapabilities {
+    return this.promptCapabilities;
   }
 
   /** Resolves when the server signals the ACP session is ready for user turns. */
@@ -163,7 +208,7 @@ export class AcpChatTransport {
 
   /** Ensures a socket is up (opening or reconnecting as needed). */
   async connect(): Promise<UIMessage[]> {
-    if (this.closedByUs) throw new Error("chat transport is closed");
+    if (this.closedByUs) this.revive();
     this.bindWakeListeners();
     if (this.isSocketUsable() && this.readyD.settled) return this.lastHistory;
     if (!this.socket) {
@@ -182,13 +227,36 @@ export class AcpChatTransport {
     ReadableStream<UIMessageChunk>
   > {
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
-    const text = lastUser
-      ? lastUser.parts
+    // assistant-ui stamps selection quotes on metadata.custom.quote — fold them
+    // into markdown blockquotes so the ACP prompt sees the quoted span.
+    const lastUserForSend = lastUser
+      ? (injectQuoteContext([lastUser])[0] ?? lastUser)
+      : undefined;
+    const text = lastUserForSend
+      ? lastUserForSend.parts
           .filter((p): p is { type: "text"; text: string } => p.type === "text")
           .map((p) => p.text)
           .join("")
       : "";
-    if (!text.trim()) return closedStream();
+    const attachments = lastUserForSend
+      ? lastUserForSend.parts
+          .filter(
+            (p): p is {
+              type: "file";
+              url: string;
+              mediaType: string;
+              filename?: string;
+            } => p.type === "file",
+          )
+          .map(
+            (p): ChatAttachment => ({
+              mediaType: p.mediaType,
+              url: p.url,
+              ...(p.filename != null ? { filename: p.filename } : {}),
+            }),
+          )
+      : [];
+    if (!text.trim() && attachments.length === 0) return closedStream();
 
     // Pre-send health check: heal a dead/half-open socket before we commit the
     // turn, so a stale connection can never swallow the prompt.
@@ -198,11 +266,14 @@ export class AcpChatTransport {
     this.beginTurn();
     const stream = this.openChunkStream(abortSignal);
     const liveDraftBody = this.options.getLiveDraftBody?.();
+    const messageId = lastUser?.id;
     try {
       this.sendClient({
         type: "user-message",
         text,
+        ...(messageId ? { messageId } : {}),
         ...(liveDraftBody != null ? { liveDraftBody } : {}),
+        ...(attachments.length > 0 ? { attachments } : {}),
       });
     } catch (err) {
       this.abandonTurn();
@@ -242,7 +313,15 @@ export class AcpChatTransport {
    */
   async reconnectToStream(): Promise<ReadableStream<UIMessageChunk> | null> {
     await this.connect();
-    if (this.resumeConsumed) return null;
+    if (this.resumeConsumed) {
+      // Epoch remount / GC can abandon the first ReadableStream without
+      // cancel(). Steal the live turn and replay the full catch-up log so the
+      // new runtime never starts mid-stream on a text-delta.
+      if (this.turnDone) return null;
+      this.closeActiveStream();
+      this.chunkBuffer = [...this.turnChunkLog];
+      this.resumeConsumed = false;
+    }
     this.resumeConsumed = true;
     return this.openChunkStream();
   }
@@ -275,22 +354,44 @@ export class AcpChatTransport {
     }
   }
 
+  /**
+   * Re-open a transport that close() tore down. React StrictMode mounts, tears
+   * down and re-mounts the same effect in dev, and the hook holds one transport
+   * per chat identity — so connect() after close() must start clean, not throw.
+   */
+  private revive(): void {
+    this.closedByUs = false;
+    this.sessionError = null;
+    this.displaced = false;
+    this.sessionOpen = false;
+    this.hasConnected = false;
+    this.hasOpenedSession = false;
+    this.reconnectAttempt = 0;
+    this.resumeConsumed = false;
+    this.chunkBuffer = [];
+    this.readyD = deferred();
+    this.sessionD = deferred();
+  }
+
   private isSocketUsable(): boolean {
     return this.socket != null && this.socket.readyState === WebSocket.OPEN;
   }
 
   private url(): string {
-    const qs = new URLSearchParams({
-      cardId: this.options.cardId,
-      stepKey: this.options.stepKey,
-      round: String(this.options.round ?? 0),
-    });
+    const qs =
+      this.options.threadId != null && this.options.threadId !== ""
+        ? new URLSearchParams({ threadId: this.options.threadId })
+        : new URLSearchParams({
+            cardId: this.options.cardId ?? "",
+            stepKey: this.options.stepKey ?? "",
+            round: String(this.options.round ?? 0),
+          });
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
     return `${proto}://${window.location.host}/ws/chat?${qs}`;
   }
 
   private openSocket(): void {
-    if (this.closedByUs || this.displaced || this.fatal) return;
+    if (this.closedByUs || this.displaced || this.sessionError != null) return;
 
     this.generation += 1;
     const gen = this.generation;
@@ -324,7 +425,7 @@ export class AcpChatTransport {
   /** Socket is gone (or provably dead): unlock the UI and start recovery. */
   private handleSocketDown(gen: number): void {
     if (gen !== this.generation) return;
-    if (this.closedByUs || this.displaced || this.fatal) return;
+    if (this.closedByUs || this.displaced || this.sessionError != null) return;
 
     this.socket = null;
     this.sessionOpen = false;
@@ -343,7 +444,7 @@ export class AcpChatTransport {
 
   private scheduleReconnect(): void {
     if (this.reconnectTimer != null) return;
-    if (this.closedByUs || this.displaced || this.fatal) return;
+    if (this.closedByUs || this.displaced || this.sessionError != null) return;
 
     if (!this.hasConnected && this.reconnectAttempt >= MAX_INITIAL_ATTEMPTS) {
       const err = new Error("could not reach the chat session");
@@ -366,7 +467,7 @@ export class AcpChatTransport {
 
   /** Reconnect immediately (tab focus, network back, dead socket on send). */
   private reconnectNow(): void {
-    if (this.closedByUs || this.displaced || this.fatal) return;
+    if (this.closedByUs || this.displaced || this.sessionError != null) return;
     if (this.isSocketUsable()) return;
     // A handshake already in flight will resolve or fail on its own.
     if (this.socket?.readyState === WebSocket.CONNECTING) return;
@@ -381,6 +482,10 @@ export class AcpChatTransport {
   /**
    * Health check with repair. Resolves only when a usable socket has an open
    * ACP session; throws when that cannot be reached in time.
+   *
+   * A prompt sent during the very first handshake is parked here rather than
+   * refused, on the server's own 60s budget. Reconnects keep the short budget:
+   * there the session provably worked a moment ago.
    */
   private async ensureLive(): Promise<void> {
     if (this.closedByUs) throw new Error("chat session is closed");
@@ -392,13 +497,25 @@ export class AcpChatTransport {
       this.dropDeadSocket();
     }
 
+    // Sending after a failed startup *is* the retry — un-suspend and try again.
+    // The server leaves the socket open after a setup failure, so that socket
+    // has to go: nothing will ever open a session on it.
+    const retrying = this.sessionError != null;
+    this.sessionError = null;
+    if (retrying && this.isSocketUsable()) this.dropDeadSocket();
+    // No-op while the initial socket is healthy and the handshake is in flight.
     this.reconnectNow();
 
-    const deadline = Date.now() + ENSURE_LIVE_TIMEOUT_MS;
+    const deadline =
+      Date.now() +
+      (this.hasOpenedSession
+        ? ENSURE_LIVE_TIMEOUT_MS
+        : INITIAL_SESSION_TIMEOUT_MS);
     while (Date.now() < deadline) {
       if (this.closedByUs) throw new Error("chat session is closed");
       if (this.displaced) return;
       if (this.isSocketUsable() && this.sessionOpen) return;
+      if (this.sessionError != null) throw new Error(this.sessionError);
       await Promise.race([
         this.sessionD.promise.catch(() => undefined),
         sleep(100),
@@ -535,6 +652,7 @@ export class AcpChatTransport {
   private beginTurn(): void {
     this.closeActiveStream();
     this.chunkBuffer = [];
+    this.turnChunkLog = [];
     this.turnDone = false;
     this.options.onStreamingChange?.(true);
   }
@@ -588,6 +706,9 @@ export class AcpChatTransport {
   }
 
   private pushChunk(chunk: UIMessageChunk): void {
+    if (!this.turnDone) {
+      this.turnChunkLog.push(chunk);
+    }
     const controller = this.streamController;
     if (controller) {
       try {
@@ -645,9 +766,8 @@ export class AcpChatTransport {
     this.streamController = null;
   }
 
-  private failConnect(err: Error): void {
-    this.readyD.reject(err);
-    this.sessionD.reject(err);
+  /** Surface a failure as a failed turn in the transcript (retryable). */
+  private failTurn(err: Error): void {
     try {
       this.streamController?.error(err);
     } catch {
@@ -673,20 +793,31 @@ export class AcpChatTransport {
         this.lastHistory = msg.messages;
         // Fresh generation: this socket replays the live turn from scratch.
         this.chunkBuffer = [];
+        this.turnChunkLog = [];
         this.resumeConsumed = false;
         this.turnDone = false;
-        // Empty history or mid-stream warm reattach ⇒ expect chunks (or a
-        // second resume after Chat recreation cancels the first stream).
-        this.expectOpeningStream =
-          msg.messages.length === 0 || Boolean(msg.streaming);
-        // Non-empty history ⇒ opening is done unless warm reattach is mid-stream.
-        if (msg.messages.length > 0 && !msg.streaming) {
+        // Step chats (Grill / assist) fire an opening turn on empty history;
+        // Project Chat does not — empty + idle means idle. Mid-stream warm
+        // reattach always expects chunks.
+        const stepChatOpening =
+          msg.messages.length === 0 && this.options.threadId == null;
+        this.expectOpeningStream = stepChatOpening || Boolean(msg.streaming);
+        // Idle non-opening sessions: close the resume stream so Send is live.
+        if (!msg.streaming && !this.expectOpeningStream) {
           this.markTurnDone();
+        } else if (msg.streaming) {
+          // Thread-switch reattach: UI/rail must know the warm turn is live
+          // even before the first resumed chunk arrives.
+          this.options.onStreamingChange?.(true);
+        }
+        if (msg.branchable) {
+          this.options.onBranchable?.(msg.branchable);
         }
         this.readyD.resolve(msg.messages);
         if (reconnected) {
           this.options.onReconnected?.(msg.messages, {
             streaming: Boolean(msg.streaming),
+            ...(msg.branchable ? { branchable: msg.branchable } : {}),
           });
         }
         break;
@@ -694,6 +825,10 @@ export class AcpChatTransport {
       case "session":
         if (msg.status === "open") {
           this.sessionOpen = true;
+          this.hasOpenedSession = true;
+          this.promptCapabilities = normalizePromptCapabilities(
+            msg.promptCapabilities,
+          );
           this.sessionD.resolve();
           this.setConnectionState("open");
           // Authoritative only when we are not waiting on an opening/warm turn.
@@ -707,10 +842,43 @@ export class AcpChatTransport {
       case "chunk":
         this.pushChunk(msg.chunk);
         break;
+      case "branchable":
+        // Live Project Chat save — refresh sibling branch pickers mid-session.
+        this.options.onBranchable?.(msg.branchable);
+        break;
       case "pong":
         this.pingWaiters.get(msg.id)?.resolve();
         break;
-      case "displaced":
+      case "displaced": {
+        const soft = Boolean(
+          this.options.softDisplaceReasons?.includes(msg.reason),
+        );
+        if (soft) {
+          // Soft reattach: do not latch displaced — drop the socket and reconnect.
+          this.sessionOpen = false;
+          this.clearReconnectTimer();
+          this.clearLivenessTimer();
+          this.failPings();
+          this.abandonTurn();
+          const socket = this.socket;
+          this.socket = null;
+          if (socket) {
+            socket.onmessage = null;
+            socket.onerror = null;
+            socket.onclose = null;
+            try {
+              socket.close();
+            } catch {
+              // already closed
+            }
+          }
+          if (this.readyD.settled) this.readyD = deferred();
+          if (this.sessionD.settled) this.sessionD = deferred();
+          this.setConnectionState("reconnecting");
+          this.options.onDisplaced?.(msg.reason);
+          this.reconnectNow();
+          break;
+        }
         this.displaced = true;
         this.sessionOpen = false;
         this.clearReconnectTimer();
@@ -719,23 +887,22 @@ export class AcpChatTransport {
         this.options.onDisplaced?.(msg.reason);
         this.markTurnDone();
         break;
+      }
       case "error": {
-        // Before session open ⇒ setup failure (bad card, spawn failed):
+        // Before session open ⇒ setup failure (spawn/auth/handshake):
         // reconnecting would just loop. After ⇒ a turn failed; keep the socket.
         const setupFailure = !this.sessionOpen;
         if (setupFailure) {
-          this.fatal = true;
+          this.sessionError = msg.error;
           this.clearReconnectTimer();
           this.setConnectionState("closed");
-          this.failConnect(new Error(msg.error));
-        } else {
-          try {
-            this.streamController?.error(new Error(msg.error));
-          } catch {
-            // already closed
-          }
-          this.streamController = null;
+          // Hand the caller a live (if agent-less) chat rather than an error
+          // screen: the composer stays mounted and the typed text survives.
+          this.readyD.resolve(this.lastHistory);
+          this.sessionD.reject(new Error(msg.error));
+          this.options.onSessionError?.(msg.error);
         }
+        this.failTurn(new Error(msg.error));
         this.markTurnDone();
         break;
       }

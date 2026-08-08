@@ -8,7 +8,11 @@ import {
   decideInteractivePermission,
   type ChunkSubscriber,
 } from "./chat.js";
-import { MockAcpProcess, viWaitFor } from "./mock-acp-process.js";
+import {
+  MOCK_MODEL_OPTION,
+  MockAcpProcess,
+  viWaitFor,
+} from "./mock-acp-process.js";
 
 function collectingSubscriber(): ChunkSubscriber & { chunks: UIMessageChunk[] } {
   const chunks: UIMessageChunk[] = [];
@@ -189,6 +193,29 @@ describe("AcpBridge", () => {
     ]);
   });
 
+  it("warms ACP without an auto turn when openingPrompt is null and history is empty", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-null-opener");
+    const statuses: Array<"ai-working" | "needs-user"> = [];
+
+    const bridge = new AcpBridge({
+      spawn: () => process,
+      onStatus: (status) => statuses.push(status),
+      onTranscript: () => {},
+    });
+
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(process.prompts()).toHaveLength(0);
+    expect(statuses).toEqual([]);
+    expect(process.killed).toBe(false);
+  });
+
   it("streams a user turn into assistant UIMessage parts and seeds prior transcript once", async () => {
     const process = new MockAcpProcess();
     process.autoHandshake("sess-2");
@@ -281,6 +308,77 @@ describe("AcpBridge", () => {
 
     expect(promptText(process, 1)).toBe("Kitchen staff");
     expect(promptText(process, 1)).not.toContain("Prior transcript");
+  });
+
+  it("persists the client messageId on the user turn (branch picker lookup)", async () => {
+    // Branch pickers key off the UI message id. If the server mints a different
+    // id, getBranches(uiId) is empty until a remount loads server ids.
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-msgid");
+    const transcripts: UIMessage[][] = [];
+
+    const bridge = new AcpBridge({
+      spawn: () => process,
+      onTranscript: (messages) => transcripts.push(messages),
+    });
+
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    const replyPromise = bridge.sendMessage("Edited prompt", {
+      messageId: "client-user-42",
+    });
+    await viWaitFor(() => process.prompts().length === 1);
+
+    expect(transcripts.at(-1)?.[0]?.id).toBe("client-user-42");
+    expect(bridge.getMessages()[0]?.id).toBe("client-user-42");
+
+    const promptReq = process.promptRequest();
+    process.emit({
+      jsonrpc: "2.0",
+      id: promptReq.id,
+      result: { stopReason: "end_turn" },
+    });
+    await replyPromise;
+  });
+
+  it("persists the user turn before the prompt RPC finishes (mid-stream reattach)", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-mid");
+    const transcripts: UIMessage[][] = [];
+
+    const bridge = new AcpBridge({
+      spawn: () => process,
+      onTranscript: (messages) => transcripts.push(messages),
+    });
+
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    const replyPromise = bridge.sendMessage("Still thinking about pantry alerts");
+    await viWaitFor(() => process.prompts().length === 1);
+
+    // Disk/in-memory ready must already include the user message while AI works.
+    expect(bridge.isAiWorking()).toBe(true);
+    expect(bridge.getMessages().map((m) => m.role)).toEqual(["user"]);
+    expect(transcripts.at(-1)?.map((m) => m.role)).toEqual(["user"]);
+    expect(transcripts.at(-1)?.[0]?.parts).toEqual([
+      { type: "text", text: "Still thinking about pantry alerts" },
+    ]);
+
+    process.emit({
+      jsonrpc: "2.0",
+      id: process.promptRequest().id,
+      result: { stopReason: "end_turn" },
+    });
+    await replyPromise;
+    expect(transcripts.at(-1)?.map((m) => m.role)).toEqual(["user", "assistant"]);
   });
 
   it("keeps Spec markdown out of the transcript while framing the agent prompt", async () => {
@@ -1088,6 +1186,433 @@ describe("AcpBridge", () => {
       sub.chunks.some((c) => (c as { type?: string }).type === "finish"),
     ).toBe(true);
   });
+
+  const TINY_PNG =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+  it("captures initialize promptCapabilities (fail-closed when omitted)", async () => {
+    const closed = new MockAcpProcess();
+    closed.autoHandshake("sess-caps-off");
+    const bridgeOff = new AcpBridge({
+      spawn: () => closed,
+      onTranscript: () => {},
+    });
+    await bridgeOff.openSession({
+      cwd: "/repo",
+      openingPrompt: null,
+      history: [],
+    });
+    expect(bridgeOff.getPromptCapabilities()).toEqual({
+      image: false,
+      audio: false,
+      embeddedContext: false,
+    });
+
+    const open = new MockAcpProcess();
+    open.autoHandshake("sess-caps-on", {
+      promptCapabilities: { image: true },
+    });
+    const bridgeOn = new AcpBridge({
+      spawn: () => open,
+      onTranscript: () => {},
+    });
+    await bridgeOn.openSession({
+      cwd: "/repo",
+      openingPrompt: null,
+      history: [],
+    });
+    expect(bridgeOn.getPromptCapabilities()).toEqual({
+      image: true,
+      audio: false,
+      embeddedContext: false,
+    });
+  });
+
+  it("sends image ContentBlocks on session/prompt and stores file parts", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-img", {
+      promptCapabilities: { image: true },
+    });
+    const transcripts: UIMessage[][] = [];
+    const bridge = new AcpBridge({
+      spawn: () => process,
+      onTranscript: (messages) => transcripts.push(messages),
+    });
+    await bridge.openSession({
+      cwd: "/repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    const replyPromise = bridge.sendMessage("What is this?", {
+      attachments: [
+        { mediaType: "image/png", filename: "dot.png", url: TINY_PNG },
+      ],
+    });
+    await viWaitFor(() => process.prompts().length === 1);
+
+    expect(process.prompts()[0]!.prompt).toEqual([
+      { type: "text", text: "What is this?" },
+      {
+        type: "image",
+        mimeType: "image/png",
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      },
+    ]);
+
+    const promptReq = process.promptRequest();
+    process.emit({
+      jsonrpc: "2.0",
+      id: promptReq.id,
+      result: { stopReason: "end_turn" },
+    });
+    await replyPromise;
+
+    const user = transcripts.at(-1)?.find((m) => m.role === "user");
+    expect(user?.parts).toEqual([
+      { type: "text", text: "What is this?" },
+      {
+        type: "file",
+        url: TINY_PNG,
+        mediaType: "image/png",
+        filename: "dot.png",
+      },
+    ]);
+  });
+
+  it("materializes data URLs to pointers before transcript persist", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-sidecar", {
+      promptCapabilities: { image: true },
+    });
+    const transcripts: UIMessage[][] = [];
+    const pointerUrl = "jeeves-attachment://chat/tid/aid1";
+    const bridge = new AcpBridge({
+      spawn: () => process,
+      onTranscript: (messages) => transcripts.push(messages),
+      persistAttachments: (atts) =>
+        atts.map((a) => ({ ...a, url: pointerUrl })),
+      resolveAttachmentBytes: () => ({
+        mimeType: "image/png",
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      }),
+    });
+    await bridge.openSession({
+      cwd: "/repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    const replyPromise = bridge.sendMessage("What is this?", {
+      attachments: [
+        { mediaType: "image/png", filename: "dot.png", url: TINY_PNG },
+      ],
+    });
+    await viWaitFor(() => process.prompts().length === 1);
+    const promptReq = process.promptRequest();
+    process.emit({
+      jsonrpc: "2.0",
+      id: promptReq.id,
+      result: { stopReason: "end_turn" },
+    });
+    await replyPromise;
+
+    const user = transcripts.at(-1)?.find((m) => m.role === "user");
+    const filePart = user?.parts.find((p) => p.type === "file") as {
+      url: string;
+    };
+    expect(filePart.url).toBe(pointerUrl);
+    expect(process.prompts()[0]!.prompt).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "image", mimeType: "image/png" }),
+      ]),
+    );
+  });
+
+  it("rejects unsupported attachments before prompting", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-reject");
+    const bridge = new AcpBridge({
+      spawn: () => process,
+      onTranscript: () => {},
+    });
+    await bridge.openSession({
+      cwd: "/repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    await expect(
+      bridge.sendMessage("see this", {
+        attachments: [
+          { mediaType: "image/png", filename: "dot.png", url: TINY_PNG },
+        ],
+      }),
+    ).rejects.toThrow(/not supported|does not accept image/i);
+    expect(process.prompts()).toHaveLength(0);
+    expect(bridge.getMessages()).toHaveLength(0);
+  });
+
+  it("reseeds prior image attachments on cold resume", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-seed-img", {
+      promptCapabilities: { image: true },
+    });
+    const bridge = new AcpBridge({
+      spawn: () => process,
+      onTranscript: () => {},
+    });
+    await bridge.openSession({
+      cwd: "/repo",
+      openingPrompt: "unused",
+      history: [
+        {
+          id: "u1",
+          role: "user",
+          parts: [
+            { type: "text", text: "Look" },
+            {
+              type: "file",
+              url: TINY_PNG,
+              mediaType: "image/png",
+              filename: "dot.png",
+            },
+          ],
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          parts: [{ type: "text", text: "A pixel." }],
+        },
+      ],
+    });
+
+    const replyPromise = bridge.sendMessage("Again?");
+    await viWaitFor(() => process.prompts().length === 1);
+    const prompt = process.prompts()[0]!.prompt as Array<{
+      type: string;
+      text?: string;
+    }>;
+    expect(prompt[0]!.type).toBe("text");
+    expect(prompt[0]!.text).toContain("[attached: dot.png (image/png)]");
+    expect(prompt[0]!.text).toContain("User: Again?");
+    // Prior images are emitted before any latest-turn attachment blocks.
+    const imageIndexes = prompt
+      .map((b, i) => (b.type === "image" ? i : -1))
+      .filter((i) => i >= 0);
+    expect(imageIndexes.length).toBeGreaterThan(0);
+    expect(imageIndexes[0]).toBe(1);
+
+    const promptReq = process.promptRequest();
+    process.emit({
+      jsonrpc: "2.0",
+      id: promptReq.id,
+      result: { stopReason: "end_turn" },
+    });
+    await replyPromise;
+  });
+});
+
+/**
+ * `adopt` is what lets a pre-warmed spare be handed to a chat: everything after
+ * the handshake, with no ACP traffic of its own.
+ */
+describe("AcpBridge.adopt", () => {
+  async function warmBridge(sessionId: string) {
+    const process = new MockAcpProcess();
+    process.autoHandshake(sessionId, { models: MOCK_MODEL_OPTION });
+    const bridge = new AcpBridge({ spawn: () => process });
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: null,
+      history: [],
+    });
+    return { bridge, process };
+  }
+
+  it("binds history onto a handshaked session without touching the process", async () => {
+    const { bridge, process } = await warmBridge("sess-adopt-history");
+    const history: UIMessage[] = [
+      { id: "a1", role: "assistant", parts: [{ type: "text", text: "hi" }] },
+    ];
+
+    bridge.adopt({ openingPrompt: "should not be sent", history });
+
+    expect(bridge.getMessages()).toEqual(history);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(process.prompts()).toHaveLength(0);
+  });
+
+  it("fires the opening turn when adopted with empty history", async () => {
+    const { bridge, process } = await warmBridge("sess-adopt-opener");
+
+    bridge.adopt({ openingPrompt: "Grill me", history: [] });
+
+    await viWaitFor(() => process.prompts().length === 1);
+    expect(promptText(process)).toBe("Grill me");
+  });
+
+  it("routes callbacks rewired after the handshake to the adopting chat", async () => {
+    const { bridge, process } = await warmBridge("sess-adopt-callbacks");
+    const statuses: Array<"ai-working" | "needs-user"> = [];
+    bridge.setLiveCallbacks({
+      onStatus: (status) => statuses.push(status),
+      onTranscript: () => {},
+    });
+
+    bridge.adopt({ openingPrompt: "Go", history: [] });
+
+    await viWaitFor(() => statuses.length > 0);
+    expect(statuses[0]).toBe("ai-working");
+    expect(process.prompts()).toHaveLength(1);
+  });
+
+  it("refuses to adopt before the handshake has landed", () => {
+    const bridge = new AcpBridge({ spawn: () => new MockAcpProcess() });
+    expect(() => bridge.adopt({ openingPrompt: null, history: [] })).toThrow(
+      /session not open/i,
+    );
+  });
+});
+
+describe("AcpBridge model config option", () => {
+  it("captures the model selector from session/new", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-model-opt", { models: MOCK_MODEL_OPTION });
+    const bridge = new AcpBridge({ spawn: () => process });
+
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    expect(bridge.getModelOption()?.id).toBe("model");
+    expect(bridge.getCurrentModelValue()).toBe("default[]");
+  });
+
+  it("switches model in place and adopts the agent's echoed config state", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-model-set", { models: MOCK_MODEL_OPTION });
+    const bridge = new AcpBridge({ spawn: () => process });
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    await bridge.setModelValue("gpt-5.5[]");
+
+    expect(bridge.getCurrentModelValue()).toBe("gpt-5.5[]");
+    expect(process.currentModel()).toBe("gpt-5.5[]");
+    expect(process.killed).toBe(false);
+  });
+
+  it("skips the RPC when the session is already on that model", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-model-noop", { models: MOCK_MODEL_OPTION });
+    const bridge = new AcpBridge({ spawn: () => process });
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    await bridge.setModelValue("default[]");
+
+    expect(process.modelRequests()).toEqual([]);
+  });
+
+  it("throws for an agent that advertises no model selector", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-no-models");
+    const bridge = new AcpBridge({ spawn: () => process });
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    expect(bridge.getModelOption()).toBeNull();
+    await expect(bridge.setModelValue("gpt-5.5[]")).rejects.toThrow(
+      /model selector/i,
+    );
+  });
+
+  it("reports an agent-initiated switch via config_option_update", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-model-notify", { models: MOCK_MODEL_OPTION });
+    const changes: string[] = [];
+    const bridge = new AcpBridge({
+      spawn: () => process,
+      onModelChanged: (value) => changes.push(value),
+    });
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    process.emit({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "sess-model-notify",
+        update: {
+          sessionUpdate: "config_option_update",
+          configOptions: [
+            {
+              id: "model",
+              category: "model",
+              type: "select",
+              currentValue: "composer-2.5[fast=true]",
+              options: MOCK_MODEL_OPTION.values.map((value) => ({
+                value,
+                name: value,
+              })),
+            },
+          ],
+        },
+      },
+    });
+
+    await viWaitFor(() => changes.length > 0);
+    expect(changes).toEqual(["composer-2.5[fast=true]"]);
+    expect(bridge.getCurrentModelValue()).toBe("composer-2.5[fast=true]");
+  });
+
+  it("ignores a config_option_update that does not move the model", async () => {
+    const process = new MockAcpProcess();
+    process.autoHandshake("sess-model-same", { models: MOCK_MODEL_OPTION });
+    const changes: string[] = [];
+    const bridge = new AcpBridge({
+      spawn: () => process,
+      onModelChanged: (value) => changes.push(value),
+    });
+    await bridge.openSession({
+      cwd: "C:/target-repo",
+      openingPrompt: null,
+      history: [],
+    });
+
+    process.emit({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "sess-model-same",
+        update: {
+          sessionUpdate: "config_option_update",
+          configOptions: [
+            { id: "mode", category: "mode", type: "select", currentValue: "plan" },
+          ],
+        },
+      },
+    });
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(changes).toEqual([]);
+    expect(bridge.getCurrentModelValue()).toBe("default[]");
+  });
 });
 
 describe("decideInteractivePermission", () => {
@@ -1096,34 +1621,85 @@ describe("decideInteractivePermission", () => {
     { optionId: "reject-once", name: "Reject", kind: "reject_once" },
   ];
 
-  it("allows reads, shell, and exchange writes", () => {
+  it("allows reads, shell, and exchange writes under cursor-like", () => {
     expect(
-      decideInteractivePermission({ title: "Read file CONTEXT.md", options }),
+      decideInteractivePermission(
+        { title: "Read file CONTEXT.md", options },
+        "cursor-like",
+      ),
     ).toEqual({ action: "allow", optionId: "allow-once" });
     expect(
-      decideInteractivePermission({ title: "Shell: npm test", options }),
+      decideInteractivePermission(
+        { title: "Shell: npm test", options },
+        "cursor-like",
+      ),
     ).toEqual({ action: "allow", optionId: "allow-once" });
     expect(
-      decideInteractivePermission({
-        title: "Write file .jeeves/exchange/c1/spec.md",
-        options,
-      }),
+      decideInteractivePermission(
+        {
+          title: "Write file .jeeves/exchange/c1/spec.md",
+          options,
+        },
+        "cursor-like",
+      ),
     ).toEqual({ action: "allow", optionId: "allow-once" });
   });
 
   it("auto-approves raw shell titles even when the command text contains Write", () => {
     expect(
-      decideInteractivePermission({
-        title:
-          'rg -n "Streaming lock|revised exchange|Smoke QA|Write|tasks-draft|exchange" "C:\\Users\\robin\\.cursor\\projects\\foo\\agent-transcripts\\x.jsonl" | Select-Object -First 40',
-        options,
-      }),
+      decideInteractivePermission(
+        {
+          title:
+            'rg -n "Streaming lock|revised exchange|Smoke QA|Write|tasks-draft|exchange" "C:\\Users\\robin\\.cursor\\projects\\foo\\agent-transcripts\\x.jsonl" | Select-Object -First 40',
+          options,
+        },
+        "cursor-like",
+      ),
     ).toEqual({ action: "allow", optionId: "allow-once" });
   });
 
-  it("prompts for non-exchange file writes", () => {
+  it("prompts for non-exchange file writes under cursor-like", () => {
     expect(
-      decideInteractivePermission({ title: "Write file src/app.ts", options }),
+      decideInteractivePermission(
+        { title: "Write file src/app.ts", options },
+        "cursor-like",
+      ),
+    ).toEqual({ action: "prompt" });
+  });
+
+  it("project-chat auto-approves reads but prompts for shell, writes, and unknowns", () => {
+    expect(
+      decideInteractivePermission(
+        { title: "Read file CONTEXT.md", options },
+        "project-chat",
+      ),
+    ).toEqual({ action: "allow", optionId: "allow-once" });
+    expect(
+      decideInteractivePermission(
+        { title: "Shell: npm test", options },
+        "project-chat",
+      ),
+    ).toEqual({ action: "prompt" });
+    expect(
+      decideInteractivePermission(
+        { title: "Write file src/app.ts", options },
+        "project-chat",
+      ),
+    ).toEqual({ action: "prompt" });
+    expect(
+      decideInteractivePermission(
+        {
+          title: "Write file .jeeves/exchange/c1/spec.md",
+          options,
+        },
+        "project-chat",
+      ),
+    ).toEqual({ action: "prompt" });
+    expect(
+      decideInteractivePermission(
+        { title: "MysteriousTool doSomething", options },
+        "project-chat",
+      ),
     ).toEqual({ action: "prompt" });
   });
 });

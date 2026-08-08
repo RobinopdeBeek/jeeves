@@ -90,6 +90,16 @@ export function isInteractiveAutoAllow(title: string): boolean {
   return true;
 }
 
+/**
+ * Project Chat allow-list: only clear reads auto-approve; shell, file writes,
+ * and unrecognized tools prompt (stricter than cursor-like on the main checkout).
+ */
+export function isProjectChatAutoAllow(title: string): boolean {
+  if (isShellTool(title)) return false;
+  if (isFileWriteTool(title)) return false;
+  return READ_TOOL_RE.test(title);
+}
+
 /** Pick allow/deny for headless ACP without a permission UI. */
 export function decideHeadlessPermission(
   data: Pick<PermissionRequestData, "title" | "options">,
@@ -115,15 +125,21 @@ export function decideHeadlessPermission(
 }
 
 /**
- * Live Cursor-like defaults: auto-approve reads/shell/exchange; prompt for
- * non-exchange file writes.
+ * Live interactive policy dispatch.
+ * - cursor-like: auto-approve reads/shell/exchange; prompt for other file writes
+ * - project-chat: auto-approve reads; prompt for shell and file writes
  */
 export function decideInteractivePermission(
   data: Pick<PermissionRequestData, "title" | "options">,
+  policy: "cursor-like" | "project-chat" = "cursor-like",
 ): InteractivePermissionDecision {
   const allow = permissionAllowOption(data.options);
   const title = data.title ?? "";
-  if (isInteractiveAutoAllow(title) && allow) {
+  const autoAllow =
+    policy === "project-chat"
+      ? isProjectChatAutoAllow(title)
+      : isInteractiveAutoAllow(title);
+  if (autoAllow && allow) {
     return { action: "allow", optionId: allow.optionId };
   }
   return { action: "prompt" };

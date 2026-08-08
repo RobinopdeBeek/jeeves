@@ -3,6 +3,7 @@ import type { UIMessage } from "ai";
 import { Thread, ThreadShell } from "@/components/assistant-ui/thread";
 import { AcpChatProvider, useAcpChat } from "@/hooks/useAcpChat";
 import { ReconnectingBanner } from "@/components/chat/ReconnectingBanner";
+import { SessionErrorBanner } from "@/components/chat/SessionErrorBanner";
 import { PermissionDataUI } from "@/components/grill/PermissionPartView";
 import { GrillSessionView } from "@/components/grill/GrillSessionView";
 import { ReadOnlyTranscript } from "@/components/grill/ReadOnlyTranscript";
@@ -48,9 +49,7 @@ function LiveGrill({
 }) {
   const chat = useAcpChat({ cardId, stepKey: "grill", round: 0 });
 
-  const starting =
-    chat.status === "connecting" ||
-    (chat.status === "ready" && !chat.sessionOpen);
+  const starting = chat.status === "ready" && !chat.sessionOpen;
 
   useEffect(() => {
     onGrillStartingChange?.(starting);
@@ -66,10 +65,6 @@ function LiveGrill({
     );
   }
 
-  if (chat.status === "connecting") {
-    return <ThreadShell />;
-  }
-
   if (chat.status === "displaced") {
     return (
       <DisplacedGrill
@@ -80,18 +75,26 @@ function LiveGrill({
     );
   }
 
+  if (!chat.historyReady) {
+    return <ThreadShell />;
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {chat.connection === "reconnecting" ? <ReconnectingBanner /> : null}
+      {chat.sessionError ? (
+        <SessionErrorBanner error={chat.sessionError} />
+      ) : null}
       {/* epoch remounts the runtime after a reconnect so the server transcript wins. */}
       <AcpChatProvider
-        key={chat.epoch}
+        key={String(chat.epoch)}
         transport={chat.transport}
         messages={chat.messages}
+        promptCapabilities={chat.promptCapabilities}
       >
         <GrillTransportContext.Provider value={chat.transport}>
           <PermissionDataUI />
-          <Thread sessionOpen={chat.sessionOpen} />
+          <Thread attachmentsEnabled={chat.attachmentsEnabled} />
         </GrillTransportContext.Provider>
       </AcpChatProvider>
     </div>

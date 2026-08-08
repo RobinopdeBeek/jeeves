@@ -12,6 +12,8 @@ export type ProjectStorePaths = {
   worktreeRoot: string;
   /** AI Chat exchange area: `<repo>/.jeeves/exchange/` */
   exchangeRoot: string;
+  /** Project Chat transcripts: `<repo>/.jeeves/data/chat/` */
+  chatRoot: string;
 };
 
 /** Derive project-store paths from a target repo root (ADR 0011). */
@@ -20,16 +22,18 @@ export function resolveProjectStorePaths(repoPath: string): ProjectStorePaths {
   const storeRoot = path.join(resolvedRepo, STORE_DIR);
   const dbFromEnv = process.env.JEEVES_DB_PATH?.trim();
   const worktreeFromEnv = process.env.JEEVES_WORKTREE_ROOT?.trim();
+  const artifactRoot = path.join(storeRoot, "data");
 
   return {
     repoPath: resolvedRepo,
     storeRoot,
     dbPath: dbFromEnv ? path.resolve(dbFromEnv) : path.join(storeRoot, "jeeves.db"),
-    artifactRoot: path.join(storeRoot, "data"),
+    artifactRoot,
     worktreeRoot: worktreeFromEnv
       ? path.resolve(worktreeFromEnv)
       : path.join(storeRoot, "worktrees"),
     exchangeRoot: path.join(storeRoot, "exchange"),
+    chatRoot: path.join(artifactRoot, "chat"),
   };
 }
 
@@ -69,6 +73,7 @@ export function ensureProjectStore(repoPath: string): ProjectStorePaths {
   fs.mkdirSync(paths.artifactRoot, { recursive: true });
   fs.mkdirSync(paths.worktreeRoot, { recursive: true });
   fs.mkdirSync(paths.exchangeRoot, { recursive: true });
+  fs.mkdirSync(paths.chatRoot, { recursive: true });
   ensureGitignoreEntry(paths.repoPath);
   return paths;
 }

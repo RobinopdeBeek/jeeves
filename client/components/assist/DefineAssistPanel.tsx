@@ -9,6 +9,7 @@ import type { UIMessage } from "ai";
 import { Thread, ThreadShell } from "@/components/assistant-ui/thread";
 import { AcpChatProvider, useAcpChat } from "@/hooks/useAcpChat";
 import { ReconnectingBanner } from "@/components/chat/ReconnectingBanner";
+import { SessionErrorBanner } from "@/components/chat/SessionErrorBanner";
 import { PermissionDataUI } from "@/components/grill/PermissionPartView";
 import { ReadOnlyTranscript } from "@/components/grill/ReadOnlyTranscript";
 import { GrillTransportContext } from "@/components/grill/transport-context";
@@ -46,7 +47,6 @@ export type DefineAssistLabels = {
   show: string;
   hide: string;
   startError: string;
-  openingPlaceholder: string;
   workingPlaceholder: string;
 };
 
@@ -274,10 +274,6 @@ export function DefineAssistChat({
     );
   }
 
-  if (chat.status === "connecting") {
-    return <ThreadShell />;
-  }
-
   if (chat.status === "displaced") {
     return (
       <DisplacedDefineAssist
@@ -289,26 +285,41 @@ export function DefineAssistChat({
     );
   }
 
+  if (!chat.historyReady) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <ThreadShell
+          placeholder={
+            composerLocked
+              ? labels.workingPlaceholder
+              : "Ask or request a change…"
+          }
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {chat.connection === "reconnecting" ? <ReconnectingBanner /> : null}
+      {chat.sessionError ? (
+        <SessionErrorBanner error={chat.sessionError} />
+      ) : null}
       <AcpChatProvider
-        key={chat.epoch}
+        key={String(chat.epoch)}
         transport={chat.transport}
         messages={chat.messages}
+        promptCapabilities={chat.promptCapabilities}
       >
         <GrillTransportContext.Provider value={chat.transport}>
           <PermissionDataUI />
           <Thread
-            // Keep sessionOpen true while streaming — flipping it false swaps the
-            // composer for a "Starting session" spinner and feels like the panel hid.
-            sessionOpen={chat.sessionOpen}
+            attachmentsEnabled={chat.attachmentsEnabled}
             placeholder={
               composerLocked
                 ? labels.workingPlaceholder
                 : "Ask or request a change…"
             }
-            openingPlaceholder={labels.openingPlaceholder}
           />
         </GrillTransportContext.Provider>
       </AcpChatProvider>
@@ -355,7 +366,6 @@ export const SPEC_ASSIST_LABELS: DefineAssistLabels = {
   show: "Show Spec assist",
   hide: "Hide Spec assist",
   startError: "Could not start Spec assist",
-  openingPlaceholder: "Spec assist starting…",
   workingPlaceholder: "Spec assist is working…",
 };
 
@@ -365,6 +375,5 @@ export const TASKS_ASSIST_LABELS: DefineAssistLabels = {
   show: "Show Tasks assist",
   hide: "Hide Tasks assist",
   startError: "Could not start Tasks assist",
-  openingPlaceholder: "Tasks assist starting…",
   workingPlaceholder: "Tasks assist is working…",
 };

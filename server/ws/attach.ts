@@ -1,24 +1,38 @@
 import type { WSContext } from "hono/ws";
 import type {
+  ChatAttachment,
   WsClientMessage,
   WsServerMessage,
 } from "../../shared/chat-ws.js";
 import type { ArtifactStore } from "../artifacts/store.js";
 import type { CardStore } from "../cards/store.js";
+import type { ChatThreadStore } from "../chat-threads/store.js";
 import type { EventBus } from "../execution/events.js";
-import { resolveProjectStorePaths } from "../project-store.js";
 import type { SpawnAcp } from "./chat.js";
-import { chatStepProfile } from "./chat-step-profile.js";
-import { loadTranscript, openChat } from "./open-chat.js";
+import {
+  createProjectChatSession,
+  createStepChatSession,
+  stepChatSessionIdFromRef,
+  stepChatTurnCompleteHook,
+  threadChatSessionId,
+  type ChatSession,
+  type ProjectChatRef,
+  type StepChatRef,
+} from "./chat-session.js";
+import { openChat } from "./open-chat.js";
 import {
   ChatSessionRegistry,
   type ChunkSubscriber,
-  type SessionKey,
   type WarmSessionHandle,
 } from "./session-registry.js";
 
-export type { SessionKey };
+export type { StepChatRef as SessionKey };
 export type { WsClientMessage, WsServerMessage };
+
+/** Discriminated open target resolved from the `/ws/chat` query string. */
+export type ChatOpenTarget =
+  | { kind: "step"; ref: StepChatRef }
+  | { kind: "thread"; ref: ProjectChatRef };
 
 export interface ChatWsDeps {
   store: CardStore;
@@ -27,83 +41,160 @@ export interface ChatWsDeps {
   spawn: SpawnAcp;
   promptsRoot: string;
   sessions: ChatSessionRegistry;
+  chatThreads: ChatThreadStore;
+  /** Main Project checkout for Project Chat. */
+  projectCwd: string;
 }
 
 /**
- * Thin WebSocket adapter over openChat / warm registry.
- * Outbound payloads are AI SDK types only (ADR 0008).
+ * Thin WebSocket adapter: resolve ChatSession once, send ready (with optional
+ * branchable for Project Chat), then one openChat path for both kinds.
  */
 export class ChatConnection {
   private handle: WarmSessionHandle | null = null;
   private closed = false;
   private sending = false;
   private displaced = false;
+  /** Single-slot buffer for a user-message that arrives before ACP is open. */
+  private pendingUserMessage: WsClientMessage | null = null;
+  private readonly sessionId: string;
   private readonly subscriber: ChunkSubscriber = {
     onChunk: (chunk) => this.send({ type: "chunk", chunk }),
   };
 
   constructor(
     private readonly ws: WSContext,
-    private readonly key: SessionKey,
+    private readonly target: ChatOpenTarget,
     private readonly deps: ChatWsDeps,
-  ) {}
+  ) {
+    this.sessionId =
+      target.kind === "step"
+        ? stepChatSessionIdFromRef(target.ref)
+        : threadChatSessionId(target.ref.threadId);
+  }
 
   async start(): Promise<void> {
-    this.deps.sessions.claim(this.key, this);
+    this.deps.sessions.claim(this.sessionId, this);
 
-    if (!this.deps.store.getCard(this.key.cardId)) {
-      this.send({ type: "error", error: "card not found" });
-      this.ws.close();
-      return;
-    }
-
-    this.send({
-      type: "ready",
-      messages: loadTranscript(this.deps.artifacts, this.key),
-      streaming: this.deps.sessions.isAiWorking(this.key),
-    });
-    if (this.closed) return;
-
-    const profile = chatStepProfile(this.key.stepKey);
-    const onTurnComplete = profile.onTurnComplete
-      ? () => {
-          const repoPath = this.deps.store.getRepoPath(this.key.cardId);
-          const storeRoot = resolveProjectStorePaths(repoPath).storeRoot;
-          profile.onTurnComplete!({
-            cardId: this.key.cardId,
-            artifacts: this.deps.artifacts,
-            storeRoot,
-            send: (msg) => this.send(msg),
-            sendError: (error) => this.send({ type: "error", error }),
-            isClosed: () => this.closed,
-          });
-        }
-      : undefined;
-
+    let session: ChatSession;
     try {
-      const opened = await openChat(this.key, this.deps, {
-        onStatusNotify: (status) => {
-          if (this.closed) return;
-          this.send({ type: "status", status });
-        },
-        onTurnComplete,
-      });
-      if (this.closed) return;
-
-      this.handle = opened.handle;
-      this.handle.attach(this.subscriber);
-      this.send({
-        type: "session",
-        status: "open",
-        streaming: this.deps.sessions.isAiWorking(this.key),
-      });
+      session = this.resolveSession();
     } catch (err) {
-      if (this.closed) return;
       this.send({
         type: "error",
         error: err instanceof Error ? err.message : String(err),
       });
+      this.ws.close();
+      return;
     }
+
+    // Ready before openChat so frozen-transcript / spawn failures still get history first.
+    try {
+      this.sendReady(session);
+    } catch (err) {
+      this.send({
+        type: "error",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      this.ws.close();
+      return;
+    }
+    if (this.closed) return;
+
+    try {
+      await this.finishOpen(session);
+    } catch (err) {
+      this.sendOpenError(err);
+    }
+  }
+
+  private resolveSession(): ChatSession {
+    if (this.target.kind === "step") {
+      const ref = this.target.ref;
+      if (!this.deps.store.getCard(ref.cardId)) {
+        throw new Error("card not found");
+      }
+      const sessionDeps = {
+        store: this.deps.store,
+        artifacts: this.deps.artifacts,
+        events: this.deps.events,
+        promptsRoot: this.deps.promptsRoot,
+      };
+      return createStepChatSession(ref, sessionDeps, {
+        onStatusNotify: (status) => {
+          if (this.closed) return;
+          this.send({ type: "status", status });
+        },
+        onTurnComplete: stepChatTurnCompleteHook(ref, sessionDeps, {
+          send: (msg) => this.send(msg),
+          sendError: (error) => this.send({ type: "error", error }),
+          isClosed: () => this.closed,
+        }),
+      });
+    }
+
+    const ref = this.target.ref;
+    if (!this.deps.chatThreads.getThread(ref.threadId)) {
+      throw new Error("thread not found");
+    }
+    return createProjectChatSession(ref, {
+      threads: this.deps.chatThreads,
+      cwd: this.deps.projectCwd,
+      onBranchableUpdated: (branchable) => {
+        if (this.closed) return;
+        this.send({ type: "branchable", branchable });
+      },
+    });
+  }
+
+  private sendReady(session: ChatSession): void {
+    // Prefer the warm bridge while a turn is in flight — disk may lag until
+    // early persist / turn end, and mid-stream reattach must show the user prompt.
+    const messages =
+      this.deps.sessions.peekWarmMessages(this.sessionId) ??
+      session.loadTranscript();
+    if (this.target.kind === "thread") {
+      this.send({
+        type: "ready",
+        messages,
+        streaming: this.deps.sessions.isAiWorking(this.sessionId),
+        branchable: this.deps.chatThreads.loadBranchable(
+          this.target.ref.threadId,
+        ),
+      });
+      return;
+    }
+    this.send({
+      type: "ready",
+      messages,
+      streaming: this.deps.sessions.isAiWorking(this.sessionId),
+    });
+  }
+
+  private async finishOpen(session: ChatSession): Promise<void> {
+    const opened = await openChat(session, {
+      spawn: this.deps.spawn,
+      sessions: this.deps.sessions,
+    });
+    if (this.closed) return;
+
+    this.handle = opened.handle;
+    this.handle.attach(this.subscriber);
+    this.send({
+      type: "session",
+      status: "open",
+      streaming: this.deps.sessions.isAiWorking(this.sessionId),
+      promptCapabilities: this.handle.getPromptCapabilities(),
+    });
+    await this.flushPendingUserMessage();
+  }
+
+  private sendOpenError(err: unknown): void {
+    const message = err instanceof Error ? err.message : String(err);
+    // A chat that never opens is otherwise invisible in the dev terminal.
+    console.error(`chat session ${this.sessionId} failed to open: ${message}`);
+    if (this.closed) return;
+    this.send({ type: "error", error: message });
   }
 
   async onClientMessage(raw: string): Promise<void> {
@@ -124,7 +215,13 @@ export class ChatConnection {
       return;
     }
 
-    if (!this.handle) return;
+    if (!this.handle) {
+      // Park one early prompt; flushed at the end of finishOpen().
+      if (msg.type === "user-message") {
+        this.pendingUserMessage = msg;
+      }
+      return;
+    }
 
     if (msg.type === "permission-response") {
       if (typeof msg.requestId !== "string" || typeof msg.optionId !== "string") {
@@ -148,8 +245,41 @@ export class ChatConnection {
       return;
     }
 
-    if (this.sending) return;
-    if (msg.type !== "user-message" || typeof msg.text !== "string" || !msg.text.trim()) {
+    if (msg.type !== "user-message") {
+      this.send({ type: "error", error: "unsupported message" });
+      return;
+    }
+
+    await this.deliverUserMessage(msg);
+  }
+
+  private async flushPendingUserMessage(): Promise<void> {
+    const pending = this.pendingUserMessage;
+    this.pendingUserMessage = null;
+    if (!pending || this.closed || !this.handle) return;
+    await this.deliverUserMessage(pending);
+  }
+
+  private async deliverUserMessage(msg: WsClientMessage): Promise<void> {
+    if (!this.handle || this.sending) return;
+    if (msg.type !== "user-message" || typeof msg.text !== "string") {
+      this.send({ type: "error", error: "unsupported message" });
+      return;
+    }
+
+    let attachments: ChatAttachment[] = [];
+    try {
+      attachments = parseClientAttachments(msg.attachments);
+    } catch (err) {
+      this.send({
+        type: "error",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+
+    const text = msg.text.trim();
+    if (!text && attachments.length === 0) {
       this.send({ type: "error", error: "unsupported message" });
       return;
     }
@@ -158,7 +288,13 @@ export class ChatConnection {
     try {
       const liveDraftBody =
         typeof msg.liveDraftBody === "string" ? msg.liveDraftBody : undefined;
-      await this.handle.sendMessage(msg.text.trim(), { liveDraftBody });
+      const messageId =
+        typeof msg.messageId === "string" ? msg.messageId : undefined;
+      await this.handle.sendMessage(text, {
+        liveDraftBody,
+        ...(messageId != null ? { messageId } : {}),
+        ...(attachments.length > 0 ? { attachments } : {}),
+      });
     } catch (err) {
       this.send({
         type: "error",
@@ -188,10 +324,11 @@ export class ChatConnection {
   private shutdown(opts: { releaseSlot: boolean }): void {
     if (this.closed) return;
     this.closed = true;
+    this.pendingUserMessage = null;
     this.handle?.detach(this.subscriber);
     this.handle = null;
     if (opts.releaseSlot) {
-      this.deps.sessions.release(this.key, this);
+      this.deps.sessions.release(this.sessionId, this);
     }
   }
 
@@ -203,4 +340,28 @@ export class ChatConnection {
       // Client gone.
     }
   }
+}
+
+/** Coerce/validate the optional attachments array from a client user-message. */
+function parseClientAttachments(raw: unknown): ChatAttachment[] {
+  if (raw == null) return [];
+  if (!Array.isArray(raw)) {
+    throw new Error("attachments must be an array");
+  }
+  const out: ChatAttachment[] = [];
+  for (const item of raw) {
+    if (item == null || typeof item !== "object") {
+      throw new Error("invalid attachment");
+    }
+    const att = item as Record<string, unknown>;
+    if (typeof att.mediaType !== "string" || typeof att.url !== "string") {
+      throw new Error("attachment requires mediaType and url");
+    }
+    out.push({
+      mediaType: att.mediaType,
+      url: att.url,
+      ...(typeof att.filename === "string" ? { filename: att.filename } : {}),
+    });
+  }
+  return out;
 }

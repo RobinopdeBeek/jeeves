@@ -8,9 +8,9 @@ export interface ColumnDef {
 }
 
 export const COLUMNS: ColumnDef[] = [
-  { id: "backlog", name: "Backlog", short: "Backlog", sub: "Captured ideas, not started" },
-  { id: "define", name: "Define Feature", short: "Define", sub: "Features: Grill → Spec → Tasks" },
-  { id: "implement", name: "Implement Task", short: "Implement", sub: "Tasks: Plan → Implement → AI Review" },
-  { id: "review", name: "Human Review", short: "Review", sub: "Your call before merge" },
+  { id: "backlog", name: "Backlog", short: "Backlog", sub: "The dumping ground" },
+  { id: "define", name: "Define", short: "Define", sub: "Grill → Spec → Tasks" },
+  { id: "implement", name: "Implement", short: "Implement", sub: "Plan → Implement → AI Review" },
+  { id: "review", name: "Review", short: "Review", sub: "Interactive evaluation" },
   { id: "finalize", name: "Finalize", short: "Finalize", sub: "Document → Deploy" },
 ];

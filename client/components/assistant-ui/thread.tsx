@@ -1,14 +1,29 @@
 "use client";
 
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
+import { AttachmentChip } from "@/components/assistant-ui/attachment-chip";
 import { ComposerTriggerPopover } from "@/components/assistant-ui/composer-trigger-popover";
 import { createDirectiveText } from "@/components/assistant-ui/directive-text";
 import { Badge } from "@/components/assistant-ui/badge";
+import {
+  ComposerQuotePreview,
+  QuoteBlock,
+  SelectionToolbar,
+} from "@/components/assistant-ui/quote";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { toast } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
 import {
+  ProjectChatRewindProvider,
+  type ProjectChatRewindApi,
+  useProjectChatRewind,
+} from "@/components/chat/project-chat-rewind-context";
+import { getBranches } from "@shared/branchable-transcript";
+import {
   ActionBarPrimitive,
+  AttachmentPrimitive,
   AuiIf,
   type AssistantState,
   ComposerPrimitive,
@@ -20,6 +35,7 @@ import {
   unstable_defaultDirectiveFormatter,
   unstable_useMentionAdapter,
   unstable_useSlashCommandAdapter,
+  useAuiEvent,
   useAuiState,
 } from "@assistant-ui/react";
 import {
@@ -30,31 +46,47 @@ import {
   IconArrowDown,
   IconArrowUp,
   IconCheck,
+  IconChevronLeft,
+  IconChevronRight,
   IconCopy,
   IconFileText,
   IconHelp,
   IconLoader2,
-  IconMicrophone,
   IconPaperclip,
+  IconPencil,
   IconSlash,
   IconSquare,
   IconTool,
   IconWorld,
+  IconX,
 } from "@tabler/icons-react";
-import { type FC } from "react";
+import { type FC, type FormEvent, type ReactNode, useState } from "react";
 
 export type ThreadProps = {
-  /** ACP (or other) session ready — send is enabled. */
-  sessionOpen?: boolean;
   /**
    * Empty-thread welcome heading. Pass `null` to skip the welcome (e.g. Grill,
    * which auto-starts with an opening turn).
    */
   welcomeTitle?: string | null;
-  /** Composer placeholder when session is open. */
+  /** Composer placeholder. */
   placeholder?: string;
-  /** Composer placeholder while the session is still opening. */
-  openingPlaceholder?: string;
+  /**
+   * Show the capability-gated attach control. Defaults optimistic (true) so the
+   * paperclip is usable before `promptCapabilities` arrive; callers pass the
+   * real value once caps land.
+   */
+  attachmentsEnabled?: boolean;
+  /**
+   * Composer chrome (Project Chat model picker). Stays available for the whole
+   * conversation — the model is switched in place on the live ACP session, so
+   * it is no longer pinned by the spawned process.
+   */
+  composerLeading?: ReactNode;
+  /**
+   * Project Chat edit/branch rewind. When omitted, Thread stays rewind-agnostic
+   * (Grill / assist paths).
+   */
+  rewind?: ProjectChatRewindApi | null;
 };
 
 const COMPOSER_SHELL =
@@ -132,17 +164,17 @@ const UserDirectiveText = createDirectiveText(unstable_defaultDirectiveFormatter
 
 /**
  * Reusable assistant-ui chat thread: composer always docked at the bottom,
- * scroll-to-bottom, copy action, and stub attach / voice / @ / / chrome.
+ * scroll-to-bottom, copy action, capability-gated attachments, and @ / / chrome.
+ * No in-app mic/dictation — use OS STT tools instead.
  */
 export const Thread: FC<ThreadProps> = ({
-  sessionOpen = true,
   welcomeTitle = null,
   placeholder = "Send a message... (@ to mention, / for commands)",
-  openingPlaceholder = "Agent starting — you can type…",
+  attachmentsEnabled = true,
+  composerLeading,
+  rewind = null,
 }) => {
-  const isEmpty = useAuiState(isEmptyThread);
-
-  return (
+  const tree = (
     <ThreadPrimitive.Root
       className="aui-root aui-thread-root flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-background @container"
       style={THREAD_CSS_VARS}
@@ -155,18 +187,8 @@ export const Thread: FC<ThreadProps> = ({
         <div className="mx-auto flex min-h-full w-full max-w-(--thread-max-width) flex-1 flex-col px-4 pt-4">
           {welcomeTitle != null && (
             <AuiIf condition={isEmptyThread}>
-              <ThreadWelcome title={welcomeTitle} sessionOpen={sessionOpen} />
+              <ThreadWelcome title={welcomeTitle} />
             </AuiIf>
-          )}
-
-          {/* Keep status up until the first streamed message — sessionOpen can
-              flip true a second before the opening turn produces tokens. */}
-          {welcomeTitle == null && isEmpty && (
-            <div className="mb-6 flex flex-col items-center px-4 pt-8 text-center">
-              <p className="text-sm text-muted-foreground">
-                Starting agent session…
-              </p>
-            </div>
           )}
 
           <div
@@ -187,22 +209,32 @@ export const Thread: FC<ThreadProps> = ({
           <ThreadPrimitive.ViewportFooter className="aui-thread-viewport-footer sticky bottom-0 mt-auto flex flex-col gap-4 overflow-visible rounded-t-(--composer-radius) bg-background pb-4 md:pb-6">
             <ThreadScrollToBottom />
             <Composer
-              sessionOpen={sessionOpen}
               placeholder={placeholder}
-              openingPlaceholder={openingPlaceholder}
+              attachmentsEnabled={attachmentsEnabled}
+              composerLeading={composerLeading}
             />
           </ThreadPrimitive.ViewportFooter>
         </div>
       </ThreadPrimitive.Viewport>
+      <SelectionToolbar />
     </ThreadPrimitive.Root>
+  );
+
+  if (!rewind) return tree;
+  return (
+    <ProjectChatRewindProvider value={rewind}>{tree}</ProjectChatRewindProvider>
   );
 };
 
-/** Visual twin of {@link Thread} while the runtime / socket is connecting. */
+/** Visual twin of {@link Thread} for genuine no-transport states (displaced, rewinding). */
 export function ThreadShell({
   placeholder = "Loading…",
+  attachmentsEnabled = false,
+  composerLeading,
 }: {
   placeholder?: string;
+  attachmentsEnabled?: boolean;
+  composerLeading?: ReactNode;
 }) {
   return (
     <div
@@ -211,11 +243,6 @@ export function ThreadShell({
     >
       <div className="relative flex min-h-0 flex-1 flex-col overflow-y-scroll">
         <div className="mx-auto flex min-h-full w-full max-w-(--thread-max-width) flex-1 flex-col px-4 pt-4">
-          <div className="mb-6 flex flex-col items-center px-4 pt-8 text-center">
-            <p className="text-sm text-muted-foreground">
-              Starting agent session…
-            </p>
-          </div>
           <div className="sticky bottom-0 mt-auto flex flex-col gap-4 overflow-visible rounded-t-(--composer-radius) bg-background pb-4 md:pb-6">
             <div className={cn(COMPOSER_SHELL, "opacity-70")}>
               <textarea
@@ -224,36 +251,33 @@ export function ThreadShell({
                 placeholder={placeholder}
                 className="max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none"
               />
-              <div className="relative flex items-center justify-between">
-                <TooltipIconButton
-                  tooltip="Attach file"
-                  side="bottom"
-                  type="button"
-                  variant="ghost"
-                  size="icon-round"
-                  disabled
-                  aria-label="Attach file"
-                >
-                  <IconPaperclip />
-                </TooltipIconButton>
+              <div className="relative flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  {attachmentsEnabled ? (
+                    <TooltipIconButton
+                      tooltip="Attach file"
+                      side="bottom"
+                      type="button"
+                      variant="ghost"
+                      size="icon-round"
+                      disabled
+                      aria-label="Attach file"
+                    >
+                      <IconPaperclip />
+                    </TooltipIconButton>
+                  ) : null}
+                  {composerLeading ? (
+                    <div className="min-w-0">{composerLeading}</div>
+                  ) : null}
+                  {!composerLeading && !attachmentsEnabled ? <span /> : null}
+                </div>
                 <div className="flex items-center gap-1.5">
-                  <TooltipIconButton
-                    tooltip="Voice input"
-                    side="bottom"
-                    type="button"
-                    variant="ghost"
-                    size="icon-round"
-                    disabled
-                    aria-label="Voice input"
-                  >
-                    <IconMicrophone />
-                  </TooltipIconButton>
                   <Button
                     type="button"
                     variant="default"
                     size="icon-round"
                     disabled
-                    aria-label="Starting session"
+                    aria-label="Unavailable"
                   >
                     <IconLoader2 className="animate-spin" />
                   </Button>
@@ -281,29 +305,21 @@ const ThreadScrollToBottom: FC = () => {
   );
 };
 
-const ThreadWelcome: FC<{ title: string; sessionOpen: boolean }> = ({
-  title,
-  sessionOpen,
-}) => {
+const ThreadWelcome: FC<{ title: string }> = ({ title }) => {
   return (
     <div className="aui-thread-welcome-root mb-6 flex flex-col items-center px-4 text-center">
       <h1 className="aui-thread-welcome-message-inner fade-in slide-in-from-bottom-1 animate-in fill-mode-both text-2xl font-semibold duration-200">
         {title}
       </h1>
-      {!sessionOpen && (
-        <p className="mt-2 text-sm text-muted-foreground">
-          Starting agent session…
-        </p>
-      )}
     </div>
   );
 };
 
 const Composer: FC<{
-  sessionOpen: boolean;
   placeholder: string;
-  openingPlaceholder: string;
-}> = ({ sessionOpen, placeholder, openingPlaceholder }) => {
+  attachmentsEnabled: boolean;
+  composerLeading?: ReactNode;
+}> = ({ placeholder, attachmentsEnabled, composerLeading }) => {
   const mention = unstable_useMentionAdapter({
     includeModelContextTools: false,
     items: [
@@ -325,19 +341,34 @@ const Composer: FC<{
     iconMap: slashIconMap,
     fallbackIcon: IconSlash,
   });
+  useAuiEvent("composer.attachmentAddError", (event) => {
+    toast.error(event.message);
+  });
 
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
       <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
         <div data-slot="aui_composer-shell" className={COMPOSER_SHELL}>
+          <ComposerQuotePreview />
+          {attachmentsEnabled ? (
+            <div className="flex flex-wrap gap-1.5 px-1 pt-0.5 empty:hidden">
+              <ComposerPrimitive.Attachments>
+                {() => <ComposerAttachmentChip />}
+              </ComposerPrimitive.Attachments>
+            </div>
+          ) : null}
           <LexicalComposerInput
-            placeholder={sessionOpen ? placeholder : openingPlaceholder}
+            placeholder={placeholder}
+            submitMode="enter"
             autoFocus
             directiveChip={ComposerDirectiveChip}
             className="aui-composer-input relative max-h-32 min-h-10 w-full overflow-y-auto bg-transparent px-2.5 py-1 text-base caret-primary outline-none"
             aria-label="Message input"
           />
-          <ComposerAction sessionOpen={sessionOpen} />
+          <ComposerAction
+            attachmentsEnabled={attachmentsEnabled}
+            composerLeading={composerLeading}
+          />
         </div>
 
         <ComposerTriggerPopover char="@" {...mention} />
@@ -354,75 +385,83 @@ const Composer: FC<{
   );
 };
 
-const ComposerAction: FC<{ sessionOpen: boolean }> = ({ sessionOpen }) => {
+const ComposerAttachmentChip: FC = () => {
+  const name = useAuiState((s) => s.attachment.name);
   return (
-    <div className="aui-composer-action-wrapper relative flex items-center justify-between">
-      <TooltipIconButton
-        tooltip="Attach file"
-        side="bottom"
-        type="button"
-        variant="ghost"
-        size="icon-round"
-        disabled
-        aria-label="Attach file"
-      >
-        <IconPaperclip />
-      </TooltipIconButton>
+    <AttachmentPrimitive.Root>
+      <AttachmentChip
+        name={name}
+        trailing={
+          <AttachmentPrimitive.Remove asChild>
+            <button
+              type="button"
+              className="shrink-0 text-muted-foreground hover:text-foreground"
+              aria-label="Remove attachment"
+            >
+              <IconX className="size-3.5" />
+            </button>
+          </AttachmentPrimitive.Remove>
+        }
+      />
+    </AttachmentPrimitive.Root>
+  );
+};
+
+const ComposerAction: FC<{
+  attachmentsEnabled: boolean;
+  composerLeading?: ReactNode;
+}> = ({ attachmentsEnabled, composerLeading }) => {
+  return (
+    <div className="aui-composer-action-wrapper relative flex items-center justify-between gap-2">
+      <div className="flex min-w-0 items-center gap-1.5">
+        {attachmentsEnabled ? (
+          <ComposerPrimitive.AddAttachment asChild>
+            <TooltipIconButton
+              tooltip="Attach file"
+              side="bottom"
+              type="button"
+              variant="ghost"
+              size="icon-round"
+              aria-label="Attach file"
+            >
+              <IconPaperclip />
+            </TooltipIconButton>
+          </ComposerPrimitive.AddAttachment>
+        ) : null}
+        {composerLeading ? (
+          <div className="min-w-0">{composerLeading}</div>
+        ) : null}
+        {!composerLeading && !attachmentsEnabled ? <span /> : null}
+      </div>
       <div className="flex items-center gap-1.5">
-        <TooltipIconButton
-          tooltip="Voice input"
-          side="bottom"
-          type="button"
-          variant="ghost"
-          size="icon-round"
-          disabled
-          aria-label="Voice input"
-        >
-          <IconMicrophone />
-        </TooltipIconButton>
-        {!sessionOpen ? (
-          <Button
-            type="button"
-            variant="default"
-            size="icon-round"
-            disabled
-            aria-label="Starting session"
-            title="Starting session…"
-          >
-            <IconLoader2 className="animate-spin" />
-          </Button>
-        ) : (
-          <>
-            <AuiIf condition={(s) => !s.thread.isRunning}>
-              <ComposerPrimitive.Send asChild>
-                <TooltipIconButton
-                  tooltip="Send message"
-                  side="bottom"
-                  type="button"
-                  variant="default"
-                  size="icon-round"
-                  className="aui-composer-send"
-                  aria-label="Send message"
-                >
-                  <IconArrowUp />
-                </TooltipIconButton>
-              </ComposerPrimitive.Send>
-            </AuiIf>
-            <AuiIf condition={(s) => s.thread.isRunning}>
-              <ComposerPrimitive.Cancel asChild>
-                <Button
-                  type="button"
-                  variant="default"
-                  size="icon-round"
-                  className="aui-composer-cancel"
-                  aria-label="Stop generating"
-                >
-                  <IconSquare className="fill-current" />
-                </Button>
-              </ComposerPrimitive.Cancel>
-            </AuiIf>
-          </>
-        )}
+        <AuiIf condition={(s) => !s.thread.isRunning}>
+          <ComposerPrimitive.Send asChild>
+            <TooltipIconButton
+              tooltip="Send message"
+              side="bottom"
+              type="button"
+              variant="default"
+              size="icon-round"
+              className="aui-composer-send"
+              aria-label="Send message"
+            >
+              <IconArrowUp />
+            </TooltipIconButton>
+          </ComposerPrimitive.Send>
+        </AuiIf>
+        <AuiIf condition={(s) => s.thread.isRunning}>
+          <ComposerPrimitive.Cancel asChild>
+            <Button
+              type="button"
+              variant="default"
+              size="icon-round"
+              className="aui-composer-cancel"
+              aria-label="Stop generating"
+            >
+              <IconSquare className="fill-current" />
+            </Button>
+          </ComposerPrimitive.Cancel>
+        </AuiIf>
       </div>
     </div>
   );
@@ -527,6 +566,68 @@ const AssistantActionBar: FC = () => {
 };
 
 const UserMessage: FC = () => {
+  const rewind = useProjectChatRewind();
+  const messageId = useAuiState((s) => s.message.id);
+  const messageText = useAuiState((s) => {
+    const parts = s.message.content;
+    return parts
+      .filter((p): p is { type: "text"; text: string } => p.type === "text")
+      .map((p) => p.text)
+      .join("");
+  });
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(messageText);
+
+  if (editing && rewind) {
+    return (
+      <MessagePrimitive.Root
+        data-slot="aui_user-message-root"
+        data-role="user"
+        className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 [&:where(>*)]:col-start-2"
+      >
+        <form
+          className="aui-user-message-content-wrapper relative col-start-2 flex min-w-0 flex-col gap-2"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            const text = draft.trim();
+            if (!text || rewind.disabled) return;
+            setEditing(false);
+            rewind.onEditMessage(messageId, text);
+          }}
+        >
+          <Textarea
+            className="min-h-20 w-full resize-y"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            disabled={rewind.disabled}
+            aria-label="Edit message"
+          />
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={rewind.disabled}
+              onClick={() => {
+                setDraft(messageText);
+                setEditing(false);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              size="sm"
+              disabled={rewind.disabled || !draft.trim()}
+            >
+              Send
+            </Button>
+          </div>
+        </form>
+      </MessagePrimitive.Root>
+    );
+  }
+
   return (
     <MessagePrimitive.Root
       data-slot="aui_user-message-root"
@@ -534,10 +635,79 @@ const UserMessage: FC = () => {
       className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 [&:where(>*)]:col-start-2"
     >
       <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
+        <MessagePrimitive.Attachments>
+          {() => <UserMessageAttachment />}
+        </MessagePrimitive.Attachments>
         <div className="aui-user-message-content peer rounded-xl bg-muted px-4 py-2 wrap-break-word text-foreground empty:hidden">
+          <MessagePrimitive.Quote>
+            {(quote) => <QuoteBlock {...quote} />}
+          </MessagePrimitive.Quote>
           <MessagePrimitive.Parts components={{ Text: UserDirectiveText }} />
         </div>
+        {rewind ? (
+          <div className="mt-1 flex items-center justify-end gap-1">
+            <UserMessageBranchPicker messageId={messageId} />
+            <TooltipIconButton
+              tooltip="Edit"
+              disabled={rewind.disabled}
+              onClick={() => {
+                setDraft(messageText);
+                setEditing(true);
+              }}
+            >
+              <IconPencil data-icon="inline-start" />
+            </TooltipIconButton>
+          </div>
+        ) : null}
       </div>
     </MessagePrimitive.Root>
+  );
+};
+
+const UserMessageBranchPicker: FC<{ messageId: string }> = ({ messageId }) => {
+  const rewind = useProjectChatRewind();
+  if (!rewind) return null;
+  // Read `branchable` from context (updated by live WS pushes after
+  // edit-and-send) so siblings appear without a remount.
+  const branches = getBranches(rewind.branchable, messageId);
+  if (branches.length <= 1) return null;
+  const index = branches.indexOf(messageId);
+  if (index < 0) return null;
+
+  return (
+    <div className="flex items-center gap-0.5" aria-label="Message branches">
+      <TooltipIconButton
+        tooltip="Previous branch"
+        disabled={rewind.disabled || index <= 0}
+        onClick={() => {
+          const prev = branches[index - 1];
+          if (prev) rewind.onSwitchBranch(prev);
+        }}
+      >
+        <IconChevronLeft data-icon="inline-start" />
+      </TooltipIconButton>
+      <span className="min-w-8 text-center tabular-nums">
+        {index + 1}/{branches.length}
+      </span>
+      <TooltipIconButton
+        tooltip="Next branch"
+        disabled={rewind.disabled || index >= branches.length - 1}
+        onClick={() => {
+          const next = branches[index + 1];
+          if (next) rewind.onSwitchBranch(next);
+        }}
+      >
+        <IconChevronRight data-icon="inline-start" />
+      </TooltipIconButton>
+    </div>
+  );
+};
+
+const UserMessageAttachment: FC = () => {
+  const name = useAuiState((s) => s.attachment.name);
+  return (
+    <AttachmentPrimitive.Root className="mb-1.5 flex justify-end">
+      <AttachmentChip name={name} />
+    </AttachmentPrimitive.Root>
   );
 };

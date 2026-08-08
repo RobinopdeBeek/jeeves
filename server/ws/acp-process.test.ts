@@ -2,7 +2,29 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AcpSpawnError, resolveAgentLaunch } from "./acp-process.js";
+import {
+  AcpSpawnError,
+  buildAcpSpawnArgs,
+  resolveAgentLaunch,
+} from "./acp-process.js";
+
+describe("buildAcpSpawnArgs", () => {
+  it("appends the acp subcommand to the launch args", () => {
+    expect(buildAcpSpawnArgs(["--api-key", "x"])).toEqual([
+      "--api-key",
+      "x",
+      "acp",
+    ]);
+  });
+
+  /**
+   * Processes are model-agnostic so a warm spare can serve any thread; the model
+   * is set per session over `session/set_config_option` instead.
+   */
+  it("never pins a model at spawn", () => {
+    expect(buildAcpSpawnArgs([])).toEqual(["acp"]);
+  });
+});
 
 describe("resolveAgentLaunch", () => {
   const prevBin = process.env.JEEVES_AGENT_BIN;

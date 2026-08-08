@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stepChatSessionId } from "../ws/chat-session.js";
 import { ArtifactStore } from "../artifacts/store.js";
 import { CardStore } from "../cards/store.js";
 import { openDb, type Db } from "../db/index.js";
@@ -18,7 +19,7 @@ describe("POST /:id/implement", () => {
   let artifactRoot: string;
   let deps: CardRouteDeps;
   let events: EventBus;
-  let closeCalls: Array<{ cardId: string; stepKey: string; reason: string }>;
+  let closeCalls: Array<{ id: string; reason: string }>;
 
   beforeEach(() => {
     db = openDb(":memory:");
@@ -30,13 +31,9 @@ describe("POST /:id/implement", () => {
     closeCalls = [];
     const sessions = new ChatSessionRegistry();
     const originalClose = sessions.close.bind(sessions);
-    sessions.close = (key, reason) => {
-      closeCalls.push({
-        cardId: key.cardId,
-        stepKey: key.stepKey,
-        reason,
-      });
-      return originalClose(key, reason);
+    sessions.close = (id, reason) => {
+      closeCalls.push({ id, reason });
+      return originalClose(id, reason);
     };
     deps = {
       engine: {
@@ -106,8 +103,7 @@ describe("POST /:id/implement", () => {
     expect(emitted.length).toBe(3);
     expect(closeCalls).toEqual([
       {
-        cardId,
-        stepKey: "tasks",
+        id: stepChatSessionId(cardId, "tasks", 0),
         reason: "tasks handed off to implement",
       },
     ]);

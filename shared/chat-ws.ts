@@ -1,4 +1,11 @@
 import type { UIMessage, UIMessageChunk } from "ai";
+import type { BranchableTranscript } from "./branchable-transcript.js";
+import type {
+  ChatAttachment,
+  PromptCapabilities,
+} from "./prompt-capabilities.js";
+
+export type { ChatAttachment, PromptCapabilities } from "./prompt-capabilities.js";
 
 /** Client-visible permission option projected from ACP (no ACP types leak). */
 export type PermissionOptionPart = {
@@ -23,11 +30,21 @@ export type WsClientMessage =
       /** User-visible chat text (and transcript). */
       text: string;
       /**
+       * Client-generated UIMessage id. Server persists this so branch pickers
+       * (keyed by the live UI id) match the branchable tree without remount.
+       */
+      messageId?: string;
+      /**
        * Live editor/tip draft for Define assist steps. Server frames this into
        * the agent prompt only — it must not appear in the chat transcript.
        * Kind is implied by the step; body is opaque to the transport.
        */
       liveDraftBody?: string;
+      /**
+       * AI SDK file-part attachments for this turn. Server converts accepted
+       * kinds to ACP ContentBlocks; unsupported kinds fail closed.
+       */
+      attachments?: ChatAttachment[];
     }
   | { type: "permission-response"; requestId: string; optionId: string }
   /** Abort the in-flight ACP prompt turn (Stop). */
@@ -36,11 +53,31 @@ export type WsClientMessage =
   | { type: "ping"; id: string };
 
 export type WsServerMessage =
-  | { type: "ready"; messages: UIMessage[]; streaming?: boolean }
+  | {
+      type: "ready";
+      messages: UIMessage[];
+      streaming?: boolean;
+      /**
+       * Project Chat only: full branch-aware transcript (tree + head).
+       * Step chats omit this (flat transcripts).
+       */
+      branchable?: BranchableTranscript;
+    }
   /** ACP handshake finished — client may send user turns. */
-  | { type: "session"; status: "open"; streaming?: boolean }
+  | {
+      type: "session";
+      status: "open";
+      streaming?: boolean;
+      /** Negotiated ACP prompt ContentBlock kinds (fail-closed defaults). */
+      promptCapabilities: PromptCapabilities;
+    }
   | { type: "chunk"; chunk: UIMessageChunk }
   | { type: "status"; status: "ai-working" | "needs-user" }
+  /**
+   * Project Chat only: full branch-aware transcript after a live save.
+   * Lets the client show sibling branch pickers without waiting for remount.
+   */
+  | { type: "branchable"; branchable: BranchableTranscript }
   /** Answer to a client `ping` — proves the socket is not half-open. */
   | { type: "pong"; id: string }
   /** Spec side-chat harvested a revision — replace editor content. */

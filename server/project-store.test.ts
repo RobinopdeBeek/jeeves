@@ -29,6 +29,9 @@ describe("resolveProjectStorePaths", () => {
     expect(paths.exchangeRoot).toBe(
       path.join(path.resolve(repoPath), ".jeeves", "exchange"),
     );
+    expect(paths.chatRoot).toBe(
+      path.join(path.resolve(repoPath), ".jeeves", "data", "chat"),
+    );
   });
 
   it("honours JEEVES_DB_PATH override", () => {
@@ -118,6 +121,7 @@ describe("ensureProjectStore", () => {
     expect(fs.existsSync(paths.artifactRoot)).toBe(true);
     expect(fs.existsSync(paths.worktreeRoot)).toBe(true);
     expect(fs.existsSync(paths.exchangeRoot)).toBe(true);
+    expect(fs.existsSync(paths.chatRoot)).toBe(true);
     expect(fs.readFileSync(path.join(tempRepo, ".gitignore"), "utf8")).toContain(".jeeves/");
   });
 });

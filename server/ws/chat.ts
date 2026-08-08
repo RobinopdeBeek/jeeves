@@ -1,9 +1,21 @@
 import { nanoid } from "nanoid";
 import type { UIMessage, UIMessageChunk } from "ai";
 import type {
+  ChatAttachment,
   PermissionOptionPart,
   PermissionRequestData,
+  PromptCapabilities,
 } from "../../shared/chat-ws.js";
+import {
+  assertAttachmentsAllowed,
+  EMPTY_PROMPT_CAPABILITIES,
+  normalizePromptCapabilities,
+} from "../../shared/prompt-capabilities.js";
+import {
+  buildPromptContentBlocks,
+  buildSeedPromptContentBlocks,
+  userMessageParts,
+} from "./acp-content.js";
 import {
   decideHeadlessPermission,
   decideInteractivePermission,
@@ -15,14 +27,58 @@ export {
   decideInteractivePermission,
 } from "./acp-permissions.js";
 
+/** How the agent process ended, with whatever it said on stderr. */
+export interface AcpExit {
+  code: number | null;
+  signal: string | null;
+  /** Tail of the child's stderr — the only diagnostic a crashed CLI leaves. */
+  stderr: string;
+}
+
 /** Injected stdio boundary for `agent acp` (mocked in tests). */
 export interface AcpProcess {
   write(line: string): void;
   onLine(handler: (line: string) => void): void;
+  /** Fired when the agent exits on its own (crash, auth abort, kill). */
+  onExit?(handler: (exit: AcpExit) => void): void;
   kill(): void;
 }
 
+/**
+ * Handshake RPCs must not hang forever: a wedged CLI would otherwise strand
+ * the composer on "Starting agent session…" with nothing to report.
+ */
+const HANDSHAKE_TIMEOUT_MS = 60_000;
+/**
+ * `authenticate` starts an interactive browser login. A background server can
+ * never complete one, so cap the wait and turn it into actionable advice.
+ */
+const AUTHENTICATE_TIMEOUT_MS = 15_000;
+/** Measured ~850ms against the real CLI; generous headroom, still bounded. */
+const SET_CONFIG_OPTION_TIMEOUT_MS = 30_000;
+
+/** The agent has no usable credentials; no amount of retrying helps. */
+export class AcpAuthError extends Error {
+  constructor(detail: string) {
+    super(
+      `Cursor Agent CLI is not authenticated (${detail}). Set CURSOR_API_KEY in ` +
+        ".env or run `agent login`, then restart Jeeves.",
+    );
+    this.name = "AcpAuthError";
+  }
+}
+
 export type SpawnAcp = (cwd: string) => AcpProcess | Promise<AcpProcess>;
+
+/** ACP session config option (`session/new` → `configOptions`). */
+export interface AcpSessionConfigOption {
+  id: string;
+  name?: string;
+  category?: string;
+  type?: string;
+  currentValue?: string | null;
+  options?: Array<{ value: string; name?: string; description?: string }>;
+}
 
 export interface AcpLiveCallbacks {
   onStatus: (status: "ai-working" | "needs-user") => void;
@@ -31,18 +87,42 @@ export interface AcpLiveCallbacks {
   onTurnComplete?: () => void;
   /** Profile-owned framing for live draft body → agent prompt. */
   frameUserMessage?: (userText: string, liveDraftBody: string) => string;
+  /** The agent switched model on its own (rate limit, fallback). */
+  onModelChanged?: (value: string) => void;
+  /**
+   * Rewrite live `data:` attachments to sidecar pointers before transcript
+   * persist / ACP prompt (ADR 0017). Omit in unit tests that keep data URLs.
+   */
+  persistAttachments?: (
+    attachments: ChatAttachment[],
+  ) => ChatAttachment[];
+  /** Resolve pointer or data: URL → base64 for ACP ContentBlocks. */
+  resolveAttachmentBytes?: (att: ChatAttachment) => {
+    mimeType: string;
+    data: string;
+  };
 }
 
-export interface OpenSessionOptions {
-  cwd: string;
-  /** Injected when history is empty — drives the agent's opening question. */
-  openingPrompt: string;
+/**
+ * Session-scoped state a real chat needs on top of the ACP handshake.
+ * Applied by {@link AcpBridge.adopt}, so a pre-warmed spare can be claimed.
+ */
+export interface AdoptSessionOptions {
+  /**
+   * Injected when history is empty — drives the agent's opening question.
+   * Null skips the auto turn (Project Chat warm-and-user-first).
+   */
+  openingPrompt: string | null;
   history?: UIMessage[];
   /**
-   * Live chat: auto-approve reads/shell/exchange writes; prompt only for
-   * non-exchange file writes.
+   * Live chat: `cursor-like` auto-approves reads/shell/exchange writes;
+   * `project-chat` auto-approves reads only (shell + file writes prompt).
    */
   interactivePermissionPolicy?: InteractivePermissionPolicy;
+}
+
+export interface OpenSessionOptions extends AdoptSessionOptions {
+  cwd: string;
 }
 
 /**
@@ -52,8 +132,12 @@ export interface OpenSessionOptions {
  */
 export type HeadlessPermissionPolicy = "cursor-like";
 
-/** Live chat Cursor-like defaults — auto-approve routine; prompt for crucial. */
-export type InteractivePermissionPolicy = "cursor-like";
+/**
+ * Live chat permission policy:
+ * - cursor-like: auto-approve reads/shell/exchange; prompt for other file writes
+ * - project-chat: auto-approve reads only; prompt for shell and file writes
+ */
+export type InteractivePermissionPolicy = "cursor-like" | "project-chat";
 
 export interface RunToCompletionOptions {
   cwd: string;
@@ -139,6 +223,12 @@ export class AcpBridge {
   private headlessFail: ((err: Error) => void) | null = null;
   /** Live Cursor-like auto-approve; prompt for non-exchange file writes. */
   private interactivePolicy: InteractivePermissionPolicy | null = null;
+  /** Negotiated from initialize; omitted fields fail closed. */
+  private promptCapabilities: PromptCapabilities = {
+    ...EMPTY_PROMPT_CAPABILITIES,
+  };
+  /** `session/new` config options; the `model` selector drives live switching. */
+  private modelOption: AcpSessionConfigOption | null = null;
 
   constructor(
     private readonly deps: { spawn: SpawnAcp } & Partial<AcpLiveCallbacks>,
@@ -148,6 +238,9 @@ export class AcpBridge {
       onTranscript: deps.onTranscript ?? (() => {}),
       onTurnComplete: deps.onTurnComplete,
       frameUserMessage: deps.frameUserMessage,
+      onModelChanged: deps.onModelChanged,
+      persistAttachments: deps.persistAttachments,
+      resolveAttachmentBytes: deps.resolveAttachmentBytes,
     };
   }
 
@@ -157,6 +250,44 @@ export class AcpBridge {
 
   getMessages(): UIMessage[] {
     return this.messages;
+  }
+
+  getPromptCapabilities(): PromptCapabilities {
+    return this.promptCapabilities;
+  }
+
+  /** The agent's `model` config selector, or null when it advertises none. */
+  getModelOption(): AcpSessionConfigOption | null {
+    return this.modelOption;
+  }
+
+  getCurrentModelValue(): string | null {
+    return this.modelOption?.currentValue ?? null;
+  }
+
+  /**
+   * Switch model in place via `session/set_config_option` (~850ms, keeps the
+   * conversation). No-op when the session is already on `value`.
+   */
+  async setModelValue(value: string): Promise<void> {
+    const option = this.modelOption;
+    if (!option) throw new Error("agent does not advertise a model selector");
+    if (option.currentValue === value) return;
+    if (!this.sessionId) throw new Error("session not open");
+    const result = (await this.rpc(
+      "session/set_config_option",
+      { sessionId: this.sessionId, configId: option.id, value },
+      SET_CONFIG_OPTION_TIMEOUT_MS,
+    )) as { configOptions?: unknown } | undefined;
+    // The agent answers with the complete config state; fall back to the
+    // requested value when it answers with nothing useful.
+    const updated = findModelConfigOption(result?.configOptions);
+    this.modelOption = updated ?? { ...option, currentValue: value };
+  }
+
+  /** True while the handshaked session still has a living process behind it. */
+  hasOpenSession(): boolean {
+    return this.sessionId != null && this.process != null;
   }
 
   getPendingPermissionIds(): string[] {
@@ -240,47 +371,114 @@ export class AcpBridge {
   }
 
   /**
-   * Start an ACP session. Empty history runs the opening prompt turn.
-   * Non-empty history loads messages and waits for the first user send (seed-once).
+   * Spawn `agent acp` and run the handshake, then {@link adopt} the session
+   * state. The process is model-agnostic — the model is a session config
+   * option, applied after the handshake.
    */
   async openSession(options: OpenSessionOptions): Promise<void> {
+    this.process = await this.deps.spawn(options.cwd);
+    this.process.onLine((line) => this.handleLine(line));
+    this.process.onExit?.((exit) => this.handleProcessExit(exit));
+
+    const initResult = (await this.rpc(
+      "initialize",
+      {
+        protocolVersion: 1,
+        clientCapabilities: {
+          fs: { readTextFile: false, writeTextFile: false },
+          terminal: false,
+          // Required before the agent will advertise session config options.
+          session: { configOptions: { boolean: {} } },
+        },
+        clientInfo: { name: "jeeves-acp-bridge", version: "0.1.0" },
+      },
+      HANDSHAKE_TIMEOUT_MS,
+    )) as {
+      agentCapabilities?: { promptCapabilities?: unknown };
+    };
+    this.promptCapabilities = normalizePromptCapabilities(
+      initResult?.agentCapabilities?.promptCapabilities,
+    );
+    this.sessionId = await this.createAcpSession(options.cwd);
+
+    this.adopt(options);
+  }
+
+  /**
+   * Bind a handshaked session to one chat. Empty history + non-null
+   * openingPrompt runs that turn; empty history + null openingPrompt stays
+   * warm with no auto agent message; non-empty history loads messages and waits
+   * for the first user send (seed-once).
+   *
+   * Touches no ACP state, so a pre-warmed spare can be claimed with this after
+   * its handshake has already completed.
+   */
+  adopt(options: AdoptSessionOptions): void {
+    if (!this.sessionId) throw new Error("session not open");
     this.messages = options.history ? [...options.history] : [];
     this.contextSeeded = this.messages.length === 0;
     this.interactivePolicy = options.interactivePermissionPolicy ?? null;
-    this.process = await this.deps.spawn(options.cwd);
-    this.process.onLine((line) => this.handleLine(line));
 
-    await this.rpc("initialize", {
-      protocolVersion: 1,
-      clientCapabilities: {
-        fs: { readTextFile: false, writeTextFile: false },
-        terminal: false,
-      },
-      clientInfo: { name: "jeeves-acp-bridge", version: "0.1.0" },
-    });
-    await this.rpc("authenticate", { methodId: "cursor_login" });
-    const created = (await this.rpc("session/new", {
-      cwd: options.cwd,
-      mcpServers: [],
-    })) as { sessionId: string };
-    this.sessionId = created.sessionId;
-
-    if (this.messages.length === 0) {
+    if (this.messages.length === 0 && options.openingPrompt !== null) {
       this.contextSeeded = true;
       // Fire-and-forget so acquire can return and the client can attach mid-turn.
       void this.runPromptTurn(options.openingPrompt, { recordUser: false });
     }
   }
 
+  /**
+   * `session/new`, authenticating only when the agent says it must. Calling
+   * `authenticate` up front opens an interactive browser login even for an
+   * already-credentialed CLI, and that login never returns here.
+   */
+  private async createAcpSession(cwd: string): Promise<string> {
+    try {
+      return await this.newSession(cwd);
+    } catch (err) {
+      if (!isAuthRequired(err)) throw err;
+      try {
+        await this.rpc(
+          "authenticate",
+          { methodId: "cursor_login" },
+          AUTHENTICATE_TIMEOUT_MS,
+        );
+        return await this.newSession(cwd);
+      } catch {
+        throw new AcpAuthError(rpcMessage(err));
+      }
+    }
+  }
+
+  private async newSession(cwd: string): Promise<string> {
+    const created = (await this.rpc(
+      "session/new",
+      { cwd, mcpServers: [] },
+      HANDSHAKE_TIMEOUT_MS,
+    )) as { sessionId: string; configOptions?: unknown };
+    this.modelOption = findModelConfigOption(created.configOptions);
+    return created.sessionId;
+  }
+
   /** Send a user message; chunks arrive via attach / onChunk buffering. */
   async sendMessage(
     text: string,
-    opts?: { liveDraftBody?: string },
+    opts?: {
+      liveDraftBody?: string;
+      attachments?: ChatAttachment[];
+      /** Client UIMessage id — persisted so branch pickers match without remount. */
+      messageId?: string;
+    },
   ): Promise<void> {
     if (!this.sessionId) throw new Error("session not open");
+    const attachments = opts?.attachments ?? [];
+    if (!text.trim() && attachments.length === 0) {
+      throw new Error("Message must include text or at least one attachment.");
+    }
     await this.runPromptTurn(text, {
       recordUser: true,
       liveDraftBody: opts?.liveDraftBody,
+      attachments,
+      messageId: opts?.messageId,
     });
   }
 
@@ -342,9 +540,42 @@ export class AcpBridge {
     this.pendingPermissions.clear();
     this.headlessPolicy = null;
     this.headlessFail = null;
-    this.process?.kill();
+    const process = this.process;
     this.process = null;
     this.sessionId = null;
+    this.failPending(new Error("ACP session closed"));
+    process?.kill();
+  }
+
+  /**
+   * The agent died on its own. Everything waiting on it must fail now —
+   * otherwise an open handshake or turn hangs for the life of the server.
+   */
+  private handleProcessExit(exit: AcpExit): void {
+    if (!this.process) return;
+    this.process = null;
+    this.sessionId = null;
+
+    const stderr = exit.stderr.trim();
+    const how =
+      exit.signal != null ? `signal ${exit.signal}` : `code ${exit.code ?? "unknown"}`;
+    const err = new Error(
+      `Cursor Agent CLI exited (${how})${stderr ? `: ${stderr}` : ""}`,
+    );
+    this.failPending(err);
+
+    if (this.activity === "ai-working") {
+      this.pushChunk({ type: "error", errorText: err.message });
+      this.currentTextId = null;
+      this.currentAssistant = null;
+      this.endTurn();
+    }
+  }
+
+  private failPending(err: Error): void {
+    const waiters = [...this.pending.values()];
+    this.pending.clear();
+    for (const waiter of waiters) waiter.reject(err);
   }
 
   private beginTurn(): void {
@@ -399,18 +630,36 @@ export class AcpBridge {
     opts: {
       recordUser: boolean;
       liveDraftBody?: string;
+      attachments?: ChatAttachment[];
+      messageId?: string;
     },
   ): Promise<void> {
     if (!this.sessionId || !this.process) throw new Error("session not open");
 
+    let attachments = opts.attachments ?? [];
+    // Fail closed before mutating transcript / starting the turn.
+    if (opts.recordUser) {
+      if (!text.trim() && attachments.length === 0) {
+        throw new Error("Message must include text or at least one attachment.");
+      }
+      assertAttachmentsAllowed(attachments, this.promptCapabilities);
+      if (this.live.persistAttachments && attachments.length > 0) {
+        attachments = this.live.persistAttachments(attachments);
+      }
+    }
+
     this.beginTurn();
 
     if (opts.recordUser) {
+      const clientId = opts.messageId?.trim();
       this.messages.push({
-        id: nanoid(10),
+        id: clientId && clientId.length > 0 ? clientId : nanoid(10),
         role: "user",
-        parts: [{ type: "text", text }],
+        parts: userMessageParts(text, attachments),
       });
+      // Persist before the prompt RPC so a mid-turn reattach (thread switch)
+      // can seed the user message from disk even if the warm bridge is gone.
+      this.live.onTranscript(this.messages);
     }
 
     const messageId = nanoid(10);
@@ -431,18 +680,30 @@ export class AcpBridge {
         ? this.live.frameUserMessage(text, opts.liveDraftBody)
         : text;
 
-    let promptText = agentText;
-    if (opts.recordUser) {
-      if (!this.contextSeeded) {
-        promptText = this.formatPromptWithHistory(agentText);
-        this.contextSeeded = true;
-      }
+    const resolveBytes = this.live.resolveAttachmentBytes;
+    let promptBlocks;
+    if (opts.recordUser && !this.contextSeeded) {
+      promptBlocks = buildSeedPromptContentBlocks({
+        history: this.messages,
+        latestText: agentText,
+        latestAttachments: attachments,
+        caps: this.promptCapabilities,
+        resolveBytes,
+      });
+      this.contextSeeded = true;
+    } else {
+      promptBlocks = buildPromptContentBlocks({
+        text: agentText,
+        attachments: opts.recordUser ? attachments : [],
+        caps: this.promptCapabilities,
+        resolveBytes,
+      });
     }
 
     try {
       const result = (await this.rpc("session/prompt", {
         sessionId: this.sessionId,
-        prompt: [{ type: "text", text: promptText }],
+        prompt: promptBlocks,
       })) as { stopReason?: string } | undefined;
       const cancelled = result?.stopReason === "cancelled";
       if (this.currentTextId) {
@@ -473,24 +734,6 @@ export class AcpBridge {
     }
   }
 
-  private formatPromptWithHistory(latestUserText: string): string {
-    const prior = this.messages.slice(0, -1);
-    if (prior.length === 0) return latestUserText;
-    const lines = prior.map((m) => {
-      const body = m.parts
-        .filter((p): p is { type: "text"; text: string } => p.type === "text")
-        .map((p) => p.text)
-        .join("");
-      return `${m.role === "user" ? "User" : "Assistant"}: ${body}`;
-    });
-    return [
-      "Prior transcript (continue from here; do not repeat answered questions):",
-      ...lines,
-      "",
-      `User: ${latestUserText}`,
-    ].join("\n");
-  }
-
   private pushChunk(chunk: UIMessageChunk): void {
     this.turnChunks.push(chunk);
     if (this.subscriber) {
@@ -513,6 +756,7 @@ export class AcpBridge {
         update?: {
           sessionUpdate?: string;
           content?: { type?: string; text?: string };
+          configOptions?: unknown;
         };
         toolCall?: { toolCallId?: string; title?: string };
         options?: Array<{ optionId?: string; name?: string; kind?: string }>;
@@ -528,7 +772,7 @@ export class AcpBridge {
       const waiter = this.pending.get(msg.id);
       if (!waiter) return;
       this.pending.delete(msg.id);
-      if (msg.error !== undefined) waiter.reject(msg.error);
+      if (msg.error !== undefined) waiter.reject(rpcError(msg.error));
       else waiter.resolve(msg.result);
       return;
     }
@@ -553,6 +797,9 @@ export class AcpBridge {
           id: this.currentTextId,
           delta,
         });
+      } else if (update?.sessionUpdate === "config_option_update") {
+        // The agent may switch model on its own (rate limit, fallback).
+        this.applyConfigOptionUpdate(update.configOptions);
       } else if (
         this.currentTextId &&
         (update?.sessionUpdate === "tool_call" ||
@@ -570,6 +817,15 @@ export class AcpBridge {
       if (this.currentTextId) this.textInterrupted = true;
       this.projectPermissionRequest(msg.id, msg.params);
     }
+  }
+
+  private applyConfigOptionUpdate(configOptions: unknown): void {
+    const updated = findModelConfigOption(configOptions);
+    if (!updated) return;
+    const before = this.modelOption?.currentValue ?? null;
+    this.modelOption = updated;
+    const after = updated.currentValue ?? null;
+    if (after != null && after !== before) this.live.onModelChanged?.(after);
   }
 
   private projectPermissionRequest(
@@ -622,7 +878,7 @@ export class AcpBridge {
     }
 
     if (this.interactivePolicy != null) {
-      const decision = decideInteractivePermission(data);
+      const decision = decideInteractivePermission(data, this.interactivePolicy);
       if (decision.action === "allow") {
         this.respondToPermission(requestId, decision.optionId);
         return;
@@ -688,16 +944,91 @@ export class AcpBridge {
     return undefined;
   }
 
-  private rpc(method: string, params: unknown): Promise<unknown> {
+  /** `timeoutMs` guards the handshake; prompt turns stay unbounded. */
+  private rpc(
+    method: string,
+    params: unknown,
+    timeoutMs?: number,
+  ): Promise<unknown> {
     if (!this.process) return Promise.reject(new Error("no process"));
     const id = this.nextRpcId++;
-    this.process.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+    try {
+      this.process.write(
+        JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n",
+      );
+    } catch (err) {
+      return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+    }
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer =
+        timeoutMs == null
+          ? undefined
+          : setTimeout(() => {
+              this.pending.delete(id);
+              reject(
+                new Error(
+                  `Cursor Agent CLI did not answer ${method} within ${Math.round(
+                    timeoutMs / 1000,
+                  )}s`,
+                ),
+              );
+            }, timeoutMs);
+      this.pending.set(id, {
+        resolve: (value) => {
+          if (timer) clearTimeout(timer);
+          resolve(value);
+        },
+        reject: (err) => {
+          if (timer) clearTimeout(timer);
+          reject(err);
+        },
+      });
     });
   }
 
   private respond(id: number, result: unknown): void {
     this.process?.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
   }
+}
+
+/**
+ * Pick the model selector out of an ACP `configOptions` array. The spec keys it
+ * by `category`; fall back to a literal `model` id for agents that omit it.
+ */
+export function findModelConfigOption(
+  configOptions: unknown,
+): AcpSessionConfigOption | null {
+  if (!Array.isArray(configOptions)) return null;
+  const candidates = configOptions.filter(
+    (o): o is AcpSessionConfigOption =>
+      o != null && typeof o === "object" && typeof (o as { id?: unknown }).id === "string",
+  );
+  return (
+    candidates.find((o) => o.category === "model") ??
+    candidates.find((o) => o.id === "model") ??
+    null
+  );
+}
+
+/** JSON-RPC error payloads are plain objects; keep them readable as Errors. */
+function rpcError(raw: unknown): Error {
+  const err = new Error(rpcMessage(raw));
+  err.name = "AcpRpcError";
+  return err;
+}
+
+function rpcMessage(raw: unknown): string {
+  if (raw instanceof Error) return raw.message;
+  if (raw && typeof raw === "object") {
+    const obj = raw as { message?: unknown; data?: { message?: unknown } };
+    if (typeof obj.message === "string" && obj.message) return obj.message;
+    if (typeof obj.data?.message === "string" && obj.data.message) {
+      return obj.data.message;
+    }
+  }
+  return String(raw);
+}
+
+function isAuthRequired(err: unknown): boolean {
+  return /authenticat|unauthori|not logged in/i.test(rpcMessage(err));
 }

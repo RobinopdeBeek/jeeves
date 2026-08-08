@@ -1,80 +1,44 @@
 # Jeeves — Architecture
 
-The structural source of truth for jeeves: how the system is shaped, what it runs on, and
-where the seams are.
+The structural source of truth for jeeves: how the system is shaped, what it runs on, and where the seams are. Keep this file high-altitude — update it only when structure changes (new process, new deep module, new store boundary, stack choice). Implementation detail belongs in code, ADRs, and `CONTEXT.md`.
 
-> Domain vocabulary → [`CONTEXT.md`](./CONTEXT.md) · Decision records → [`docs/adr/`](./docs/adr/)
-> · Column-level schemas → `server/db/schema.ts` (code is the source of truth for columns)
+> Domain vocabulary → [`CONTEXT.md`](./CONTEXT.md) · Decision records → [`docs/adr/`](./docs/adr/) · Column-level schemas → `server/db/schema.ts` (code is the source of truth for columns)
 
-Jeeves is a personal workflow board that runs an AI-assisted development pipeline: cards move
-through phase columns, typed steps run inside each column, and artifacts accumulate per step
-while the human reviews asynchronously. The board is a **pipeline monitor and async review
-tool** — while the AI builds vertical slices autonomously, the human is defining the next
-feature and steps in only where judgment is needed.
+Jeeves is a personal workflow board that runs an AI-assisted development pipeline: cards move through phase columns, typed steps run inside each column, and artifacts accumulate per step while the human reviews asynchronously. The board is a **pipeline monitor and async review tool** — while the AI builds vertical slices autonomously, the human is defining the next feature and steps in only where judgment is needed.
 
 ---
 
 ## Overall architecture
 
-A single Node.js process orchestrates everything and owns the queue, chat sessions,
-worktrees, and preview slot as in-memory state
-([ADR 0013](./docs/adr/0013-one-long-lived-process-owns-orchestration-state.md)):
-five deep modules carry all behaviour, and the HTTP routes and React client are thin
-adapters over them. Workflow is code
-(pipelines are TypeScript constants), state is data (SQLite holds per-card state and
-round-scoped records), and file-shaped output lives in the project's artifact folder with
-SQLite as its index. Each target repository owns a gitignored **project store** at
-`<repo>/.jeeves/` ([ADR 0011](./docs/adr/0011-project-store-in-target-repo-gitignored.md)).
-The reasoning behind these choices is recorded as decision records in [`docs/adr/`](./docs/adr/).
+A single Node.js process orchestrates everything and owns the queue, chat sessions, worktrees, and preview slot as in-memory state ([ADR 0013](./docs/adr/0013-one-long-lived-process-owns-orchestration-state.md)): deep modules carry behaviour; HTTP routes and the React client are thin adapters ([ADR 0006](./docs/adr/0006-thin-adapters-over-five-deep-modules.md)). Workflow is code (pipelines are TypeScript constants), state is data (SQLite), and file-shaped output lives in the project's artifact folder with SQLite as its index ([ADR 0002](./docs/adr/0002-workflow-is-code-state-is-data.md), [ADR 0003](./docs/adr/0003-sqlite-is-the-index-files-are-the-truth.md)). Each target repository owns a gitignored **project store** at `<repo>/.jeeves/` ([ADR 0011](./docs/adr/0011-project-store-in-target-repo-gitignored.md)). Reasoning for these choices lives in [`docs/adr/`](./docs/adr/).
 
 ### System context (runtime view)
-
-Jeeves' interesting architecture is between processes. One Node.js process orchestrates
-external tools around a target repository:
 
 ```
 Laptop (always on)
 │
-├── Hono server ─── node server/index.ts        (the one long-lived process)
-│     ├── HTTP        → React board UI + REST API + SSE board updates
-│     ├── /artifacts  → serves the artifact folder (eval iframe, screenshots)
-│     ├── /ws/chat    → AcpBridge ⇄ `agent acp` subprocess (JSON-RPC)   [AI Chat steps]
-│     ├── queue       → ExecutionEngine → @cursor/sdk local run          [AI Execution steps]
-│     └── preview     → ExecutionEngine → host-process preview           [Human Review testing]
-│                          │
-│                          ├── self-managed git worktree (WorktreeManager)
-│                          ├── fresh per-run worktree under <repo>/.jeeves/worktrees/
-│                          └── @cursor/sdk local (composer-2.5) via CURSOR_API_KEY
+├── Hono server — node server/index.ts        (the one long-lived process)
+│     ├── HTTP / SSE   → React board UI + REST + live board updates
+│     ├── /artifacts   → project-store files (eval iframe, screenshots)
+│     ├── /ws/chat     → AcpBridge ⇄ `agent acp`          [AI Chat]
+│     ├── queue        → ExecutionEngine → @cursor/sdk    [AI Execution]
+│     └── preview      → host-process preview             [Human Review]
 │
-├── Jeeves app repo — server, client, prompts only (no per-project board state)
-├── Target repo(s) — application source; git-clean (`.jeeves/` gitignored)
-│     └── .jeeves/  — per-project store (created on first use)
-│           ├── jeeves.db
-│           ├── data/cards/<cardId>/<round>/   ← artifact folder
-│           └── worktrees/<cardId>/            ← ephemeral agent checkouts
-└── Tailscale — phone/tablet/other machines reach the board privately
+├── Jeeves app repo — server, client, prompts (no per-project board state)
+├── Target repo(s) — application source; git-clean
+│     └── .jeeves/ — project store (jeeves.db, data/, worktrees/)
+└── Tailscale — private access from other devices
 ```
 
 What crosses each boundary:
 
-- **Browser ⇄ server:** REST for CRUD, transitions, and preview lifecycle; SSE for live board
-  state; WebSocket for streaming AI chat; plain HTTP for root-confined artifact files. The
-  evaluation renders in an opaque-origin `sandbox="allow-scripts"` iframe. The parent owns
-  browser-local QA state and synchronizes it through source-validated `postMessage`.
-- **Server ⇄ ACP agent:** the server spawns `agent acp` per chat session, pipes JSON-RPC, and
-  projects events into AI SDK `UIMessage` parts inside `AcpBridge` (including permission
-  requests). Host-produced artifacts (Grill session, spec, chat transcripts) are written
-  by the server directly into the artifact folder.
-- **Server ⇄ agent worktree:** the agent runs in a self-managed git worktree via `@cursor/sdk` local. It has no database access — it reads the injected inputs and the per-card `manifest.json` from the project store. Worktree-produced artifacts (Plan, eval HTML, screenshots, structured outputs) are written to known **exchange files** under `<worktree>/.jeeves/` (e.g. `plan.md`). A generic finalization callback harvests them into `<repo>/.jeeves/data/` and removes exchange files before teardown; failure preserves diagnostics.
-- **Worktree ⇄ target repo:** each run gets a fresh worktree on one durable card branch. Features
-  and standalone tasks branch from the project's explicit local default ref; child tasks branch
-  from their feature branch. Every base is resolved and recorded by SHA—never inferred from the
-  host checkout or updated from remote implicitly.
-- **Preview ⇄ target repo:** Human Review testing recreates the exact evaluated `git_sha` in a worktree and runs Jeeves-owned project commands as a host child process with an environment allowlist, readiness check, published port, and one lazy-retained slot.
+- **Browser ⇄ server:** REST for CRUD and transitions; SSE for board state; WebSocket for streaming AI chat; HTTP for root-confined artifact files. Evaluation HTML runs in a sandboxed iframe; QA checkbox state stays browser-local and syncs via validated `postMessage`.
+- **Server ⇄ ACP agent:** server spawns `agent acp`, pipes JSON-RPC, and projects events into AI SDK `UIMessage` parts inside `AcpBridge`. Host-written chat artifacts land in the project store.
+- **Server ⇄ agent worktree:** `@cursor/sdk` local runs in a self-managed worktree with no DB access. Agents write short-lived **exchange files**; the host harvests them into `<repo>/.jeeves/data/` before teardown ([ADR 0010](./docs/adr/0010-self-managed-worktrees-cursor-sdk.md)).
+- **Worktree ⇄ target repo:** each run uses a fresh worktree on one durable card branch; bases are recorded by SHA, never inferred from the host checkout.
+- **Preview ⇄ target repo:** Human Review recreates the evaluated `git_sha` and runs Jeeves-owned project commands as a host child process (one lazy-retained slot).
 
-Migration path: moving to a VPS is "copy each target repo including its `.jeeves/` store
-(or back up `<repo>/.jeeves/` separately), point Jeeves at `repo_path`, run the same
-command" — no code changes.
+Migration: copy each target repo (including `.jeeves/`), point Jeeves at `repo_path`, run the same command — no code changes.
 
 ---
 
@@ -82,114 +46,62 @@ command" — no code changes.
 
 | Concern | Choice | Why |
 |---|---|---|
-| Server | Hono + Node.js | Thin adapter over a long-lived orchestrator process ([ADR 0013](./docs/adr/0013-one-long-lived-process-owns-orchestration-state.md)) |
-| Database | SQLite via Drizzle (better-sqlite3) | Single-user, zero setup; one `jeeves.db` per project under `<repo>/.jeeves/` |
-| UI | React + Tailwind | Responsive web covers laptop, tablet, and phone |
-| Within-column reorder | `@dnd-kit` | Cards move between columns via pipeline logic, not drag — DnD is only for reordering inside a column (Backlog, etc.) |
-| Base components | shadcn/ui | Card, Badge, Button, Dialog, Sheet, Progress |
-| Icons | Tabler Icons (`@tabler/icons-react`) | Project standard; shadcn `iconLibrary` is `tabler` |
-| Markdown editor | MDXEditor | True WYSIWYG that outputs clean markdown |
-| Execution engine | Self-managed worktrees + `@cursor/sdk` | Jeeves owns git worktree lifecycle; SDK local runs on host ([ADR 0010](./docs/adr/0010-self-managed-worktrees-cursor-sdk.md)) |
-| Agent | `@cursor/sdk` local (`composer-2.5`) | Existing subscription + Cursor's codebase intelligence; no Docker for agent runs |
-| Chat state & streaming | Vercel AI SDK 5 (`ai`, `@ai-sdk/react`) | `useChat`, typed `UIMessage` parts, custom transport |
-| Chat UI | assistant-ui (`@assistant-ui/react`, `@assistant-ui/react-ai-sdk`) | Pre-built message list, composer, streaming indicators over AI SDK |
-| AI chat transport | Cursor ACP bridge | Interactive sessions with full codebase context; ACP projected to `UIMessage` server-side |
-| Networking | Tailscale | Private access from any device, zero config |
+| Server | Hono + Node.js | Thin adapter over a long-lived orchestrator ([ADR 0013](./docs/adr/0013-one-long-lived-process-owns-orchestration-state.md)) |
+| Database | SQLite via Drizzle | Single-user, zero setup; one `jeeves.db` per project store |
+| UI | React + Tailwind + shadcn/ui | Responsive web across devices |
+| Execution | Self-managed worktrees + `@cursor/sdk` local | Jeeves owns git lifecycle; agent runs on host ([ADR 0010](./docs/adr/0010-self-managed-worktrees-cursor-sdk.md)) |
+| Chat streaming | Vercel AI SDK + assistant-ui | `UIMessage` parts + pre-built chat chrome ([ADR 0008](./docs/adr/0008-ai-sdk-assistant-ui-agent-runner.md)) |
+| AI chat transport | Cursor ACP (`agent acp`) | Interactive sessions with codebase context |
+| Networking | Tailscale | Private multi-device access |
+
+Chat (ACP) and execution (`@cursor/sdk`) share AI SDK stream types but use different backends ([ADR 0008](./docs/adr/0008-ai-sdk-assistant-ui-agent-runner.md)).
 
 ### Non-goals
 
 Deliberately not built (revisit only when the need is real):
 
-- No cloud dependencies — no Supabase, no Cloudflare Workers, no deployment pipeline
+- No cloud dependencies — no Supabase, Cloudflare Workers, or deployment pipeline
 - No parallel execution — a sequential queue, one run at a time
 - No native mobile app — responsive web only
 - No bespoke diff engine — Implement tab uses assistant-ui DiffViewer; evaluation HTML may inline diffs
 - No workflow editor — pipelines are code
   ([ADR 0002](./docs/adr/0002-workflow-is-code-state-is-data.md))
 - No prototype step in the pipeline
-- No CopilotKit/AG-UI, LangChain/Mastra/CrewAI, or AI Elements — see
-  [ADR 0008](./docs/adr/0008-ai-sdk-assistant-ui-agent-runner.md)
+- No CopilotKit/AG-UI, LangChain/Mastra/CrewAI, or AI Elements — see [ADR 0008](./docs/adr/0008-ai-sdk-assistant-ui-agent-runner.md)
 - No direct provider API calls (`generateObject`/`generateText`) — all inference via Cursor
-- No HarnessAgent as primary execution path until Cursor adapter exists and API stabilizes
+- No HarnessAgent as primary execution path until a Cursor adapter exists and stabilizes
 - No Vercel Sandbox/Workflows/AI Gateway hosted infra
-
----
-
-## AI chat & execution layer
-
-Chat and execution share AI SDK stream types but use different backends today
-([ADR 0008](./docs/adr/0008-ai-sdk-assistant-ui-agent-runner.md)):
-
-```
-Browser                          Server
-  useChat + assistant-ui  ←WS→  AcpBridge  ⇄  agent acp (JSON-RPC)     [AI Chat steps]
-  StepExecution (run log)   ←SSE→ ExecutionEngine → AgentRunner           [AI Execution steps]
-                                                          └── @cursor/sdk local (composer-2.5)
-```
-
-- **Chat:** `AcpBridge` is a long-lived push session: it owns ACP→`UIMessage` projection,
-  warm attach/catch-up buffering, and seed-once resume history. The warm registry
-  (`ChatSessionRegistry`: map + cap + writer slot) lives inside the AcpBridge module.
-  `openChat` loads transcript, resolves the step opener, and wires status/transcript
-  callbacks; the WebSocket `ChatConnection` is framing-only. The client never sees ACP
-  types. Permission requests render as custom message parts; responses flow back through the
-  transport. Transcripts serialize as `UIMessage[]` for artifact persistence and replay.
-- **Execution:** `AgentRunner` (`run(prompt, options): AsyncIterable<RunEvent>`) is the inner
-  seam inside `ExecutionEngine`. One call owns one temporary worktree and invokes a generic
-  finalization callback before cleanup so `ExecutionEngine` can harvest and enforce the Plan,
-  Implement, or AI Review postcondition. `@cursor/sdk` local is today's implementation; a future
-  HarnessAgent adapter would slot in without changing the board, queue, or chat UI.
-- **Structured skill outputs:** skills that must return parseable data (e.g. `/to-tasks`)
-  write JSON to a known worktree path; the runner harvests and validates with Zod on the host,
-  with retry on parse failure — not `generateObject` (which would bypass Cursor context and
-  add a provider billing path).
 
 ---
 
 ## Module map
 
-Five deep modules, each a small interface hiding a lot of behaviour. These interfaces are
-the **pre-agreed seams**: specs sketch their testing against them and all TDD happens at
-them. Everything else (routes, React components) is a thin adapter.
+Deep modules hide behaviour behind small seams; routes and React components stay thin adapters. Specs and TDD target these seams ([ADR 0006](./docs/adr/0006-thin-adapters-over-five-deep-modules.md)).
 
-| Module | Lives in | Interface (the seam) | What it hides |
+| Module | Lives in | Seam | What it hides |
 |---|---|---|---|
-| `PipelineEngine` | `server/pipelines.ts` | pipeline lookup by `(kind, hasParent)`; real `advance(card, trigger)` → patches + side-effects (`enqueue`, `close-chat`) | all column/step transition rules, auto-advance, board predicates (`canCreateSpec`), "workflow is code" |
-| `CardStore` | `server/db/` + card logic | CRUD, kind decision, fan-out, blocker edges, derived queries ("X of Y", queue candidates, Round N history); persists `advance` patches | SQLite/Drizzle, active/merged/done cards + tip drafts in ArtifactStore, every derivation rule |
-| `ArtifactStore` | `server/artifacts/store.ts` + routes | `save`, `harvest(worktree, declarations)`, `list(card)`, serve-path resolution; transcript upsert is file/index only | atomic/versioned files, metadata, root containment, manifest regeneration, lineage, rounds, supersession |
-| `ExecutionEngine` | `server/execution/` (`engine.ts`, `runner.ts`, `worktree-manager.ts`, `cursor-sdk-runner.ts`, `run-store.ts`, `events.ts`) | `enqueue(card, step)` + run events; `startPreview(card, gitSha)` / `stopPreview()`; dispatches `advance` side-effects on finish | `AgentRunner`, per-run worktrees/finalization, branch strategy, host-process preview lifecycle, sequential queue, blockers, restart recovery, eval sequencing |
-| `AcpBridge` | `server/ws/chat.ts` (+ `open-chat.ts`, `session-registry.ts`) | push-only `openSession` / `sendMessage` + `attach`/`onChunk`; headless `runToCompletion`; warm registry acquire/reattach; `openChat` for adapters | spawning `agent acp`, ACP→`UIMessage` projection, permission responses (incl. headless cursor-like policy), JSON-RPC piping, warm cap/eviction, seed-once history, disconnect/hand-off close |
+| `PipelineEngine` | `server/pipelines.ts` | `advance(card, trigger)` → patches + side-effects | column/step transition rules, auto-advance |
+| `CardStore` | `server/cards/` | CRUD, kind decision, fan-out, blockers, derived queries | SQLite card state and derivation rules |
+| `ArtifactStore` | `server/artifacts/` | `save` / `harvest` / `list` / serve-path | versioned files, manifests, rounds, lineage |
+| `ExecutionEngine` | `server/execution/` | `enqueue` + run events; preview start/stop | worktrees, `AgentRunner`, queue, preview |
+| `AcpBridge` | `server/ws/` | push session + `ChatSession` / `openChat` lifecycle | `agent acp`, `UIMessage` projection, warm sessions |
+| `ChatThreadStore` | `server/chat-threads/` | Project Chat thread index + transcript load/save | `chat_threads` + `data/chat/` files |
+| `CardAttachmentStore` | `server/attachments/` | card Info library CRUD | `card_attachments` + per-card attachment bytes |
 
-The AI-execution skill prompts live in `prompts/execution/` and are self-describing; the
-`ExecutionEngine` decides which skill runs when.
+Skill prompts under `prompts/execution/` are self-describing; `ExecutionEngine` chooses which runs when. Project Chat thread model/rewind and attachment sidecar rules are ADRs ([0015](./docs/adr/0015-project-chat-threads-and-chatsession.md), [0016](./docs/adr/0016-branchable-transcript-rewind.md), [0017](./docs/adr/0017-chat-attachment-sidecars.md)) — not restated here.
 
 ---
 
 ## Data model
 
-Entity definitions live in [`CONTEXT.md`](./CONTEXT.md); columns live in
-`server/db/schema.ts`. What belongs here is how the entities relate.
+Entity definitions live in [`CONTEXT.md`](./CONTEXT.md); columns live in `server/db/schema.ts`. Here is only how entities relate.
 
-- A **project** (a target repository) has many **cards**, a gitignored **project store** at
-  `<repo>/.jeeves/` (SQLite + artifact tree + worktrees — created on first use), its explicit
-  local default branch, and validated preview configuration; reviewed branches cannot alter
-  launch policy.
-- A **card** is the one entity for features and tasks on the board. Tasks shaping drafts
-  are versioned `tasks-draft` artifacts until fan-out ([ADR 0014](docs/adr/0014-tasks-drafts-are-versioned-artifacts.md)).
-  A card with a `parent_card_id` is a child task of that feature; blocked-by relationships are
-  card-to-card edges (`card_blockers`).
-- A card's lifecycle is its `status`: `active` → `merged` (child
-  tasks) or `done` (features and standalone tasks).
-- Each card has **card steps** — one mutable row per step holding *current* state only.
-- Everything historical hangs off the card as immutable, round-scoped records:
-  **artifacts**, **runs**, **change requests**, **decisions**, and **notifications**. A
-  changes-requested decision at round N begets round N+1.
-- An **artifact** row is metadata plus a path — the file itself lives in the project store's
-  artifact folder (`<repo>/.jeeves/data/cards/<cardId>/<round>/`). **Artifact lineage** links
-  each artifact to what it was derived from (transcript → grill → spec → tasks → plan →
-  impl → eval).
-  Evaluations are not committed to git; `git_sha` on the artifact row remains the link to the
-  reviewed diff ([ADR 0011](./docs/adr/0011-project-store-in-target-repo-gitignored.md)).
+- A **project** (target repository) owns cards, Project Chat threads, preview config, an explicit local default branch, and a gitignored **project store** at `<repo>/.jeeves/`.
+- A **card** is the board entity for features and tasks. Child tasks link via `parent_card_id`; blocked-by is card-to-card edges. Tasks shaping drafts are versioned `tasks-draft` artifacts until fan-out ([ADR 0014](./docs/adr/0014-tasks-drafts-are-versioned-artifacts.md)).
+- Card lifecycle `status`: `active` → `merged` (child tasks) or `done` (features / standalone tasks).
+- **Card steps** hold mutable *current* step state only.
+- History is immutable and round-scoped: **artifacts**, **runs**, **change requests**, **decisions**, **notifications**. A changes-requested decision at round N begets round N+1 ([ADR 0005](./docs/adr/0005-immutability-by-round.md)).
+- An **artifact** row is metadata + path; bytes live under the project store's card data tree. Lineage links derived-from (transcript → grill → spec → tasks → plan → impl → eval). Evaluations are not committed to git; `git_sha` pins the reviewed diff.
 
 ---
 
@@ -199,37 +111,22 @@ Column-level only; step mechanics live in `server/pipelines.ts` and the skill pr
 
 ### Feature (happy path)
 
-1. A card is captured in **Backlog**; the user picks **"Grill me →"**, making it a feature.
-2. **Define Feature**: a grill chat session whose hand-off is a **Grill session** Q&A
-   artifact ([ADR 0012](./docs/adr/0012-grill-session-qa-handoff.md)), then collaborative
-   spec authoring, then the feature is broken into tip `tasks-draft` slices with blocked-by edges.
-3. **Fan-out**: the host materializes active child task cards from the tip.
-4. Each child task runs **Implement Task** (Plan → Implement → AI Review) autonomously —
-   `/implement` split across three context windows — then **Prepare Eval** builds the Task
-   Evaluation before human Review. Blocked tasks wait for blocker merge; unblocked siblings
-   execute depth-first. Approval validates a temporary merge and integration check against
-   the current feature tip before merging and leaving the board.
-5. When all children are merged, the feature auto-advances to **Human Review**; Prepare Eval
-   builds the Feature Evaluation.
-6. On approval, **Finalize** runs Document and Deploy, opening a PR from the feature branch
-   to `main`. The card is done.
+1. Capture in **Backlog**; **"Grill me →"** makes it a feature.
+2. **Define Feature**: Grill → Spec → tip `tasks-draft` slices with blocked-by edges.
+3. **Fan-out** materializes active child task cards.
+4. Each child runs **Implement Task** (Plan → Implement → AI Review), then waits in **Human Review**. Approval merges into the feature tip after a temporary merge check.
+5. When all children are merged, the feature advances to **Human Review** with its Feature Evaluation.
+6. On approval, **Finalize** opens a PR from the feature branch to `main`; the card is done.
 
 ### Standalone task (happy path)
 
-1. A card is captured in **Backlog**; the user picks **"Implement now →"**.
-2. The card runs **Implement Task** autonomously, branching directly off `main`.
-3. The user approves in **Human Review**, and **Finalize** opens the PR. The card is done.
-
-In Human Review the evaluation's QA checklist gates the Approve button; only the
-`qa_complete` snapshot is persisted, on the decision row.
+1. Capture in **Backlog**; **"Implement now →"** makes it a standalone task.
+2. **Implement Task** runs autonomously (branch from the project default).
+3. Approve in **Human Review**; **Finalize** opens the PR; the card is done.
 
 ### Rework loop
 
-1. During Human Review the user collects **change requests** (typed manually or pushed from
-   AI-review findings / refactor opportunities) and requests changes instead of approving.
-2. The decision starts round N+1; the open change requests are its input and are marked
-   consumed. The old evaluation persists read-only.
-3. A **task** returns to Implement Task and re-implements against the requests; a
-   **feature** returns to the Tasks step, where a breakdown skill drafts new tasks from the
-   requests, and the loop continues through fan-out as usual.
-4. The new round arrives in Human Review badged Round N+1, with a fresh QA gate.
+1. In Human Review the user collects **change requests** and requests changes.
+2. Round N+1 starts; open change requests become its input; the old evaluation stays read-only.
+3. A **task** returns to Implement Task; a **feature** returns to Tasks for re-shaping, then fan-out as usual.
+4. The new round arrives in Human Review as Round N+1.

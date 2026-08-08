@@ -124,6 +124,25 @@ blocker relationship can be built in parallel or reordered.
 14. **Finalize + polish.** Document and Deploy steps; browser push on entering Human Review;
     notification dots (`COUNT(*) WHERE read_at IS NULL`); session meta from `runs`;
     "Restart step" button; step-history sidebar. (Blocked by 10.)
+15. **Project Chat (thread persistence + live ACP).** App shell Board|Chat|Files; `chat_threads`
+    in the project store + transcript files under `data/chat/`; REST list/create/rename/delete/
+    last-opened; desktop rail + mobile list; live text-only ACP via `createProjectChatSession`
+    (`thread:…` ids, null opener, project-chat permission policy, shared warm pool).
+    *Demo: open a Chat Thread, send a message, get a streamed reply against the Project checkout.*
+    (Follow-ons: model picker done; attachments — GitHub #39.)
+
+16. **ACP composer attachments.** Capability-gated ContentBlocks on `session/prompt` for
+    Project Chat, Grill, Spec assist, and Tasks assist; fail closed for unsupported types;
+    no in-app mic.
+
+17. **Edit/branch rewind (server).** Branch-aware Project Chat transcripts; `rewindProjectChat`
+    truncates or switches the active head, closes warm ACP, respawns, and seed-onces from the
+    kept path (mocked ACP coverage). REST `GET/POST …/transcript` + `…/rewind`. See
+    [ADR 0016](../adr/0016-branchable-transcript-rewind.md).
+
+18. **Edit/branch rewind (UI, #42).** Project Chat edit-and-send + sibling branch picker call
+    the server rewind seam (external branch adapter); remount reconnects ACP so the agent
+    reseeds from the kept path. Reload reads the branchable transcript for picker state.
 
 Note the inversion versus a layered plan: the review *loop* works first with a stub-quality
 evaluation (slice 9), then the evaluation's sections improve one prompt at a time (slice 11) —

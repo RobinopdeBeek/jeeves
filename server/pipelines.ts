@@ -384,8 +384,21 @@ export function advance(
     };
   }
 
-  // step-finished: status patch for the completed step; future rules may
-  // enqueue the next step / move columns here (seam exists even if minimal).
+  // step-finished: status patch for the completed step; Plan success chains
+  // to Implement on the same card so the task pipeline advances unattended.
+  if (trigger.stepKey === "plan" && trigger.outcome === "succeeded") {
+    return {
+      ok: true,
+      stepPatches: [
+        { key: "plan", status: "done" },
+        { key: "impl", status: "queued" },
+      ],
+      sideEffects: [
+        { type: "enqueue", cardId: card.id, stepKey: "impl" },
+      ],
+    };
+  }
+
   const stepStatus: StepStatus =
     trigger.outcome === "succeeded" ? "done" : "needs-user";
   return {

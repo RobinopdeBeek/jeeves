@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cardSteps, cards, projects } from "../db/schema.js";
+import { projects } from "../db/schema.js";
 import type { AgentRunner, RunAgentOptions, RunEvent } from "./runner.js";
 import type { WorktreeLifecycle } from "./worktree-manager.js";
 import {
@@ -709,37 +709,18 @@ describe("ExecutionEngine", () => {
       const projectId = harness.store.ensureDefaultProject("jeeves", "C:/target-repo").id;
       const feature = harness.store.createCard(projectId);
       harness.store.updateCard(feature.id, { title: "Feature" });
-      harness.store.decideKind(feature.id, "feature");
-      harness.store.setCardBranch(feature.id, "jeeves/card-feature");
-
-      const childId = "childtask01";
-      harness.db
-        .insert(cards)
-        .values({
-          id: childId,
-          projectId,
-          parentCardId: feature.id,
-          kind: "task",
-          status: "active",
-          column: "implement",
-          title: "Child",
-          description: "",
-          branch: null,
-          position: 0,
-          createdAt: new Date(),
-        })
-        .run();
-      harness.db
-        .insert(cardSteps)
-        .values({
-          id: "child-plan",
-          cardId: childId,
-          stepKey: "plan",
-          status: "queued",
-          startedAt: null,
-          completedAt: null,
-        })
-        .run();
+      const featureId = harness.store.decideKind(feature.id, "feature").card.id;
+      harness.store.handOffGrillToSpec(featureId);
+      harness.store.handOffSpecToTasks(featureId);
+      harness.artifactStore.appendTasksDraft(featureId, 0, {
+        tasks: [
+          { id: "a", title: "API", description: "endpoints", dependsOn: [] },
+        ],
+      });
+      harness.store.setCardBranch(featureId, "jeeves/card-feature");
+      const { children } = harness.store.fanOut(featureId);
+      const child = children[0]!;
+      harness.store.setStepStatus(child.id, "plan", "queued");
 
       const tracked = trackingWorktrees(harness.artifactRoot);
       const engine = makeEngineWithRunner(
@@ -748,17 +729,17 @@ describe("ExecutionEngine", () => {
         tracked.worktrees,
       );
 
-      engine.enqueue(childId, "plan");
+      engine.enqueue(child.id, "plan");
       await engine.whenIdle();
 
       expect(tracked.resolvedRefs).toEqual(["jeeves/card-feature"]);
       expect(tracked.createFromCalls).toEqual([
         {
-          branch: `jeeves/card-${childId}`,
+          branch: `jeeves/card-${child.id}`,
           baseSha: "sha-of-jeeves/card-feature",
         },
       ]);
-      expect(harness.store.getCard(childId)?.branch).toBe(`jeeves/card-${childId}`);
+      expect(harness.store.getCard(child.id)?.branch).toBe(`jeeves/card-${child.id}`);
     });
   });
 

@@ -150,7 +150,7 @@ export class CardStore {
     return project;
   }
 
-  /** Persist the durable card branch once created (lazy on first Plan). */
+  /** Persist the durable card branch name once created. */
   setCardBranch(cardId: string, branch: string): CardWithSteps {
     const card = this.db.select().from(cards).where(eq(cards.id, cardId)).get();
     if (!card) throw new CardStoreError(404, "card not found");

@@ -115,10 +115,10 @@ export interface EngineTestHarness {
 
 export function createEngineHarness(): EngineTestHarness {
   const db = openDb(":memory:");
-  const store = new CardStore(db);
-  const runStore = new RunStore(db);
   const artifactRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-engine-"));
   const artifactStore = new ArtifactStore(db, artifactRoot);
+  const store = new CardStore(db, artifactStore);
+  const runStore = new RunStore(db);
   const events = new EventBus();
   const received: JeevesEvent[] = [];
   events.subscribe((e) => received.push(e));

@@ -11,7 +11,10 @@ export function shouldShowImplementDiff(
   return stepKey === "impl" && stepStatus === "done";
 }
 
-/** Whether the summary's changed-line total warrants a soft Load-anyway gate. */
+/**
+ * Whether opening per-file patches should wait for an explicit Load anyway.
+ * The file list with stats still shows; only lazy patch expand is gated.
+ */
 export function diffNeedsLoadConfirmation(
   totalAdditions: number,
   totalDeletions: number,

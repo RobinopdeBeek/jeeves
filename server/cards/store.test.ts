@@ -149,7 +149,9 @@ describe("CardStore", () => {
       expect(decided.kind).toBe("task");
       expect(decided.column).toBe("implement");
       expect(decided.canCreateSpec).toBe(false);
-      expect(sideEffects).toEqual([{ type: "enqueue", stepKey: "plan" }]);
+      expect(sideEffects).toEqual([
+        { type: "enqueue", cardId: card.id, stepKey: "plan" },
+      ]);
       expect(decided.steps).toEqual([
         { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
         { key: "plan", status: "queued", label: "Plan", stepKind: "ai-execution", column: "implement" },
@@ -341,7 +343,7 @@ describe("CardStore", () => {
       return id;
     }
 
-    it("creates children with blockers, Tasks awaiting, and no enqueue", () => {
+    it("creates children, ensures feature branch, queues unblocked Plan only", () => {
       const id = featureWithTip({
         tasks: [
           { id: "a", title: "API", description: "endpoints", dependsOn: [] },
@@ -371,6 +373,11 @@ describe("CardStore", () => {
         position: 1,
       });
       expect(children[0]!.steps.map((s) => ({ key: s.key, status: s.status }))).toEqual([
+        { key: "plan", status: "queued" },
+        { key: "impl", status: "pending" },
+        { key: "airev", status: "pending" },
+      ]);
+      expect(children[1]!.steps.map((s) => ({ key: s.key, status: s.status }))).toEqual([
         { key: "plan", status: "pending" },
         { key: "impl", status: "pending" },
         { key: "airev", status: "pending" },
@@ -380,14 +387,17 @@ describe("CardStore", () => {
       ]);
       expect(children[0]!.blockedBy).toEqual([]);
       expect(sideEffects).toEqual([
+        { type: "ensure-branch", cardId: id },
         {
           type: "close-chat",
           stepKey: "tasks",
           round: 0,
           reason: "tasks handed off to implement",
         },
+        { type: "enqueue", cardId: children[0]!.id, stepKey: "plan" },
       ]);
-      expect(sideEffects.some((e) => e.type === "enqueue")).toBe(false);
+      // CardStore stays git-free — branch is recorded only when ensure-branch is dispatched.
+      expect(card.branch).toBeNull();
 
       const listed = fanStore.listCards(projectId);
       expect(listed.filter((c) => c.parentCardId === id)).toHaveLength(2);
@@ -399,6 +409,39 @@ describe("CardStore", () => {
       expect(
         artifacts.list(id).some((a) => a.kind === "tasks-breakdown"),
       ).toBe(true);
+    });
+
+    it("queues every child Plan when none have blockers", () => {
+      const id = featureWithTip({
+        tasks: [
+          { id: "a", title: "API", description: "", dependsOn: [] },
+          { id: "b", title: "UI", description: "", dependsOn: [] },
+        ],
+      });
+      const { children, sideEffects } = fanStore.fanOut(id);
+      expect(children.map((c) => c.steps.find((s) => s.key === "plan")?.status)).toEqual([
+        "queued",
+        "queued",
+      ]);
+      expect(sideEffects.filter((e) => e.type === "enqueue")).toEqual([
+        { type: "enqueue", cardId: children[0]!.id, stepKey: "plan" },
+        { type: "enqueue", cardId: children[1]!.id, stepKey: "plan" },
+      ]);
+    });
+
+    it("reverts ignited Plans back to pending", () => {
+      const id = featureWithTip({
+        tasks: [
+          { id: "a", title: "API", description: "", dependsOn: [] },
+          { id: "b", title: "UI", description: "", dependsOn: ["a"] },
+        ],
+      });
+      const { children } = fanStore.fanOut(id);
+      fanStore.revertIgnitedPlans(children.map((c) => c.id));
+      expect(children.map((c) => fanStore.getCard(c.id)!.steps.find((s) => s.key === "plan")?.status)).toEqual([
+        "pending",
+        "pending",
+      ]);
     });
 
     it("resolves child upstream to the parent feature branch when recorded", () => {

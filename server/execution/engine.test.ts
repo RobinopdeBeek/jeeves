@@ -720,7 +720,7 @@ describe("ExecutionEngine", () => {
       harness.store.setCardBranch(featureId, "jeeves/card-feature");
       const { children } = harness.store.fanOut(featureId);
       const child = children[0]!;
-      harness.store.setStepStatus(child.id, "plan", "queued");
+      expect(child.steps.find((s) => s.key === "plan")?.status).toBe("queued");
 
       const tracked = trackingWorktrees(harness.artifactRoot);
       const engine = makeEngineWithRunner(
@@ -740,6 +740,39 @@ describe("ExecutionEngine", () => {
         },
       ]);
       expect(harness.store.getCard(child.id)?.branch).toBe(`jeeves/card-${child.id}`);
+    });
+
+    it("ensureBranch creates the feature branch from default_branch and records cards.branch", async () => {
+      const projectId = harness.store.ensureDefaultProject("jeeves", "C:/target-repo").id;
+      const feature = harness.store.createCard(projectId);
+      harness.store.updateCard(feature.id, { title: "Feature" });
+      const featureId = harness.store.decideKind(feature.id, "feature").card.id;
+
+      const ensured: Array<{ branch: string; baseSha: string }> = [];
+      const base = fakeWorktrees(harness.artifactRoot);
+      const worktrees: WorktreeLifecycle = {
+        ...base,
+        async ensureBranch(branch, baseSha) {
+          ensured.push({ branch, baseSha });
+        },
+        async resolveRef(ref) {
+          return `sha-of-${ref}`;
+        },
+      };
+      const engine = makeEngineWithRunner(
+        harness,
+        fakeRunner([]).runner,
+        worktrees,
+      );
+
+      await engine.ensureBranch(featureId);
+
+      expect(ensured).toEqual([
+        { branch: `jeeves/card-${featureId}`, baseSha: "sha-of-main" },
+      ]);
+      expect(harness.store.getCard(featureId)?.branch).toBe(
+        `jeeves/card-${featureId}`,
+      );
     });
   });
 

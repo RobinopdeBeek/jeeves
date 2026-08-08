@@ -67,6 +67,18 @@ describe("WorktreeManager", () => {
     expect(WorktreeManager.cardBranch("abc123")).toBe("jeeves/card-abc123");
   });
 
+  it("ensureBranch creates a durable branch at baseSha without a worktree", async () => {
+    const wm = manager();
+    const branch = WorktreeManager.cardBranch("feature-1");
+    await wm.ensureBranch(branch, temp.mainSha);
+    const sha = (await git(temp.repoPath, ["rev-parse", branch])).trim();
+    expect(sha).toBe(temp.mainSha);
+    expect(fs.existsSync(wm.worktreePathFor("feature-1"))).toBe(false);
+    // Idempotent when the branch already exists.
+    await wm.ensureBranch(branch, temp.mainSha);
+    expect((await git(temp.repoPath, ["rev-parse", branch])).trim()).toBe(temp.mainSha);
+  });
+
   it("defaults worktree root to <repo>/.jeeves/worktrees when omitted", () => {
     const repo = "C:/projects/pantry-checker";
     expect(resolveWorktreeRoot(repo)).toBe(

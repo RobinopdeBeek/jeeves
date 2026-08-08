@@ -264,7 +264,7 @@ export class CardStore {
     }
 
     const plan = this.requireAdvance(
-      { kind: card.kind, steps: this.stepStatuses(cardId) },
+      { id: cardId, kind: card.kind, steps: this.stepStatuses(cardId) },
       { type: "kind-decision", path },
     );
     this.applyAdvancePlan(cardId, plan);
@@ -439,8 +439,17 @@ export class CardStore {
   }
 
   /**
+   * Validate Implement → without mutating so adapters can ensure-branch first.
+   * Same checks as fanOut (feature, tasks needs-user, non-empty tip).
+   */
+  assertReadyToFanOut(cardId: string, round = 0): void {
+    this.readFanOutPlan(cardId, round);
+  }
+
+  /**
    * Implement → fan-out: freeze tip, materialize child task cards + blockers,
-   * set Tasks to awaiting. No child Plan enqueue. Second call → 409.
+   * set Tasks to awaiting, queue Plan on unblocked children, declare
+   * ensure-branch + per-child enqueue effects. Second call → 409.
    */
   fanOut(
     cardId: string,
@@ -450,33 +459,11 @@ export class CardStore {
     children: CardWithSteps[];
     sideEffects: AdvanceSideEffect[];
   } {
-    const artifacts = this.requireArtifacts();
-    const parent = this.getCard(cardId);
-    if (!parent) throw new CardStoreError(404, "card not found");
-    if (parent.kind !== "feature") {
-      throw new CardStoreError(409, "fan-out requires a feature card");
-    }
-
-    const plan = this.requireAdvance(parent, { type: "tasks-to-implement" });
-
-    let tip: TasksDraft;
-    try {
-      tip = parseTasksDraft(artifacts.readTasksDraftTip(cardId, round));
-    } catch (err) {
-      throw new CardStoreError(
-        400,
-        err instanceof TasksDraftError ? err.message : String(err),
-      );
-    }
-    if (tip.tasks.length < 1) {
-      throw new CardStoreError(400, "fan-out requires at least one task");
-    }
-    if (tip.tasks.some((t) => !t.title.trim())) {
-      throw new CardStoreError(400, "all task titles must be non-empty");
-    }
+    const { parent, plan, tip, artifacts } = this.readFanOutPlan(cardId, round);
 
     const childIds: string[] = [];
     const draftIdToCardId = new Map<string, string>();
+    const enqueueEffects: AdvanceSideEffect[] = [];
 
     this.db.transaction(() => {
       artifacts.freezeTasksBreakdown(cardId, round);
@@ -515,14 +502,73 @@ export class CardStore {
         }
       }
 
+      for (const childId of childIds) {
+        if (this.hasUnmergedBlockers(childId)) continue;
+        this.setStepStatus(childId, "plan", "queued");
+        enqueueEffects.push({
+          type: "enqueue",
+          cardId: childId,
+          stepKey: "plan",
+        });
+      }
+
       this.applyAdvancePlan(cardId, plan);
     });
 
     return {
       card: this.getCard(cardId)!,
       children: childIds.map((id) => this.getCard(id)!),
-      sideEffects: plan.sideEffects,
+      sideEffects: [...plan.sideEffects, ...enqueueEffects],
     };
+  }
+
+  /**
+   * If fan-out ignition fails after children were queued (e.g. late effect error),
+   * park those Plans back at pending so boot cannot enqueue without recovery.
+   */
+  revertIgnitedPlans(childIds: string[]): void {
+    for (const id of childIds) {
+      const step = this.getCard(id)?.steps.find((s) => s.key === "plan");
+      if (step?.status === "queued") {
+        this.setStepStatus(id, "plan", "pending");
+      }
+    }
+  }
+
+  private readFanOutPlan(
+    cardId: string,
+    round: number,
+  ): {
+    parent: CardWithSteps;
+    plan: AdvancePlan & { ok: true };
+    tip: TasksDraft;
+    artifacts: ArtifactStore;
+  } {
+    const artifacts = this.requireArtifacts();
+    const parent = this.getCard(cardId);
+    if (!parent) throw new CardStoreError(404, "card not found");
+    if (parent.kind !== "feature") {
+      throw new CardStoreError(409, "fan-out requires a feature card");
+    }
+
+    const plan = this.requireAdvance(parent, { type: "tasks-to-implement" });
+
+    let tip: TasksDraft;
+    try {
+      tip = parseTasksDraft(artifacts.readTasksDraftTip(cardId, round));
+    } catch (err) {
+      throw new CardStoreError(
+        400,
+        err instanceof TasksDraftError ? err.message : String(err),
+      );
+    }
+    if (tip.tasks.length < 1) {
+      throw new CardStoreError(400, "fan-out requires at least one task");
+    }
+    if (tip.tasks.some((t) => !t.title.trim())) {
+      throw new CardStoreError(400, "all task titles must be non-empty");
+    }
+    return { parent, plan, tip, artifacts };
   }
 
   /**
@@ -546,6 +592,7 @@ export class CardStore {
 
   private requireAdvance(
     card: {
+      id: string;
       kind: Card["kind"];
       steps: Array<{ key: StepKey; status: StepStatus }>;
     },
@@ -734,6 +781,17 @@ export class CardStore {
       .innerJoin(cards, eq(cardBlockers.blocksOnCardId, cards.id))
       .where(eq(cardBlockers.cardId, cardId))
       .all();
+  }
+
+  /** True when any blocker card is not yet merged (slice 10 releases these). */
+  private hasUnmergedBlockers(cardId: string): boolean {
+    const rows = this.db
+      .select({ status: cards.status })
+      .from(cardBlockers)
+      .innerJoin(cards, eq(cardBlockers.blocksOnCardId, cards.id))
+      .where(eq(cardBlockers.cardId, cardId))
+      .all();
+    return rows.some((r) => r.status !== "merged");
   }
 
   private loadChildren(parentId: string): CardChildSummary[] {

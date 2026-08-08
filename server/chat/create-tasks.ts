@@ -89,7 +89,7 @@ export function createCreateTasks(deps: {
 
     try {
       // Freeze Spec chat before headless /to-draft-tasks (closes warm ACP).
-      dispatchAdvanceEffects(
+      await dispatchAdvanceEffects(
         input.cardId,
         [
           {

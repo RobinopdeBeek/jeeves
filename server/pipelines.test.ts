@@ -44,7 +44,11 @@ describe("canCreateTasks", () => {
 describe("advance", () => {
   it("kind-decision feature has no enqueue; standalone enqueues plan", () => {
     const feature = advance(
-      { kind: null, steps: [{ key: "info", status: "needs-user" }] },
+      {
+        id: "feat-1",
+        kind: null,
+        steps: [{ key: "info", status: "needs-user" }],
+      },
       { type: "kind-decision", path: "feature" },
     );
     expect(feature.ok).toBe(true);
@@ -53,19 +57,24 @@ describe("advance", () => {
     expect(feature.sideEffects).toEqual([]);
 
     const standalone = advance(
-      { kind: null, steps: [{ key: "info", status: "needs-user" }] },
+      {
+        id: "task-1",
+        kind: null,
+        steps: [{ key: "info", status: "needs-user" }],
+      },
       { type: "kind-decision", path: "standalone" },
     );
     expect(standalone.ok).toBe(true);
     if (!standalone.ok) return;
     expect(standalone.sideEffects).toEqual([
-      { type: "enqueue", stepKey: "plan" },
+      { type: "enqueue", cardId: "task-1", stepKey: "plan" },
     ]);
   });
 
   it("grill-to-spec declares close-chat and status patches", () => {
     const plan = advance(
       {
+        id: "feat-1",
         kind: "feature",
         steps: [
           { key: "grill", status: "needs-user" },
@@ -94,6 +103,7 @@ describe("advance", () => {
   it("spec-to-tasks declares close-chat and status patches", () => {
     const plan = advance(
       {
+        id: "feat-1",
         kind: "feature",
         steps: [
           { key: "spec", status: "needs-user" },
@@ -122,7 +132,11 @@ describe("advance", () => {
   it("step-finished maps outcome to done / needs-user", () => {
     expect(
       advance(
-        { kind: "task", steps: [{ key: "plan", status: "ai-working" }] },
+        {
+          id: "task-1",
+          kind: "task",
+          steps: [{ key: "plan", status: "ai-working" }],
+        },
         { type: "step-finished", stepKey: "plan", outcome: "succeeded" },
       ),
     ).toEqual({
@@ -132,7 +146,11 @@ describe("advance", () => {
     });
     expect(
       advance(
-        { kind: "task", steps: [{ key: "plan", status: "ai-working" }] },
+        {
+          id: "task-1",
+          kind: "task",
+          steps: [{ key: "plan", status: "ai-working" }],
+        },
         { type: "step-finished", stepKey: "plan", outcome: "failed" },
       ),
     ).toEqual({
@@ -142,9 +160,10 @@ describe("advance", () => {
     });
   });
 
-  it("tasks-to-implement sets Tasks awaiting and closes chat (no enqueue)", () => {
+  it("tasks-to-implement ensures feature branch and closes chat", () => {
     const plan = advance(
       {
+        id: "feat-1",
         kind: "feature",
         steps: [
           { key: "spec", status: "done" },
@@ -157,6 +176,7 @@ describe("advance", () => {
       ok: true,
       stepPatches: [{ key: "tasks", status: "awaiting" }],
       sideEffects: [
+        { type: "ensure-branch", cardId: "feat-1" },
         {
           type: "close-chat",
           stepKey: "tasks",
@@ -170,6 +190,7 @@ describe("advance", () => {
   it("tasks-to-implement rejects when Tasks is not needs-user", () => {
     const plan = advance(
       {
+        id: "feat-1",
         kind: "feature",
         steps: [
           { key: "spec", status: "done" },

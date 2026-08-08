@@ -14,7 +14,7 @@ Rework stays in **Human Review**, feels quick and iterative, and still has a thi
 2. User finishes the CR list and clicks **Implement changes →**.
 3. Card **stays in the Review column**. Tile/step shows a loading state: **Reworking…**
 4. The Review tab hides the normal eval + side panel. It shows a **todo list** in the middle (Cursor-style): one row per CR, with live status as the batch runs.
-5. When the batch finishes, refresh the evaluation, clear the open CR list (consumed items remain as history), and restore the normal Review UI.
+5. When the batch finishes, refresh the evaluation **content**, keep **QA progress** (see below), clear the open CR list (consumed items remain as history), and restore the normal Review UI.
 
 ## Execution spine (inside Review)
 
@@ -55,7 +55,23 @@ One code-review pass over the combined CR work (not per CR). Catches cross-CR br
 
 ### 4. refresh eval
 
-Re-run **Prepare Eval** (or a dedicated refresh skill with the same outcome) on the new tip. Prefer honest full refresh over vague “patch where needed.” Then return to the normal Review UI with an empty open CR list.
+Re-run **Prepare Eval** (or a dedicated refresh skill with the same outcome) on the new tip. Prefer honest full refresh of the **eval document** (narrative, tests, screenshots, checklist *text*) over vague “patch where needed.”
+
+Do **not** wipe QA checkbox progress — that lives outside the eval artifact (next section).
+
+Then return to the normal Review UI with an empty open CR list.
+
+## QA progress (separate from the eval)
+
+The evaluation HTML is the report. **QA progress is card state**, not part of the artifact and not browser-only.
+
+- Store checklist progress in the **project DB** (synced across devices). No parent-board `localStorage` for QA.
+- Checklist items from Prepare Eval carry **stable ids**. Progress is keyed by `(card, item id)` — checked / unchecked (+ optional stale).
+- On eval refresh: **match by id** → keep progress; new ids start unchecked; removed ids drop.
+- After a CR batch: keep ticks for insight, but mark items **stale / re-verify** (all checked items, or only those plan-rework tags as related). Stale ≠ cleared. Approve policy can require re-confirming stale items or only warn.
+- `decisions.qa_complete` remains the audit snapshot at Approve time.
+
+This replaces the earlier plan that QA lived in `localStorage` and the gate **reset on rework**.
 
 ## Worktree
 
@@ -68,6 +84,7 @@ Each CR batch commits on that tip — same branch, longer-lived worktree for the
 - **No task types** (`simple` / `complex` / bug / refactor) — CRs are the simple path; agents handle occasional harder items in this same pipe.
 - **No column hop** back to Implement for normal CR batches.
 - **No board Task per CR** — the side-panel list *is* the bundle; the batch is the run.
+- **No QA-in-eval persistence** — progress is DB card state; the eval does not own checkmarks.
 
 Escape hatch later if needed (“send back to Implement” for a true rewrite) — not part of v1.
 

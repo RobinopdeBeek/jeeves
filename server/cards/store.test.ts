@@ -32,6 +32,13 @@ describe("CardStore", () => {
     expect(store.getDefaultBranch(card.id)).toBe("main");
   });
 
+  it("seeds projects.verify_commands as null", () => {
+    const project = store.ensureDefaultProject("jeeves", "C:/repo");
+    expect(project.verifyCommands).toBeNull();
+    const card = store.createCard(projectId);
+    expect(store.getVerifyCommandsRaw(card.id)).toBeNull();
+  });
+
   it("persists cards.branch and resolves upstream for standalone vs feature", () => {
     const feature = store.createCard(projectId);
     store.updateCard(feature.id, { title: "Feature" });

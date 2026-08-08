@@ -144,6 +144,7 @@ export class CardStore {
       name,
       repoPath,
       defaultBranch: "main",
+      verifyCommands: null,
       createdAt: new Date(),
     };
     this.db.insert(projects).values(project).run();
@@ -168,6 +169,21 @@ export class CardStore {
       .get();
     if (!row) throw new CardStoreError(404, "card not found");
     return row.defaultBranch;
+  }
+
+  /**
+   * Jeeves-owned host verify commands for the card's project (JSON text).
+   * Null/empty means the host gate skips with a warning.
+   */
+  getVerifyCommandsRaw(cardId: string): string | null {
+    const row = this.db
+      .select({ verifyCommands: projects.verifyCommands })
+      .from(cards)
+      .innerJoin(projects, eq(cards.projectId, projects.id))
+      .where(eq(cards.id, cardId))
+      .get();
+    if (!row) throw new CardStoreError(404, "card not found");
+    return row.verifyCommands;
   }
 
   /**

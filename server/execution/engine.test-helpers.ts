@@ -13,14 +13,23 @@ import type { AgentRunner, RunAgentOptions, RunEvent } from "./runner.js";
 import type { WorktreeLifecycle } from "./worktree-manager.js";
 
 export type Script =
-  | { events: RunEvent[] }
+  | { events: RunEvent[]; finalize?: "plan" | "implement" }
   | { error: Error }
-  | { gate: Promise<RunEvent[]> };
+  | { gate: Promise<RunEvent[]>; finalize?: "plan" | "implement" };
 
 export const ok = (): RunEvent[] => [
   { type: "log", line: "working…" },
   { type: "result", status: "finished" },
 ];
+
+/** Successful Plan script — writes `.jeeves/plan.md`, no commits. */
+export const planOk = (): Script => ({ events: ok(), finalize: "plan" });
+
+/** Successful Implement script — reports a new HEAD, clean tree. */
+export const implementOk = (): Script => ({
+  events: ok(),
+  finalize: "implement",
+});
 
 export function fakeRunner(scripts: Script[]) {
   const calls: Array<{ prompt: string; options: RunAgentOptions }> = [];
@@ -40,14 +49,26 @@ export function fakeRunner(scripts: Script[]) {
           fs.appendFileSync(options.logPath, `${event.line}\n`);
         }
         if (event.type === "result" && event.status === "finished" && options.onFinalize) {
-          const planDir = path.join(options.worktreePath, ".jeeves");
-          fs.mkdirSync(planDir, { recursive: true });
-          fs.writeFileSync(path.join(planDir, "plan.md"), "# Plan\n\nTracer plan.\n");
-          await options.onFinalize({
-            workspacePath: options.worktreePath,
-            headSha: options.baseSha,
-            baseSha: options.baseSha,
-          });
+          const kind = script.finalize ?? "plan";
+          if (kind === "plan") {
+            const planDir = path.join(options.worktreePath, ".jeeves");
+            fs.mkdirSync(planDir, { recursive: true });
+            fs.writeFileSync(
+              path.join(planDir, "plan.md"),
+              "# Plan\n\nTracer plan.\n",
+            );
+            await options.onFinalize({
+              workspacePath: options.worktreePath,
+              headSha: options.baseSha,
+              baseSha: options.baseSha,
+            });
+          } else {
+            await options.onFinalize({
+              workspacePath: options.worktreePath,
+              headSha: `${options.baseSha}-impl`,
+              baseSha: options.baseSha,
+            });
+          }
         }
         yield event;
       }

@@ -7,14 +7,16 @@ import type { ArtifactStore } from "../artifacts/store.js";
 import type { StepKey } from "../pipelines.js";
 import { EventBus } from "./events.js";
 import {
-  buildPlanImplementationPrompt,
-  type PlanAttachmentInput,
-} from "./plan-implementation.js";
+  buildImplementTaskPrompt,
+  type ImplementAttachmentInput,
+} from "./implement-task.js";
+import { buildPlanImplementationPrompt } from "./plan-implementation.js";
 import type { RunStore } from "./run-store.js";
 import type { AgentRunner, RunEvent } from "./runner.js";
 import type { WorktreeDiagnostics, WorktreeLifecycle } from "./worktree-manager.js";
 import { WorktreeManager } from "./worktree-manager.js";
 import { meetsPostconditions, stepPolicy } from "./step-policies.js";
+import { parseVerifyCommands, runVerifyCommands } from "./verify-commands.js";
 
 export interface ExecutionEngineDeps {
   store: CardStore;
@@ -218,14 +220,25 @@ export class ExecutionEngine {
         result?.status === "finished" &&
         meetsPostconditions(stepKey, artifacts, cardId, round)
       ) {
-        this.freezeRunLog(run, stepKey, round, policy.skill, headSha);
-        runs.finish(run.id, {
-          status: "succeeded",
-          model: result.model,
-          tokensIn: result.tokensIn,
-          tokensOut: result.tokensOut,
-        });
-        this.finishStep(cardId, stepKey, run.id, "succeeded");
+        const verify = await this.runHostVerifyIfNeeded(
+          run.id,
+          cardId,
+          stepKey,
+          worktreePath,
+          logPath,
+        );
+        if (verify.status === "failed") {
+          await fail(verify.message);
+        } else {
+          this.freezeRunLog(run, stepKey, round, policy.skill, headSha);
+          runs.finish(run.id, {
+            status: "succeeded",
+            model: result.model,
+            tokensIn: result.tokensIn,
+            tokensOut: result.tokensOut,
+          });
+          this.finishStep(cardId, stepKey, run.id, "succeeded");
+        }
       } else if (result?.status === "cancelled") {
         await fail("run cancelled");
       } else {
@@ -378,13 +391,36 @@ export class ExecutionEngine {
           cardDescription: card.description,
           parentSpec: this.parentSpecBody(card),
           manifestPath: artifacts.manifestAbsolutePath(card.id),
-          attachments: this.planAttachments(card.id),
+          attachments: this.cardLibraryAttachments(card.id),
+        },
+        templatePath,
+      );
+    }
+
+    if (stepKey === "impl") {
+      return buildImplementTaskPrompt(
+        {
+          cardTitle: card.title,
+          cardDescription: card.description,
+          plan: this.planArtifactBody(card.id),
+          manifestPath: artifacts.manifestAbsolutePath(card.id),
+          attachments: this.cardLibraryAttachments(card.id),
         },
         templatePath,
       );
     }
 
     return fs.readFileSync(templatePath, "utf8");
+  }
+
+  private planArtifactBody(cardId: string): string {
+    const { artifacts } = this.deps;
+    const plan = artifacts.latest(cardId, {
+      stepKey: "plan",
+      round: currentRound(cardId),
+      kind: "plan",
+    });
+    return plan ? artifacts.readBody(plan) : "";
   }
 
   private parentSpecBody(card: CardWithSteps): string {
@@ -398,10 +434,10 @@ export class ExecutionEngine {
     return spec ? artifacts.readBody(spec) : "";
   }
 
-  private planAttachments(cardId: string): PlanAttachmentInput[] {
+  private cardLibraryAttachments(cardId: string): ImplementAttachmentInput[] {
     const library = this.deps.cardAttachments;
     if (!library) return [];
-    const out: PlanAttachmentInput[] = [];
+    const out: ImplementAttachmentInput[] = [];
     for (const att of library.list(cardId)) {
       const absolutePath = library.absolutePath(cardId, att.id);
       if (!absolutePath) continue;
@@ -412,6 +448,54 @@ export class ExecutionEngine {
       });
     }
     return out;
+  }
+
+  /**
+   * Host gate after a successful agent finalize when the step policy opts in.
+   * Null/empty `projects.verify_commands` skips with a warning on the run log.
+   */
+  private async runHostVerifyIfNeeded(
+    runId: string,
+    cardId: string,
+    stepKey: StepKey,
+    worktreePath: string,
+    logPath: string,
+  ): Promise<{ status: "passed" | "skipped" } | { status: "failed"; message: string }> {
+    const policy = stepPolicy(stepKey);
+    if (!policy?.hostVerify) return { status: "skipped" };
+
+    const appendLog = (line: string) => {
+      try {
+        fs.appendFileSync(logPath, `${line}\n`);
+      } catch {
+        // Best-effort — failure evidence still carries the Error message.
+      }
+      this.deps.events.emit({
+        type: "run.log",
+        runId,
+        cardId,
+        line,
+      });
+    };
+
+    let commands: string[] | null;
+    try {
+      commands = parseVerifyCommands(this.deps.store.getVerifyCommandsRaw(cardId));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      appendLog(message);
+      return { status: "failed", message };
+    }
+
+    const result = await runVerifyCommands({
+      commands,
+      cwd: worktreePath,
+      log: appendLog,
+    });
+    if (result.status === "failed") {
+      return { status: "failed", message: result.message };
+    }
+    return { status: result.status === "passed" ? "passed" : "skipped" };
   }
 }
 

@@ -12,7 +12,7 @@ The branch persists until merge: a child task branch merges into its feature bra
 
 - **Plan:** a non-empty Plan artifact must be harvested; no source changes or commit are required.
 - **Implement:** source commits are required and the tree must be clean after declared exchange files are removed.
-- **AI Review:** a non-empty audit **review** artifact must be harvested (findings + what was reworked, or an explicit clean review); **zero or more** rework commits are allowed; the tree must be clean after declared exchange files are removed. AI Review does **not** produce the Human Review Evaluation (see [ADR 0015](./0015-ai-review-reworks-eval-on-human-review-entry.md)).
+- **AI Review:** a non-empty audit **review** artifact must be harvested (findings + what was reworked, or an explicit clean review); **zero or more** rework commits are allowed; the tree must be clean after declared exchange files are removed. AI Review does **not** produce the Human Review Evaluation (see [ADR 0018](./0018-ai-review-reworks-eval-on-human-review-entry.md)).
 
 Missing or invalid required output fails the run atomically and preserves the worktree for diagnosis. Retry captures the failed worktree's status/diff as a diagnostic artifact, discards the contaminated generated worktree, and recreates a clean one from the recorded pre-run SHA. Harvested exchange files are removed from the target worktree; downstream runs receive canonical artifacts explicitly from `ArtifactStore`.
 

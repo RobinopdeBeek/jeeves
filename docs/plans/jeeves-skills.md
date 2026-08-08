@@ -238,7 +238,7 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
 - **Postconditions:** non-empty review markdown; clean tree after exchange removal. If the step
   made commits, host runs `verify_commands` again.
 - **Workflow awareness:** on success, advance to Review column and enqueue **Prepare Eval**.
-  See [ADR 0015](../adr/0015-ai-review-reworks-eval-on-human-review-entry.md).
+  See [ADR 0018](../adr/0018-ai-review-reworks-eval-on-human-review-entry.md).
 
 #### `eval-summary`
 

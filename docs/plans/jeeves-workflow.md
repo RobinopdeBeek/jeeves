@@ -77,7 +77,7 @@ Review**.
 ### Task path: Implement Task
 
 Child tasks (and standalone tasks) run three autonomous steps — the interactive `/implement`
-flow split across three context windows ([ADR 0015](../adr/0015-ai-review-reworks-eval-on-human-review-entry.md)):
+flow split across three context windows ([ADR 0018](../adr/0018-ai-review-reworks-eval-on-human-review-entry.md)):
 
 1. **Plan** (`ai-execution`) — light planning for the slice (Context7 when available).
 2. **Implement** (`ai-execution`) — `/implement-task` + `/tdd`; commits on the card branch.

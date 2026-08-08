@@ -116,7 +116,7 @@ artifacts                    -- metadata + pointer, never content
                 | 'review' | 'eval' | 'screenshot' | 'runlog' | 'attachment'
                 -- transcript = mutable UIMessage[] chat log; grill = Grill session Q&A
                 -- (ADR 0012); tasks-draft = append-only tip versions (ADR 0014);
-                -- review = AI Review concise markdown overview (ADR 0015);
+                -- review = AI Review concise markdown overview (ADR 0018);
                 -- eval = Prepare Eval HTML
   path          text         -- root-relative; unique immutable destination per version
   git_sha       text, nullable  -- mandatory for evals: the only link to the reviewed diff

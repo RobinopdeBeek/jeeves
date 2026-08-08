@@ -84,7 +84,7 @@ blocker relationship can be built in parallel or reordered.
    as `tasks-breakdown`, create **active** children with blocker edges, Tasks → `awaiting`.
    *Demo: a feature becomes child cards on the board.* (Blocked by 6.)
 8. **Full task pipeline.** Plan → Implement → AI Review as `/implement` split across three
-   context windows ([ADR 0015](../adr/0015-ai-review-reworks-eval-on-human-review-entry.md)):
+   context windows ([ADR 0018](../adr/0018-ai-review-reworks-eval-on-human-review-entry.md)):
    real `plan-implementation` / `implement-task` / AI Review (code-review + rework) prompts;
    `WorktreeManager.createFrom` vs `checkoutExisting`; `projects.default_branch` +
    `verify_commands`; feature branch at fan-out; child/standalone branch lazy on first Plan;
@@ -94,7 +94,7 @@ blocker relationship can be built in parallel or reordered.
    on `airev` success → Review column with **Prepare Eval** stub queued then human Review;
    Implement tab: assistant-ui DiffViewer, lazy per-file three-dot diff vs upstream.
    *Demo: a child task runs Plan → Implement → AI Review → Prepare Eval (stub) unattended.*
-   (Blocked by 4 and 7; assumes Project Chat / app shell #33 already landed.)
+   (Blocked by 4 and 7; Project Chat / app shell already landed — #33 / PR #54.)
 9. **Evaluation walking skeleton.** Replace the Prepare Eval stub with real `eval-assemble`
    (minimal HTML: Tests + QA checklist), `notifications.json` exchange file, harvested,
    rendered with `sandbox="allow-scripts"`. Parent-owned browser storage synchronizes QA

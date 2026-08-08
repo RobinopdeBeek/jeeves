@@ -25,6 +25,27 @@ describe("CardStore", () => {
     expect(again.name).toBe("jeeves");
   });
 
+  it("seeds projects.default_branch as main", () => {
+    const project = store.ensureDefaultProject("jeeves", "C:/repo");
+    expect(project.defaultBranch).toBe("main");
+    const card = store.createCard(projectId);
+    expect(store.getDefaultBranch(card.id)).toBe("main");
+  });
+
+  it("persists cards.branch and resolves upstream for standalone vs feature", () => {
+    const feature = store.createCard(projectId);
+    store.updateCard(feature.id, { title: "Feature" });
+    store.decideKind(feature.id, "feature");
+    expect(store.getUpstreamRef(feature.id)).toBe("main");
+    store.setCardBranch(feature.id, "jeeves/card-feature");
+    expect(store.getCard(feature.id)?.branch).toBe("jeeves/card-feature");
+
+    const standalone = store.createCard(projectId);
+    store.updateCard(standalone.id, { title: "Standalone" });
+    store.decideKind(standalone.id, "standalone");
+    expect(store.getUpstreamRef(standalone.id)).toBe("main");
+  });
+
   it("creates an empty active card in Backlog with undecided kind", () => {
     const card = store.createCard(projectId);
     expect(card.title).toBe("");
@@ -378,6 +399,29 @@ describe("CardStore", () => {
       expect(
         artifacts.list(id).some((a) => a.kind === "tasks-breakdown"),
       ).toBe(true);
+    });
+
+    it("resolves child upstream to the parent feature branch when recorded", () => {
+      const id = featureWithTip({
+        tasks: [
+          { id: "a", title: "API", description: "endpoints", dependsOn: [] },
+        ],
+      });
+      fanStore.setCardBranch(id, "jeeves/card-feature");
+      const { children } = fanStore.fanOut(id);
+      expect(fanStore.getUpstreamRef(children[0]!.id)).toBe("jeeves/card-feature");
+    });
+
+    it("rejects child upstream when the parent feature branch is missing", () => {
+      const id = featureWithTip({
+        tasks: [
+          { id: "a", title: "API", description: "endpoints", dependsOn: [] },
+        ],
+      });
+      const { children } = fanStore.fanOut(id);
+      expect(() => fanStore.getUpstreamRef(children[0]!.id)).toThrow(
+        expect.objectContaining({ status: 409 }),
+      );
     });
 
     it("rejects empty tip, blank titles, and second fan-out", () => {

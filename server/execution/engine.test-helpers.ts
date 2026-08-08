@@ -63,7 +63,10 @@ export function fakeWorktrees(root: string): WorktreeLifecycle {
     async resolveRef() {
       return "abc123def456";
     },
-    async create(_branch, _baseSha, worktreePath) {
+    async createFrom(_branch, _baseSha, worktreePath) {
+      fs.mkdirSync(worktreePath, { recursive: true });
+    },
+    async checkoutExisting(_branch, worktreePath) {
       fs.mkdirSync(worktreePath, { recursive: true });
     },
     async remove(worktreePath) {

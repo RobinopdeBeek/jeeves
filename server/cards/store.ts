@@ -143,10 +143,52 @@ export class CardStore {
       id: nanoid(10),
       name,
       repoPath,
+      defaultBranch: "main",
       createdAt: new Date(),
     };
     this.db.insert(projects).values(project).run();
     return project;
+  }
+
+  /** Persist the durable card branch once created (lazy on first Plan). */
+  setCardBranch(cardId: string, branch: string): CardWithSteps {
+    const card = this.db.select().from(cards).where(eq(cards.id, cardId)).get();
+    if (!card) throw new CardStoreError(404, "card not found");
+    this.db.update(cards).set({ branch }).where(eq(cards.id, cardId)).run();
+    return this.getCard(cardId)!;
+  }
+
+  /** Explicit local default branch for the card's project (ADR 0009). */
+  getDefaultBranch(cardId: string): string {
+    const row = this.db
+      .select({ defaultBranch: projects.defaultBranch })
+      .from(cards)
+      .innerJoin(projects, eq(cards.projectId, projects.id))
+      .where(eq(cards.id, cardId))
+      .get();
+    if (!row) throw new CardStoreError(404, "card not found");
+    return row.defaultBranch;
+  }
+
+  /**
+   * Upstream ref for a new card branch: parent feature branch when present,
+   * otherwise the project's configured default_branch.
+   */
+  getUpstreamRef(cardId: string): string {
+    const card = this.db.select().from(cards).where(eq(cards.id, cardId)).get();
+    if (!card) throw new CardStoreError(404, "card not found");
+    if (card.parentCardId) {
+      const parent = this.db
+        .select()
+        .from(cards)
+        .where(eq(cards.id, card.parentCardId))
+        .get();
+      if (!parent?.branch) {
+        throw new CardStoreError(409, "parent feature branch not recorded");
+      }
+      return parent.branch;
+    }
+    return this.getDefaultBranch(cardId);
   }
 
   /**

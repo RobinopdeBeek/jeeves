@@ -11,8 +11,6 @@ import type { WorktreeDiagnostics, WorktreeLifecycle } from "./worktree-manager.
 import { WorktreeManager } from "./worktree-manager.js";
 import { meetsPostconditions, stepPolicy } from "./step-policies.js";
 
-const DEFAULT_BASE_REF = "main";
-
 export interface ExecutionEngineDeps {
   store: CardStore;
   runs: RunStore;
@@ -111,11 +109,18 @@ export class ExecutionEngine {
 
     const round = currentRound(cardId);
     const priorRun = runs.latestForStep(cardId, stepKey);
+    const branch = card.branch ?? WorktreeManager.cardBranch(cardId);
+    const isRetry = priorRun?.status === "failed" && Boolean(priorRun.baseSha);
+    const isContinuation = Boolean(card.branch) && !isRetry;
+
     let baseSha: string;
-    if (priorRun?.status === "failed" && priorRun.baseSha) {
-      baseSha = priorRun.baseSha;
+    if (isRetry) {
+      baseSha = priorRun!.baseSha!;
+    } else if (isContinuation) {
+      // Record tip-at-start so a later retry of this run can recreate cleanly.
+      baseSha = await worktrees.resolveRef(branch);
     } else {
-      baseSha = await worktrees.resolveRef(DEFAULT_BASE_REF);
+      baseSha = await worktrees.resolveRef(store.getUpstreamRef(cardId));
     }
 
     const run = runs.create({
@@ -135,7 +140,6 @@ export class ExecutionEngine {
     });
 
     const repoPath = store.getRepoPath(cardId);
-    const branch = WorktreeManager.cardBranch(cardId);
     const worktreePath = worktrees.worktreePathFor(cardId);
     let headSha: string | undefined;
 
@@ -153,7 +157,14 @@ export class ExecutionEngine {
     };
 
     try {
-      await worktrees.create(branch, baseSha, worktreePath);
+      if (isContinuation) {
+        await worktrees.checkoutExisting(branch, worktreePath);
+      } else {
+        await worktrees.createFrom(branch, baseSha, worktreePath);
+      }
+      if (!card.branch) {
+        store.setCardBranch(cardId, branch);
+      }
 
       let result: Extract<RunEvent, { type: "result" }> | undefined;
       const iterable = runner.run(path.resolve(repoRoot, policy.promptFile), {

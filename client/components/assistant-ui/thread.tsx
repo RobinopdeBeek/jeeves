@@ -13,6 +13,7 @@ import {
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { toast } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
 import {
   ProjectChatRewindProvider,
@@ -340,9 +341,8 @@ const Composer: FC<{
     iconMap: slashIconMap,
     fallbackIcon: IconSlash,
   });
-  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   useAuiEvent("composer.attachmentAddError", (event) => {
-    setAttachmentError(event.message);
+    toast.error(event.message);
   });
 
   return (
@@ -365,15 +365,9 @@ const Composer: FC<{
             className="aui-composer-input relative max-h-32 min-h-10 w-full overflow-y-auto bg-transparent px-2.5 py-1 text-base caret-primary outline-none"
             aria-label="Message input"
           />
-          {attachmentError ? (
-            <p role="alert" className="px-2.5 text-xs text-destructive">
-              {attachmentError}
-            </p>
-          ) : null}
           <ComposerAction
             attachmentsEnabled={attachmentsEnabled}
             composerLeading={composerLeading}
-            onClearAttachmentError={() => setAttachmentError(null)}
           />
         </div>
 
@@ -416,8 +410,7 @@ const ComposerAttachmentChip: FC = () => {
 const ComposerAction: FC<{
   attachmentsEnabled: boolean;
   composerLeading?: ReactNode;
-  onClearAttachmentError: () => void;
-}> = ({ attachmentsEnabled, composerLeading, onClearAttachmentError }) => {
+}> = ({ attachmentsEnabled, composerLeading }) => {
   return (
     <div className="aui-composer-action-wrapper relative flex items-center justify-between gap-2">
       <div className="flex min-w-0 items-center gap-1.5">
@@ -430,7 +423,6 @@ const ComposerAction: FC<{
               variant="ghost"
               size="icon-round"
               aria-label="Attach file"
-              onClick={onClearAttachmentError}
             >
               <IconPaperclip />
             </TooltipIconButton>

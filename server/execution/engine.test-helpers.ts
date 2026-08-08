@@ -63,7 +63,10 @@ export function fakeWorktrees(root: string): WorktreeLifecycle {
     async resolveRef() {
       return "abc123def456";
     },
-    async create(_branch, _baseSha, worktreePath) {
+    async createFrom(_branch, _baseSha, worktreePath) {
+      fs.mkdirSync(worktreePath, { recursive: true });
+    },
+    async checkoutExisting(_branch, worktreePath) {
       fs.mkdirSync(worktreePath, { recursive: true });
     },
     async remove(worktreePath) {
@@ -112,10 +115,10 @@ export interface EngineTestHarness {
 
 export function createEngineHarness(): EngineTestHarness {
   const db = openDb(":memory:");
-  const store = new CardStore(db);
-  const runStore = new RunStore(db);
   const artifactRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-engine-"));
   const artifactStore = new ArtifactStore(db, artifactRoot);
+  const store = new CardStore(db, artifactStore);
+  const runStore = new RunStore(db);
   const events = new EventBus();
   const received: JeevesEvent[] = [];
   events.subscribe((e) => received.push(e));

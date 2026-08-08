@@ -7,6 +7,8 @@ export const projects = sqliteTable("projects", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   repoPath: text("repo_path").notNull(),
+  /** Explicit local base ref — never inferred from host HEAD (ADR 0009). */
+  defaultBranch: text("default_branch").notNull().default("main"),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 });
 

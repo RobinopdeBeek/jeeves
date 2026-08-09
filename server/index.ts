@@ -14,6 +14,7 @@ import { CursorSdkAgentRunner } from "./execution/cursor-sdk-runner.js";
 import { ExecutionEngine } from "./execution/engine.js";
 import { EventBus } from "./execution/events.js";
 import { RunStore } from "./execution/run-store.js";
+import { CardDiffService } from "./execution/card-diff.js";
 import { WorktreeManager } from "./execution/worktree-manager.js";
 import { isStepKey } from "./pipelines.js";
 import { extractGrillSession } from "./chat/grill-session-extract.js";
@@ -63,6 +64,7 @@ const engine = new ExecutionEngine({
   artifacts,
   events,
   repoRoot: rootDir,
+  cardAttachments,
 });
 
 const chatSessions = new ChatSessionRegistry();
@@ -120,6 +122,7 @@ app.route(
       }),
     }),
     promptsRoot: path.join(rootDir, "prompts"),
+    cardDiff: new CardDiffService(paths.repoPath),
   }),
 );
 app.route("/api/runs", runRoutes(runs));

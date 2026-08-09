@@ -540,6 +540,12 @@ export class ArtifactStore {
       .get();
   }
 
+  /** Absolute path to the card's regenerable manifest.json (creates/refreshes it). */
+  manifestAbsolutePath(cardId: string): string {
+    this.regenerateManifest(cardId);
+    return path.join(this.artifactRoot, "cards", cardId, "manifest.json");
+  }
+
   readContent(artifact: Artifact): string {
     const absPath = this.resolveServePath(artifact.cardId, artifact.path);
     return fs.readFileSync(absPath, "utf8");

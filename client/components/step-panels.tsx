@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import { StepExecution } from "./StepExecution";
 import { StepGrill } from "./StepGrill";
 import { StepInfo } from "./StepInfo";
+import { StepReview } from "./StepReview";
 import { StepSpec } from "./StepSpec";
 import { StepTasks } from "./StepTasks";
 import type { StepPanelProps } from "./step-panel-types";
@@ -16,4 +17,6 @@ export const STEP_PANELS: Record<string, ComponentType<StepPanelProps>> = {
   plan: StepExecution,
   impl: StepExecution,
   airev: StepExecution,
+  prepeval: StepExecution,
+  review: StepReview,
 };

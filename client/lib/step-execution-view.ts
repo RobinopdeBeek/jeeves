@@ -25,19 +25,36 @@ export function usesFrozenArtifacts(mode: StepExecutionMode): boolean {
   return mode === "frozen";
 }
 
-/** Whether to fetch the plan artifact from the API (successful runs only). */
-export function shouldLoadPlanArtifact(
+/** Markdown overview kinds shown after a successful execution step. */
+const MARKDOWN_ARTIFACT_BY_STEP: Record<string, string> = {
+  plan: "plan",
+  airev: "review",
+};
+
+/** Whether to fetch the step's markdown overview artifact (successful runs only). */
+export function shouldLoadMarkdownArtifact(
   stepKey: string,
   stepStatus: StepStatus | undefined,
 ): boolean {
-  return stepKey === "plan" && stepStatus === "done";
+  return stepKey in MARKDOWN_ARTIFACT_BY_STEP && stepStatus === "done";
 }
 
-/** Plan markdown is shown only after a successful run — not on failed attempts. */
-export function showPlanArtifact(
+/** Artifact kind to load for a step's frozen markdown overview, if any. */
+export function markdownArtifactKind(stepKey: string): string | undefined {
+  return MARKDOWN_ARTIFACT_BY_STEP[stepKey];
+}
+
+/** Markdown overview is shown only after a successful run — not on failed attempts. */
+export function showMarkdownArtifact(
   stepKey: string,
   stepStatus: StepStatus | undefined,
-  planArtifact: unknown,
+  artifact: unknown,
 ): boolean {
-  return stepKey === "plan" && stepStatus === "done" && planArtifact != null;
+  return shouldLoadMarkdownArtifact(stepKey, stepStatus) && artifact != null;
+}
+
+/** Live empty-state / status line while a step is ai-working. */
+export function liveWorkingMessage(stepKey: string): string {
+  if (stepKey === "prepeval") return "Preparing interactive evaluation…";
+  return "agent is warming up…";
 }

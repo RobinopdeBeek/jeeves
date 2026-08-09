@@ -17,7 +17,15 @@ export type WorktreeDiagnostics = {
 /** Seam for ExecutionEngine — WorktreeManager is the production impl. */
 export interface WorktreeLifecycle {
   worktreePathFor(cardId: string): string;
-  create(cardBranch: string, baseSha: string, worktreePath: string): Promise<void>;
+  /** Create or reset `cardBranch` at `baseSha` (`git worktree add -B`). */
+  createFrom(cardBranch: string, baseSha: string, worktreePath: string): Promise<void>;
+  /** Check out an existing durable branch at its tip (no upstream `-B` reset). */
+  checkoutExisting(cardBranch: string, worktreePath: string): Promise<void>;
+  /**
+   * Create a durable branch at `baseSha` with no worktree (fan-out feature branch).
+   * No-op when the branch already exists.
+   */
+  ensureBranch(cardBranch: string, baseSha: string): Promise<void>;
   remove(worktreePath: string): Promise<void>;
   /** Porcelain status only — used for finalize checks without touching the index in parallel. */
   worktreeStatus(cwd: string, options?: WorktreeStatusOptions): Promise<string>;
@@ -80,17 +88,14 @@ export class WorktreeManager implements WorktreeLifecycle {
   /**
    * Create (or reset) a branch at `baseSha` and check it out at
    * `worktreePath`. Never touches the host's primary checkout.
+   * Used for first-run branch creation and retry from a recorded SHA.
    */
-  async create(
+  async createFrom(
     cardBranch: string,
     baseSha: string,
     worktreePath: string,
   ): Promise<void> {
-    const absPath = path.resolve(worktreePath);
-    fs.mkdirSync(path.dirname(absPath), { recursive: true });
-    if (fs.existsSync(absPath)) {
-      await this.remove(absPath);
-    }
+    const absPath = await this.prepareWorktreePath(worktreePath);
     await git(this.repoPath, [
       "worktree",
       "add",
@@ -99,6 +104,38 @@ export class WorktreeManager implements WorktreeLifecycle {
       absPath,
       baseSha,
     ]);
+  }
+
+  /**
+   * Check out an existing durable branch at its current tip.
+   * Must not receive an upstream SHA — continuation preserves Implement commits.
+   */
+  async checkoutExisting(
+    cardBranch: string,
+    worktreePath: string,
+  ): Promise<void> {
+    const absPath = await this.prepareWorktreePath(worktreePath);
+    await git(this.repoPath, ["worktree", "add", absPath, cardBranch]);
+  }
+
+  /**
+   * Create a durable branch at `baseSha` without opening a worktree.
+   * Idempotent when the branch already points at any commit.
+   */
+  async ensureBranch(cardBranch: string, baseSha: string): Promise<void> {
+    if (await gitOk(this.repoPath, ["rev-parse", "--verify", cardBranch])) {
+      return;
+    }
+    await git(this.repoPath, ["branch", cardBranch, baseSha]);
+  }
+
+  private async prepareWorktreePath(worktreePath: string): Promise<string> {
+    const absPath = path.resolve(worktreePath);
+    fs.mkdirSync(path.dirname(absPath), { recursive: true });
+    if (fs.existsSync(absPath)) {
+      await this.remove(absPath);
+    }
+    return absPath;
   }
 
   /** Remove a worktree directory and unregister it from git. */

@@ -78,8 +78,22 @@ describe("POST /:id/implement", () => {
     return id;
   }
 
-  it("fans out children, emits SSE, closes Tasks chat, and rejects a second call", async () => {
+  it("fans out children, ensures feature branch, enqueues unblocked Plan, rejects second call", async () => {
     const cardId = featureReadyToImplement();
+    const enqueued: Array<{ id: string; step: string }> = [];
+    const ensured: string[] = [];
+    deps.engine = {
+      enqueue(id: string, step: string) {
+        enqueued.push({ id, step });
+      },
+      ensureBranch: async (id: string) => {
+        ensured.push(id);
+        store.setCardBranch(id, `jeeves/card-${id}`);
+      },
+      retry() {
+        throw new Error("unused");
+      },
+    } as unknown as CardRouteDeps["engine"];
     const app = cardRoutes(store, project, deps);
     const emitted: string[] = [];
     events.subscribe((e) => {
@@ -92,6 +106,7 @@ describe("POST /:id/implement", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       id: string;
+      branch: string | null;
       implementProgress: { current: number; total: number };
       steps: Array<{ key: string; status: string }>;
       children: Array<{ id: string; title: string }>;
@@ -99,8 +114,14 @@ describe("POST /:id/implement", () => {
     expect(body.steps.find((s) => s.key === "tasks")?.status).toBe("awaiting");
     expect(body.implementProgress).toEqual({ current: 0, total: 2 });
     expect(body.children).toHaveLength(2);
+    expect(body.branch).toBe(`jeeves/card-${cardId}`);
+    expect(ensured).toEqual([cardId, cardId]);
+    const children = store.listCards(project.id).filter((c) => c.parentCardId === cardId);
+    expect(enqueued).toEqual([{ id: children[0]!.id, step: "plan" }]);
+    expect(children[0]!.steps.find((s) => s.key === "plan")?.status).toBe("queued");
+    expect(children[1]!.steps.find((s) => s.key === "plan")?.status).toBe("pending");
     expect(emitted).toContain(cardId);
-    expect(emitted.length).toBe(3);
+    expect(emitted.length).toBeGreaterThanOrEqual(3);
     expect(closeCalls).toEqual([
       {
         id: stepChatSessionId(cardId, "tasks", 0),
@@ -121,6 +142,32 @@ describe("POST /:id/implement", () => {
       method: "POST",
     });
     expect(again.status).toBe(409);
+  });
+
+  it("reverts unblocked Plans when ensure-branch fails", async () => {
+    const cardId = featureReadyToImplement();
+    deps.engine = {
+      enqueue() {
+        throw new Error("must not enqueue after ensure-branch failure");
+      },
+      ensureBranch: async () => {
+        throw new Error("git failed");
+      },
+      retry() {
+        throw new Error("unused");
+      },
+    } as unknown as CardRouteDeps["engine"];
+    const app = cardRoutes(store, project, deps);
+    const res = await app.request(`http://localhost/${cardId}/implement`, {
+      method: "POST",
+    });
+    expect(res.status).toBe(500);
+    // ensure-branch runs before fanOut — no children, Tasks still needs-user.
+    expect(store.listCards(project.id).filter((c) => c.parentCardId === cardId)).toEqual([]);
+    expect(store.getCard(cardId)?.steps.find((s) => s.key === "tasks")?.status).toBe(
+      "needs-user",
+    );
+    expect(store.getCard(cardId)?.branch).toBeNull();
   });
 
   it("rejects an empty tip with 400", async () => {

@@ -67,6 +67,18 @@ describe("WorktreeManager", () => {
     expect(WorktreeManager.cardBranch("abc123")).toBe("jeeves/card-abc123");
   });
 
+  it("ensureBranch creates a durable branch at baseSha without a worktree", async () => {
+    const wm = manager();
+    const branch = WorktreeManager.cardBranch("feature-1");
+    await wm.ensureBranch(branch, temp.mainSha);
+    const sha = (await git(temp.repoPath, ["rev-parse", branch])).trim();
+    expect(sha).toBe(temp.mainSha);
+    expect(fs.existsSync(wm.worktreePathFor("feature-1"))).toBe(false);
+    // Idempotent when the branch already exists.
+    await wm.ensureBranch(branch, temp.mainSha);
+    expect((await git(temp.repoPath, ["rev-parse", branch])).trim()).toBe(temp.mainSha);
+  });
+
   it("defaults worktree root to <repo>/.jeeves/worktrees when omitted", () => {
     const repo = "C:/projects/pantry-checker";
     expect(resolveWorktreeRoot(repo)).toBe(
@@ -74,13 +86,13 @@ describe("WorktreeManager", () => {
     );
   });
 
-  it("creates and removes a worktree at baseSha", async () => {
+  it("createFrom creates a worktree at baseSha and remove cleans it up", async () => {
     const wm = manager();
     const cardId = "card-1";
     const branch = WorktreeManager.cardBranch(cardId);
     const wtPath = wm.worktreePathFor(cardId);
 
-    await wm.create(branch, temp.mainSha, wtPath);
+    await wm.createFrom(branch, temp.mainSha, wtPath);
 
     expect(fs.existsSync(wtPath)).toBe(true);
     const head = (await git(wtPath, ["rev-parse", "HEAD"])).trim();
@@ -94,11 +106,56 @@ describe("WorktreeManager", () => {
     expect(fs.existsSync(wtPath)).toBe(false);
   });
 
+  it("createFrom resets an existing branch to baseSha (wipes tip commits)", async () => {
+    const wm = manager();
+    const cardId = "card-reset";
+    const branch = WorktreeManager.cardBranch(cardId);
+    const wtPath = wm.worktreePathFor(cardId);
+
+    await wm.createFrom(branch, temp.mainSha, wtPath);
+    fs.writeFileSync(path.join(wtPath, "impl.txt"), "implement commit\n");
+    await git(wtPath, ["add", "impl.txt"]);
+    await git(wtPath, ["commit", "-m", "implement"]);
+    const tipBeforeReset = (await git(wtPath, ["rev-parse", "HEAD"])).trim();
+    expect(tipBeforeReset).not.toBe(temp.mainSha);
+    await wm.remove(wtPath);
+
+    await wm.createFrom(branch, temp.mainSha, wtPath);
+    const head = (await git(wtPath, ["rev-parse", "HEAD"])).trim();
+    expect(head).toBe(temp.mainSha);
+    expect(fs.existsSync(path.join(wtPath, "impl.txt"))).toBe(false);
+
+    await wm.remove(wtPath);
+  }, 20_000);
+
+  it("checkoutExisting checks out the branch tip without resetting to upstream", async () => {
+    const wm = manager();
+    const cardId = "card-continue";
+    const branch = WorktreeManager.cardBranch(cardId);
+    const wtPath = wm.worktreePathFor(cardId);
+
+    await wm.createFrom(branch, temp.mainSha, wtPath);
+    fs.writeFileSync(path.join(wtPath, "impl.txt"), "implement commit\n");
+    await git(wtPath, ["add", "impl.txt"]);
+    await git(wtPath, ["commit", "-m", "implement"]);
+    const tipSha = (await git(wtPath, ["rev-parse", "HEAD"])).trim();
+    await wm.remove(wtPath);
+
+    await wm.checkoutExisting(branch, wtPath);
+    const head = (await git(wtPath, ["rev-parse", "HEAD"])).trim();
+    expect(head).toBe(tipSha);
+    expect(fs.existsSync(path.join(wtPath, "impl.txt"))).toBe(true);
+    const currentBranch = (await git(wtPath, ["branch", "--show-current"])).trim();
+    expect(currentBranch).toBe(branch);
+
+    await wm.remove(wtPath);
+  }, 20_000);
+
   it("ignores exchange paths in worktreeStatus when requested", async () => {
     const wm = manager();
     const cardId = "card-exchange";
     const wtPath = wm.worktreePathFor(cardId);
-    await wm.create(WorktreeManager.cardBranch(cardId), temp.mainSha, wtPath);
+    await wm.createFrom(WorktreeManager.cardBranch(cardId), temp.mainSha, wtPath);
 
     const exchangeDir = path.join(wtPath, ".jeeves");
     fs.mkdirSync(exchangeDir, { recursive: true });
@@ -117,7 +174,7 @@ describe("WorktreeManager", () => {
     const wm = manager();
     const cardId = "card-diag";
     const wtPath = wm.worktreePathFor(cardId);
-    await wm.create(WorktreeManager.cardBranch(cardId), temp.mainSha, wtPath);
+    await wm.createFrom(WorktreeManager.cardBranch(cardId), temp.mainSha, wtPath);
 
     fs.writeFileSync(path.join(wtPath, "README.md"), "changed\n");
     fs.writeFileSync(path.join(wtPath, "staged.txt"), "staged\n");
@@ -137,7 +194,7 @@ describe("WorktreeManager", () => {
     const wm = manager();
     const cardId = "card-iso";
     const wtPath = wm.worktreePathFor(cardId);
-    await wm.create(WorktreeManager.cardBranch(cardId), temp.mainSha, wtPath);
+    await wm.createFrom(WorktreeManager.cardBranch(cardId), temp.mainSha, wtPath);
 
     const probeName = ".worktree-probe.txt";
     fs.writeFileSync(path.join(wtPath, probeName), "probe");
@@ -155,7 +212,7 @@ describe("WorktreeManager", () => {
     const wm = manager();
     const cardId = "orphan-card";
     const wtPath = wm.worktreePathFor(cardId);
-    await wm.create(WorktreeManager.cardBranch(cardId), temp.mainSha, wtPath);
+    await wm.createFrom(WorktreeManager.cardBranch(cardId), temp.mainSha, wtPath);
 
     const listedBefore = await git(temp.repoPath, ["worktree", "list", "--porcelain"]);
     expect(listedBefore).toContain(`worktree ${gitPath(wtPath)}`);

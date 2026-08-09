@@ -7,6 +7,13 @@ export const projects = sqliteTable("projects", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   repoPath: text("repo_path").notNull(),
+  /** Explicit local base ref — never inferred from host HEAD (ADR 0009). */
+  defaultBranch: text("default_branch").notNull().default("main"),
+  /**
+   * Ordered Jeeves-owned shell commands (JSON string array). Host gate after
+   * Implement (and AI Review when it commits). Null/empty skips with a warning.
+   */
+  verifyCommands: text("verify_commands"),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 });
 
@@ -64,6 +71,7 @@ export const cardSteps = sqliteTable(
         "plan",
         "impl",
         "airev",
+        "prepeval",
         "review",
         "document",
         "deploy",
@@ -116,6 +124,7 @@ export const artifactKinds = [
   "tasks-draft",
   "tasks-breakdown",
   "plan",
+  "review",
   "eval",
   "screenshot",
   "runlog",
@@ -176,6 +185,7 @@ export const cardAttachments = sqliteTable("card_attachments", {
       "plan",
       "impl",
       "airev",
+      "prepeval",
       "review",
       "document",
       "deploy",

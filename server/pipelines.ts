@@ -18,6 +18,7 @@ export type StepKey =
   | "plan"
   | "impl"
   | "airev"
+  | "prepeval"
   | "review"
   | "document"
   | "deploy";
@@ -40,6 +41,7 @@ export const stepKeys = [
   "plan",
   "impl",
   "airev",
+  "prepeval",
   "review",
   "document",
   "deploy",
@@ -75,6 +77,7 @@ const STEP_DEFS: Record<StepKey, StepDef> = {
   plan: { label: "Plan", stepKind: "ai-execution", column: "implement" },
   impl: { label: "Implement", stepKind: "ai-execution", column: "implement" },
   airev: { label: "AI Review", stepKind: "ai-execution", column: "implement" },
+  prepeval: { label: "Prepare Eval", stepKind: "ai-execution", column: "review" },
   review: { label: "Human Review", stepKind: "human", column: "review" },
   document: { label: "Document", stepKind: "ai-execution", column: "finalize" },
   deploy: { label: "Deploy", stepKind: "ai-execution", column: "finalize" },
@@ -84,7 +87,7 @@ const COLUMN_STEPS: Record<ColumnId, StepKey[]> = {
   backlog: ["info"],
   define: ["grill", "spec", "tasks"],
   implement: ["plan", "impl", "airev"],
-  review: ["review"],
+  review: ["prepeval", "review"],
   finalize: ["document", "deploy"],
 };
 
@@ -276,7 +279,8 @@ export type AdvanceTrigger =
 
 /** Declared follow-on work — adapters dispatch; PipelineEngine does not I/O. */
 export type AdvanceSideEffect =
-  | { type: "enqueue"; stepKey: StepKey }
+  | { type: "enqueue"; cardId: string; stepKey: StepKey }
+  | { type: "ensure-branch"; cardId: string }
   | {
       type: "close-chat";
       stepKey: StepKey;
@@ -297,10 +301,11 @@ export type AdvancePlan =
 
 /**
  * Pure workflow transition: patches + side-effects for a trigger.
- * CardStore persists; routes/engine dispatch effects (enqueue, close-chat).
+ * CardStore persists; routes/engine dispatch effects (enqueue, ensure-branch, close-chat).
  */
 export function advance(
   card: {
+    id: string;
     kind: CardKind | null;
     steps: Array<{ key: StepKey; status: StepStatus }>;
   },
@@ -314,7 +319,11 @@ export function advance(
     const sideEffects: AdvanceSideEffect[] = [];
     for (const step of transition.steps) {
       if (step.status === "queued") {
-        sideEffects.push({ type: "enqueue", stepKey: step.key });
+        sideEffects.push({
+          type: "enqueue",
+          cardId: card.id,
+          stepKey: step.key,
+        });
       }
     }
     return {
@@ -367,6 +376,7 @@ export function advance(
       ok: true,
       stepPatches: transition.patches,
       sideEffects: [
+        { type: "ensure-branch", cardId: card.id },
         {
           type: "close-chat",
           stepKey: "tasks",
@@ -377,8 +387,65 @@ export function advance(
     };
   }
 
-  // step-finished: status patch for the completed step; future rules may
-  // enqueue the next step / move columns here (seam exists even if minimal).
+  // step-finished: status patch for the completed step; Plan → Implement →
+  // AI Review chain on the same card; AI Review success enters Review with
+  // Prepare Eval queued; Prepare Eval success unlocks human Review.
+  if (trigger.stepKey === "plan" && trigger.outcome === "succeeded") {
+    return {
+      ok: true,
+      stepPatches: [
+        { key: "plan", status: "done" },
+        { key: "impl", status: "queued" },
+      ],
+      sideEffects: [
+        { type: "enqueue", cardId: card.id, stepKey: "impl" },
+      ],
+    };
+  }
+
+  if (trigger.stepKey === "impl" && trigger.outcome === "succeeded") {
+    return {
+      ok: true,
+      stepPatches: [
+        { key: "impl", status: "done" },
+        { key: "airev", status: "queued" },
+      ],
+      sideEffects: [
+        { type: "enqueue", cardId: card.id, stepKey: "airev" },
+      ],
+    };
+  }
+
+  if (trigger.stepKey === "airev" && trigger.outcome === "succeeded") {
+    if (card.kind !== "task") {
+      return { ok: false, reason: "AI Review advance requires a task card" };
+    }
+    return {
+      ok: true,
+      cardPatch: { kind: "task", column: "review" },
+      ensureSteps: [
+        { key: "prepeval", status: "queued" },
+        { key: "review", status: "pending" },
+      ],
+      stepPatches: [{ key: "airev", status: "done" }],
+      sideEffects: [
+        { type: "enqueue", cardId: card.id, stepKey: "prepeval" },
+      ],
+    };
+  }
+
+  // Prepare Eval stub success unlocks human Review (slice 8.5; real assemble in 9).
+  if (trigger.stepKey === "prepeval" && trigger.outcome === "succeeded") {
+    return {
+      ok: true,
+      stepPatches: [
+        { key: "prepeval", status: "done" },
+        { key: "review", status: "needs-user" },
+      ],
+      sideEffects: [],
+    };
+  }
+
   const stepStatus: StepStatus =
     trigger.outcome === "succeeded" ? "done" : "needs-user";
   return {

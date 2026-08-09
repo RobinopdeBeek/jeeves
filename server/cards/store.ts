@@ -143,10 +143,68 @@ export class CardStore {
       id: nanoid(10),
       name,
       repoPath,
+      defaultBranch: "main",
+      verifyCommands: null,
       createdAt: new Date(),
     };
     this.db.insert(projects).values(project).run();
     return project;
+  }
+
+  /** Persist the durable card branch name once created. */
+  setCardBranch(cardId: string, branch: string): CardWithSteps {
+    const card = this.db.select().from(cards).where(eq(cards.id, cardId)).get();
+    if (!card) throw new CardStoreError(404, "card not found");
+    this.db.update(cards).set({ branch }).where(eq(cards.id, cardId)).run();
+    return this.getCard(cardId)!;
+  }
+
+  /** Explicit local default branch for the card's project (ADR 0009). */
+  getDefaultBranch(cardId: string): string {
+    const row = this.db
+      .select({ defaultBranch: projects.defaultBranch })
+      .from(cards)
+      .innerJoin(projects, eq(cards.projectId, projects.id))
+      .where(eq(cards.id, cardId))
+      .get();
+    if (!row) throw new CardStoreError(404, "card not found");
+    return row.defaultBranch;
+  }
+
+  /**
+   * Jeeves-owned host verify commands for the card's project (JSON text).
+   * Null/empty means the host gate skips with a warning.
+   */
+  getVerifyCommandsRaw(cardId: string): string | null {
+    const row = this.db
+      .select({ verifyCommands: projects.verifyCommands })
+      .from(cards)
+      .innerJoin(projects, eq(cards.projectId, projects.id))
+      .where(eq(cards.id, cardId))
+      .get();
+    if (!row) throw new CardStoreError(404, "card not found");
+    return row.verifyCommands;
+  }
+
+  /**
+   * Upstream ref for a new card branch: parent feature branch when present,
+   * otherwise the project's configured default_branch.
+   */
+  getUpstreamRef(cardId: string): string {
+    const card = this.db.select().from(cards).where(eq(cards.id, cardId)).get();
+    if (!card) throw new CardStoreError(404, "card not found");
+    if (card.parentCardId) {
+      const parent = this.db
+        .select()
+        .from(cards)
+        .where(eq(cards.id, card.parentCardId))
+        .get();
+      if (!parent?.branch) {
+        throw new CardStoreError(409, "parent feature branch not recorded");
+      }
+      return parent.branch;
+    }
+    return this.getDefaultBranch(cardId);
   }
 
   /**
@@ -222,7 +280,7 @@ export class CardStore {
     }
 
     const plan = this.requireAdvance(
-      { kind: card.kind, steps: this.stepStatuses(cardId) },
+      { id: cardId, kind: card.kind, steps: this.stepStatuses(cardId) },
       { type: "kind-decision", path },
     );
     this.applyAdvancePlan(cardId, plan);
@@ -397,8 +455,17 @@ export class CardStore {
   }
 
   /**
+   * Validate Implement → without mutating so adapters can ensure-branch first.
+   * Same checks as fanOut (feature, tasks needs-user, non-empty tip).
+   */
+  assertReadyToFanOut(cardId: string, round = 0): void {
+    this.readFanOutPlan(cardId, round);
+  }
+
+  /**
    * Implement → fan-out: freeze tip, materialize child task cards + blockers,
-   * set Tasks to awaiting. No child Plan enqueue. Second call → 409.
+   * set Tasks to awaiting, queue Plan on unblocked children, declare
+   * ensure-branch + per-child enqueue effects. Second call → 409.
    */
   fanOut(
     cardId: string,
@@ -408,33 +475,11 @@ export class CardStore {
     children: CardWithSteps[];
     sideEffects: AdvanceSideEffect[];
   } {
-    const artifacts = this.requireArtifacts();
-    const parent = this.getCard(cardId);
-    if (!parent) throw new CardStoreError(404, "card not found");
-    if (parent.kind !== "feature") {
-      throw new CardStoreError(409, "fan-out requires a feature card");
-    }
-
-    const plan = this.requireAdvance(parent, { type: "tasks-to-implement" });
-
-    let tip: TasksDraft;
-    try {
-      tip = parseTasksDraft(artifacts.readTasksDraftTip(cardId, round));
-    } catch (err) {
-      throw new CardStoreError(
-        400,
-        err instanceof TasksDraftError ? err.message : String(err),
-      );
-    }
-    if (tip.tasks.length < 1) {
-      throw new CardStoreError(400, "fan-out requires at least one task");
-    }
-    if (tip.tasks.some((t) => !t.title.trim())) {
-      throw new CardStoreError(400, "all task titles must be non-empty");
-    }
+    const { parent, plan, tip, artifacts } = this.readFanOutPlan(cardId, round);
 
     const childIds: string[] = [];
     const draftIdToCardId = new Map<string, string>();
+    const enqueueEffects: AdvanceSideEffect[] = [];
 
     this.db.transaction(() => {
       artifacts.freezeTasksBreakdown(cardId, round);
@@ -473,14 +518,73 @@ export class CardStore {
         }
       }
 
+      for (const childId of childIds) {
+        if (this.hasUnmergedBlockers(childId)) continue;
+        this.setStepStatus(childId, "plan", "queued");
+        enqueueEffects.push({
+          type: "enqueue",
+          cardId: childId,
+          stepKey: "plan",
+        });
+      }
+
       this.applyAdvancePlan(cardId, plan);
     });
 
     return {
       card: this.getCard(cardId)!,
       children: childIds.map((id) => this.getCard(id)!),
-      sideEffects: plan.sideEffects,
+      sideEffects: [...plan.sideEffects, ...enqueueEffects],
     };
+  }
+
+  /**
+   * If fan-out ignition fails after children were queued (e.g. late effect error),
+   * park those Plans back at pending so boot cannot enqueue without recovery.
+   */
+  revertIgnitedPlans(childIds: string[]): void {
+    for (const id of childIds) {
+      const step = this.getCard(id)?.steps.find((s) => s.key === "plan");
+      if (step?.status === "queued") {
+        this.setStepStatus(id, "plan", "pending");
+      }
+    }
+  }
+
+  private readFanOutPlan(
+    cardId: string,
+    round: number,
+  ): {
+    parent: CardWithSteps;
+    plan: AdvancePlan & { ok: true };
+    tip: TasksDraft;
+    artifacts: ArtifactStore;
+  } {
+    const artifacts = this.requireArtifacts();
+    const parent = this.getCard(cardId);
+    if (!parent) throw new CardStoreError(404, "card not found");
+    if (parent.kind !== "feature") {
+      throw new CardStoreError(409, "fan-out requires a feature card");
+    }
+
+    const plan = this.requireAdvance(parent, { type: "tasks-to-implement" });
+
+    let tip: TasksDraft;
+    try {
+      tip = parseTasksDraft(artifacts.readTasksDraftTip(cardId, round));
+    } catch (err) {
+      throw new CardStoreError(
+        400,
+        err instanceof TasksDraftError ? err.message : String(err),
+      );
+    }
+    if (tip.tasks.length < 1) {
+      throw new CardStoreError(400, "fan-out requires at least one task");
+    }
+    if (tip.tasks.some((t) => !t.title.trim())) {
+      throw new CardStoreError(400, "all task titles must be non-empty");
+    }
+    return { parent, plan, tip, artifacts };
   }
 
   /**
@@ -504,6 +608,7 @@ export class CardStore {
 
   private requireAdvance(
     card: {
+      id: string;
       kind: Card["kind"];
       steps: Array<{ key: StepKey; status: StepStatus }>;
     },
@@ -553,19 +658,62 @@ export class CardStore {
     }));
   }
 
-  /** Steps waiting for the ExecutionEngine, oldest card first (boot scan). */
+  /**
+   * Eligible execution steps for the queue: `queued` and no unmerged blockers,
+   * ordered by sibling group (parent board position, else own position), then
+   * sibling `position`, then step index plan < impl < airev < prepeval
+   * (depth-first per task). Boot and live enqueue both rebuild from this.
+   */
   listQueuedSteps(): Array<{ cardId: string; stepKey: StepKey }> {
-    return this.db
+    const rows = this.db
       .select({
         cardId: cardSteps.cardId,
         stepKey: cardSteps.stepKey,
-        createdAt: cards.createdAt,
+        position: cards.position,
+        parentCardId: cards.parentCardId,
       })
       .from(cardSteps)
       .innerJoin(cards, eq(cardSteps.cardId, cards.id))
       .where(eq(cardSteps.status, "queued"))
-      .orderBy(asc(cards.createdAt))
-      .all()
+      .all();
+
+    const parentIds = [
+      ...new Set(
+        rows
+          .map((r) => r.parentCardId)
+          .filter((id): id is string => id != null),
+      ),
+    ];
+    const parentPosition = new Map<string, number>();
+    for (const id of parentIds) {
+      const row = this.db
+        .select({ position: cards.position })
+        .from(cards)
+        .where(eq(cards.id, id))
+        .get();
+      if (row) parentPosition.set(id, row.position);
+    }
+
+    return rows
+      .filter(
+        (r) =>
+          executionQueueIndex(r.stepKey) !== undefined &&
+          !this.hasUnmergedBlockers(r.cardId),
+      )
+      .sort((a, b) => {
+        const groupA = a.parentCardId
+          ? (parentPosition.get(a.parentCardId) ?? a.position)
+          : a.position;
+        const groupB = b.parentCardId
+          ? (parentPosition.get(b.parentCardId) ?? b.position)
+          : b.position;
+        if (groupA !== groupB) return groupA - groupB;
+        if (a.position !== b.position) return a.position - b.position;
+        const step =
+          executionQueueIndex(a.stepKey)! - executionQueueIndex(b.stepKey)!;
+        if (step !== 0) return step;
+        return a.cardId.localeCompare(b.cardId);
+      })
       .map((r) => ({ cardId: r.cardId, stepKey: r.stepKey as StepKey }));
   }
 
@@ -694,6 +842,17 @@ export class CardStore {
       .all();
   }
 
+  /** True when any blocker card is not yet merged (slice 10 releases these). */
+  hasUnmergedBlockers(cardId: string): boolean {
+    const rows = this.db
+      .select({ status: cards.status })
+      .from(cardBlockers)
+      .innerJoin(cards, eq(cardBlockers.blocksOnCardId, cards.id))
+      .where(eq(cardBlockers.cardId, cardId))
+      .all();
+    return rows.some((r) => r.status !== "merged");
+  }
+
   private loadChildren(parentId: string): CardChildSummary[] {
     const kids = this.db
       .select()
@@ -720,5 +879,21 @@ export class CardStore {
         implementProgress: full.implementProgress,
       };
     });
+  }
+}
+
+/** Depth-first queue step index — only AI-execution pipeline steps. */
+function executionQueueIndex(stepKey: string): number | undefined {
+  switch (stepKey) {
+    case "plan":
+      return 0;
+    case "impl":
+      return 1;
+    case "airev":
+      return 2;
+    case "prepeval":
+      return 3;
+    default:
+      return undefined;
   }
 }

@@ -1,17 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { CardAttachmentStore } from "../attachments/card-library.js";
 import { CardStoreError, type CardWithSteps } from "../cards/store.js";
 import type { CardStore } from "../cards/store.js";
 import type { ArtifactStore } from "../artifacts/store.js";
 import type { StepKey } from "../pipelines.js";
 import { EventBus } from "./events.js";
+import {
+  buildImplementTaskPrompt,
+  type ImplementAttachmentInput,
+} from "./implement-task.js";
+import { buildAiReviewPrompt } from "./ai-review.js";
+import { buildPlanImplementationPrompt } from "./plan-implementation.js";
 import type { RunStore } from "./run-store.js";
 import type { AgentRunner, RunEvent } from "./runner.js";
 import type { WorktreeDiagnostics, WorktreeLifecycle } from "./worktree-manager.js";
 import { WorktreeManager } from "./worktree-manager.js";
 import { meetsPostconditions, stepPolicy } from "./step-policies.js";
-
-const DEFAULT_BASE_REF = "main";
+import { parseVerifyCommands, runVerifyCommands } from "./verify-commands.js";
 
 export interface ExecutionEngineDeps {
   store: CardStore;
@@ -20,25 +26,50 @@ export interface ExecutionEngineDeps {
   worktrees: WorktreeLifecycle;
   artifacts: ArtifactStore;
   events: EventBus;
-  /** Repo root — prompt files resolve relative to this. */
+  /** Repo root — prompt templates resolve relative to this. */
   repoRoot: string;
+  /** Card Info library — Plan/Implement/AI Review inject on-disk paths. */
+  cardAttachments?: CardAttachmentStore;
 }
 
 /**
- * ExecutionEngine — sequential FIFO queue over the AgentRunner seam. One
- * run at a time; step transitions, run rows, and SSE events happen here.
+ * ExecutionEngine — sequential queue over the AgentRunner seam. One run at
+ * a time. Order is derived from CardStore.listQueuedSteps (depth-first), not
+ * in-memory insertion order.
  */
 export class ExecutionEngine {
-  private readonly queue: Array<{ cardId: string; stepKey: StepKey }> = [];
   private processing = false;
   private idleResolvers: Array<() => void> = [];
   private readonly abort = new AbortController();
 
   constructor(private readonly deps: ExecutionEngineDeps) {}
 
-  enqueue(cardId: string, stepKey: StepKey): void {
-    this.queue.push({ cardId, stepKey });
+  /**
+   * Wake the processor. The card/step must already be `queued` in the store;
+   * the next job is always the head of listQueuedSteps (eligible + depth-first).
+   */
+  enqueue(_cardId: string, _stepKey: StepKey): void {
     void this.processQueue();
+  }
+
+  /**
+   * Create the durable card branch from its upstream tip and persist
+   * `cards.branch`. No-op when already recorded. Used at feature fan-out.
+   */
+  async ensureBranch(cardId: string): Promise<void> {
+    const { store, worktrees, events } = this.deps;
+    const card = store.getCard(cardId);
+    if (!card) throw new CardStoreError(404, "card not found");
+    if (card.branch) return;
+
+    const branch = WorktreeManager.cardBranch(cardId);
+    const upstream = store.getUpstreamRef(cardId);
+    const baseSha = await worktrees.resolveRef(upstream);
+    await worktrees.ensureBranch(branch, baseSha);
+    events.emit({
+      type: "card.updated",
+      card: store.setCardBranch(cardId, branch),
+    });
   }
 
   /**
@@ -67,20 +98,22 @@ export class ExecutionEngine {
         card: store.setStepStatus(orphan.cardId, orphan.stepKey as StepKey, "needs-user"),
       });
     }
-    for (const step of store.listQueuedSteps()) {
-      this.enqueue(step.cardId, step.stepKey);
+    // One wake drains all eligible steps in durable depth-first order.
+    if (store.listQueuedSteps().length > 0) {
+      const head = store.listQueuedSteps()[0]!;
+      this.enqueue(head.cardId, head.stepKey);
     }
   }
 
-  /** Graceful shutdown: cancel the in-flight run and drain the queue. */
+  /** Graceful shutdown: cancel the in-flight run and stop picking new work. */
   async stop(): Promise<void> {
     this.abort.abort(new Error("server shutting down"));
     await this.whenIdle();
   }
 
-  /** Resolves once the queue is empty and no run is in flight. */
+  /** Resolves once no run is in flight and the processor is idle. */
   whenIdle(): Promise<void> {
-    if (!this.processing && this.queue.length === 0) return Promise.resolve();
+    if (!this.processing) return Promise.resolve();
     return new Promise((resolve) => this.idleResolvers.push(resolve));
   }
 
@@ -91,9 +124,13 @@ export class ExecutionEngine {
       // After shutdown-abort, leave remaining jobs `queued` in the DB so the
       // next boot re-enqueues them; only the in-flight run is interrupted.
       while (!this.abort.signal.aborted) {
-        const job = this.queue.shift();
-        if (!job) break;
-        await this.execute(job.cardId, job.stepKey);
+        const next = this.deps.store.listQueuedSteps()[0];
+        if (!next) break;
+        const claim = `${next.cardId}:${next.stepKey}`;
+        await this.execute(next.cardId, next.stepKey);
+        const head = this.deps.store.listQueuedSteps()[0];
+        // execute must claim the step; otherwise avoid spinning on it.
+        if (head && `${head.cardId}:${head.stepKey}` === claim) break;
       }
     } finally {
       this.processing = false;
@@ -104,18 +141,29 @@ export class ExecutionEngine {
   }
 
   private async execute(cardId: string, stepKey: StepKey): Promise<void> {
-    const { store, runs, runner, worktrees, artifacts, events, repoRoot } = this.deps;
+    const { store, runs, runner, worktrees, artifacts, events } = this.deps;
     const policy = stepPolicy(stepKey);
     const card = store.getCard(cardId);
     if (!policy || !card) return;
+    // Blocked cards stay queued until merge (slice 10); never start them.
+    if (store.hasUnmergedBlockers(cardId)) return;
+    const step = card.steps.find((s) => s.key === stepKey);
+    if (step?.status !== "queued") return;
 
     const round = currentRound(cardId);
     const priorRun = runs.latestForStep(cardId, stepKey);
+    const branch = card.branch ?? WorktreeManager.cardBranch(cardId);
+    const isRetry = priorRun?.status === "failed" && Boolean(priorRun.baseSha);
+    const isContinuation = Boolean(card.branch) && !isRetry;
+
     let baseSha: string;
-    if (priorRun?.status === "failed" && priorRun.baseSha) {
-      baseSha = priorRun.baseSha;
+    if (isRetry) {
+      baseSha = priorRun!.baseSha!;
+    } else if (isContinuation) {
+      // Record tip-at-start so a later retry of this run can recreate cleanly.
+      baseSha = await worktrees.resolveRef(branch);
     } else {
-      baseSha = await worktrees.resolveRef(DEFAULT_BASE_REF);
+      baseSha = await worktrees.resolveRef(store.getUpstreamRef(cardId));
     }
 
     const run = runs.create({
@@ -135,7 +183,6 @@ export class ExecutionEngine {
     });
 
     const repoPath = store.getRepoPath(cardId);
-    const branch = WorktreeManager.cardBranch(cardId);
     const worktreePath = worktrees.worktreePathFor(cardId);
     let headSha: string | undefined;
 
@@ -153,10 +200,56 @@ export class ExecutionEngine {
     };
 
     try {
-      await worktrees.create(branch, baseSha, worktreePath);
+      if (isContinuation) {
+        await worktrees.checkoutExisting(branch, worktreePath);
+      } else {
+        await worktrees.createFrom(branch, baseSha, worktreePath);
+      }
+      if (!card.branch) {
+        store.setCardBranch(cardId, branch);
+      }
+
+      if (policy.hostBody) {
+        const line = policy.hostStatusLine ?? "Host step running…";
+        try {
+          fs.appendFileSync(logPath, `${line}\n`);
+        } catch {
+          // Best-effort — UI still gets the SSE line.
+        }
+        events.emit({ type: "run.log", runId: run.id, cardId, line });
+
+        const tipBefore = baseSha;
+        await policy.hostBody({
+          workspacePath: worktreePath,
+          headSha: tipBefore,
+          baseSha,
+        });
+        // Re-resolve tip so "no commits" is checked against the real worktree.
+        headSha = await worktrees.resolveRef(branch);
+        const ctx = {
+          workspacePath: worktreePath,
+          headSha,
+          baseSha: tipBefore,
+        };
+        await this.finalizeStep(cardId, stepKey, round, policy.skill, ctx);
+
+        if (!meetsPostconditions(stepKey, artifacts, cardId, round)) {
+          await fail("step postconditions not met");
+        } else {
+          this.freezeRunLog(run, stepKey, round, policy.skill, headSha);
+          runs.finish(run.id, { status: "succeeded" });
+          this.finishStep(cardId, stepKey, run.id, "succeeded");
+        }
+        return;
+      }
+
+      if (!policy.promptFile) {
+        throw new Error(`step ${stepKey} has no promptFile`);
+      }
 
       let result: Extract<RunEvent, { type: "result" }> | undefined;
-      const iterable = runner.run(path.resolve(repoRoot, policy.promptFile), {
+      const prompt = this.buildPrompt(card, stepKey, policy.promptFile);
+      const iterable = runner.run(prompt, {
         cwd: repoPath,
         branch,
         worktreePath,
@@ -179,14 +272,26 @@ export class ExecutionEngine {
         result?.status === "finished" &&
         meetsPostconditions(stepKey, artifacts, cardId, round)
       ) {
-        this.freezeRunLog(run, stepKey, round, policy.skill, headSha);
-        runs.finish(run.id, {
-          status: "succeeded",
-          model: result.model,
-          tokensIn: result.tokensIn,
-          tokensOut: result.tokensOut,
-        });
-        this.finishStep(cardId, stepKey, run.id, "succeeded");
+        const verify = await this.runHostVerifyIfNeeded(
+          run.id,
+          cardId,
+          stepKey,
+          worktreePath,
+          logPath,
+          headSha !== undefined && headSha !== baseSha,
+        );
+        if (verify.status === "failed") {
+          await fail(verify.message);
+        } else {
+          this.freezeRunLog(run, stepKey, round, policy.skill, headSha);
+          runs.finish(run.id, {
+            status: "succeeded",
+            model: result.model,
+            tokensIn: result.tokensIn,
+            tokensOut: result.tokensOut,
+          });
+          this.finishStep(cardId, stepKey, run.id, "succeeded");
+        }
       } else if (result?.status === "cancelled") {
         await fail("run cancelled");
       } else {
@@ -318,9 +423,150 @@ export class ExecutionEngine {
     events.emit({ type: "card.updated", card });
     for (const effect of sideEffects) {
       if (effect.type === "enqueue") {
-        this.enqueue(cardId, effect.stepKey);
+        this.enqueue(effect.cardId, effect.stepKey);
       }
     }
+  }
+
+  /** Compose the fully injected prompt for a step (skills never hunt the DB). */
+  private buildPrompt(
+    card: CardWithSteps,
+    stepKey: StepKey,
+    promptFile: string,
+  ): string {
+    const { artifacts, repoRoot } = this.deps;
+    const templatePath = path.resolve(repoRoot, promptFile);
+
+    if (stepKey === "plan") {
+      return buildPlanImplementationPrompt(
+        {
+          cardTitle: card.title,
+          cardDescription: card.description,
+          parentSpec: this.parentSpecBody(card),
+          manifestPath: artifacts.manifestAbsolutePath(card.id),
+          attachments: this.cardLibraryAttachments(card.id),
+        },
+        templatePath,
+      );
+    }
+
+    if (stepKey === "impl") {
+      return buildImplementTaskPrompt(
+        {
+          cardTitle: card.title,
+          cardDescription: card.description,
+          plan: this.planArtifactBody(card.id),
+          manifestPath: artifacts.manifestAbsolutePath(card.id),
+          attachments: this.cardLibraryAttachments(card.id),
+        },
+        templatePath,
+      );
+    }
+
+    if (stepKey === "airev") {
+      return buildAiReviewPrompt(
+        {
+          cardTitle: card.title,
+          cardDescription: card.description,
+          plan: this.planArtifactBody(card.id),
+          manifestPath: artifacts.manifestAbsolutePath(card.id),
+          attachments: this.cardLibraryAttachments(card.id),
+        },
+        templatePath,
+      );
+    }
+
+    return fs.readFileSync(templatePath, "utf8");
+  }
+
+  private planArtifactBody(cardId: string): string {
+    const { artifacts } = this.deps;
+    const plan = artifacts.latest(cardId, {
+      stepKey: "plan",
+      round: currentRound(cardId),
+      kind: "plan",
+    });
+    return plan ? artifacts.readBody(plan) : "";
+  }
+
+  private parentSpecBody(card: CardWithSteps): string {
+    if (!card.parentCardId) return "";
+    const { artifacts } = this.deps;
+    const spec = artifacts.latest(card.parentCardId, {
+      stepKey: "spec",
+      round: 0,
+      kind: "spec",
+    });
+    return spec ? artifacts.readBody(spec) : "";
+  }
+
+  private cardLibraryAttachments(cardId: string): ImplementAttachmentInput[] {
+    const library = this.deps.cardAttachments;
+    if (!library) return [];
+    const out: ImplementAttachmentInput[] = [];
+    for (const att of library.list(cardId)) {
+      const absolutePath = library.absolutePath(cardId, att.id);
+      if (!absolutePath) continue;
+      out.push({
+        absolutePath,
+        filename: att.filename,
+        instruction: att.instruction,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Host gate after a successful agent finalize when the step policy opts in.
+   * Null/empty `projects.verify_commands` skips with a warning on the run log.
+   * `"if-committed"` skips entirely when the step made no commits.
+   */
+  private async runHostVerifyIfNeeded(
+    runId: string,
+    cardId: string,
+    stepKey: StepKey,
+    worktreePath: string,
+    logPath: string,
+    committed: boolean,
+  ): Promise<{ status: "passed" | "skipped" } | { status: "failed"; message: string }> {
+    const policy = stepPolicy(stepKey);
+    if (!policy?.hostVerify) return { status: "skipped" };
+    if (policy.hostVerify === "if-committed" && !committed) {
+      return { status: "skipped" };
+    }
+
+    const appendLog = (line: string) => {
+      try {
+        fs.appendFileSync(logPath, `${line}\n`);
+      } catch {
+        // Best-effort — failure evidence still carries the Error message.
+      }
+      this.deps.events.emit({
+        type: "run.log",
+        runId,
+        cardId,
+        line,
+      });
+    };
+
+    let commands: string[] | null;
+    try {
+      commands = parseVerifyCommands(this.deps.store.getVerifyCommandsRaw(cardId));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      appendLog(message);
+      return { status: "failed", message };
+    }
+
+    const result = await runVerifyCommands({
+      commands,
+      cwd: worktreePath,
+      log: appendLog,
+    });
+    if (result.status === "failed") {
+      return { status: "failed", message: result.message };
+    }
+    return { status: result.status === "passed" ? "passed" : "skipped" };
   }
 }
 

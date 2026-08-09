@@ -58,7 +58,7 @@
 
 **Source:**
 - [agents.md](https://agents.md/) (Agentic AI Foundation / Linux Foundation stewardship)
-- OpenAI: [Customization](https://learn.chatgpt.com/docs/customization/overview.md), [Custom instructions with AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md.md); hierarchical note in [openai/codex](https://github.com/openai/codex/blob/main/codex-rs/core/hierarchical_agents_message.md)
+- OpenAI: [Best practices](https://developers.openai.com/codex/learn/best-practices), [Customization](https://developers.openai.com/codex/concepts/customization); example dense brief in [openai/codex AGENTS.md](https://github.com/openai/codex/blob/main/AGENTS.md)
 - Anthropic: [CLAUDE.md](https://code.claude.com/docs/en/claude-md), [Best practices](https://code.claude.com/docs/en/best-practices)
 - Cursor: [Rules](https://cursor.com/docs/rules)
 - Google Jules: [Getting started](https://jules.google/docs/)

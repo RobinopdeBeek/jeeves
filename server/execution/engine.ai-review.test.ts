@@ -21,6 +21,8 @@ import {
   runnerWithFinalize,
   stepStatus,
   tick,
+  VERIFY_CMD_FAIL,
+  VERIFY_CMD_PASS,
   type EngineTestHarness,
 } from "./engine.test-helpers.js";
 
@@ -126,7 +128,7 @@ describe("ExecutionEngine", () => {
       const project = harness.store.ensureDefaultProject("jeeves", "C:/target-repo");
       harness.db
         .update(projects)
-        .set({ verifyCommands: JSON.stringify(["false"]) })
+        .set({ verifyCommands: JSON.stringify([VERIFY_CMD_FAIL]) })
         .where(eq(projects.id, project.id))
         .run();
 
@@ -157,7 +159,7 @@ describe("ExecutionEngine", () => {
       const project = harness.store.ensureDefaultProject("jeeves", "C:/target-repo");
       harness.db
         .update(projects)
-        .set({ verifyCommands: JSON.stringify(["false"]) })
+        .set({ verifyCommands: JSON.stringify([VERIFY_CMD_FAIL]) })
         .where(eq(projects.id, project.id))
         .run();
 
@@ -176,7 +178,7 @@ describe("ExecutionEngine", () => {
       const project = harness.store.ensureDefaultProject("jeeves", "C:/target-repo");
       harness.db
         .update(projects)
-        .set({ verifyCommands: JSON.stringify(["true"]) })
+        .set({ verifyCommands: JSON.stringify([VERIFY_CMD_PASS]) })
         .where(eq(projects.id, project.id))
         .run();
       const card = queuedCard(harness);

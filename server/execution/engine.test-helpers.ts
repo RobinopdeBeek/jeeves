@@ -252,6 +252,10 @@ export function stepStatus(harness: EngineTestHarness, cardId: string, stepKey: 
   return harness.store.getCard(cardId)!.steps.find((s) => s.key === stepKey)?.status;
 }
 
+/** Cross-platform verify_commands stubs (Unix `true`/`false` are not cmd.exe builtins). */
+export const VERIFY_CMD_PASS = 'node -e "process.exit(0)"';
+export const VERIFY_CMD_FAIL = 'node -e "process.exit(1)"';
+
 export function expectDiagnosticAttachment(harness: EngineTestHarness, cardId: string) {
   const diag = harness.artifactStore.latest(cardId, {
     stepKey: "plan",

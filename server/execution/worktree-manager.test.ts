@@ -40,9 +40,10 @@ describe("WorktreeManager", () => {
     await git(repoPath, ["commit", "-m", "initial"]);
     const mainSha = (await git(repoPath, ["rev-parse", "HEAD"])).trim();
     temp = { repoPath, mainSha, worktreeRoot };
-  });
+  }, 20_000);
 
   afterEach(async () => {
+    if (!temp) return;
     const manager = new WorktreeManager({
       repoPath: temp.repoPath,
       worktreeRoot: temp.worktreeRoot,
@@ -54,7 +55,7 @@ describe("WorktreeManager", () => {
     }
     fs.rmSync(temp.repoPath, { recursive: true, force: true });
     fs.rmSync(temp.worktreeRoot, { recursive: true, force: true });
-  });
+  }, 20_000);
 
   function manager() {
     return new WorktreeManager({
@@ -147,6 +148,50 @@ describe("WorktreeManager", () => {
     expect(fs.existsSync(path.join(wtPath, "impl.txt"))).toBe(true);
     const currentBranch = (await git(wtPath, ["branch", "--show-current"])).trim();
     expect(currentBranch).toBe(branch);
+
+    await wm.remove(wtPath);
+  }, 20_000);
+
+  it("prepareRunWorkspace continues at tip and retries from recorded base_sha", async () => {
+    const wm = manager();
+    const cardId = "card-prepare";
+    const branch = WorktreeManager.cardBranch(cardId);
+    const wtPath = wm.worktreePathFor(cardId);
+
+    const first = await wm.prepareRunWorkspace({
+      cardBranch: branch,
+      worktreePath: wtPath,
+      hasDurableBranch: false,
+      priorFailedBaseSha: null,
+      upstreamRef: "main",
+    });
+    expect(first).toEqual({ mode: "create", baseSha: temp.mainSha });
+    fs.writeFileSync(path.join(wtPath, "impl.txt"), "implement\n");
+    await git(wtPath, ["add", "impl.txt"]);
+    await git(wtPath, ["commit", "-m", "implement"]);
+    const tipSha = (await git(wtPath, ["rev-parse", "HEAD"])).trim();
+    await wm.remove(wtPath);
+
+    const cont = await wm.prepareRunWorkspace({
+      cardBranch: branch,
+      worktreePath: wtPath,
+      hasDurableBranch: true,
+      priorFailedBaseSha: null,
+      upstreamRef: "main",
+    });
+    expect(cont).toEqual({ mode: "checkout", baseSha: tipSha });
+    expect(fs.existsSync(path.join(wtPath, "impl.txt"))).toBe(true);
+    await wm.remove(wtPath);
+
+    const retry = await wm.resolveRunBase({
+      cardBranch: branch,
+      hasDurableBranch: true,
+      priorFailedBaseSha: temp.mainSha,
+      upstreamRef: "main",
+    });
+    expect(retry).toEqual({ mode: "create", baseSha: temp.mainSha });
+    await wm.openRunWorkspace(retry, branch, wtPath);
+    expect(fs.existsSync(path.join(wtPath, "impl.txt"))).toBe(false);
 
     await wm.remove(wtPath);
   }, 20_000);

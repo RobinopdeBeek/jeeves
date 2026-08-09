@@ -1,4 +1,4 @@
-import { and, asc, eq, max } from "drizzle-orm";
+import { and, asc, eq, inArray, max } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import {
   ArtifactStoreError,
@@ -23,6 +23,7 @@ import {
   backlogEnrichedSteps,
   canCreateSpec,
   canCreateTasks,
+  executionQueueIndex,
   orderEnrichedSteps,
   type AdvancePlan,
   type AdvanceSideEffect,
@@ -694,11 +695,15 @@ export class CardStore {
       if (row) parentPosition.set(id, row.position);
     }
 
+    const blockedIds = this.cardsWithUnmergedBlockers([
+      ...new Set(rows.map((r) => r.cardId)),
+    ]);
+
     return rows
       .filter(
         (r) =>
           executionQueueIndex(r.stepKey) !== undefined &&
-          !this.hasUnmergedBlockers(r.cardId),
+          !blockedIds.has(r.cardId),
       )
       .sort((a, b) => {
         const groupA = a.parentCardId
@@ -844,13 +849,26 @@ export class CardStore {
 
   /** True when any blocker card is not yet merged (slice 10 releases these). */
   hasUnmergedBlockers(cardId: string): boolean {
+    return this.cardsWithUnmergedBlockers([cardId]).has(cardId);
+  }
+
+  /** Batch blocker lookup — cards whose blockers include any non-merged card. */
+  private cardsWithUnmergedBlockers(cardIds: string[]): Set<string> {
+    if (cardIds.length === 0) return new Set();
     const rows = this.db
-      .select({ status: cards.status })
+      .select({
+        cardId: cardBlockers.cardId,
+        status: cards.status,
+      })
       .from(cardBlockers)
       .innerJoin(cards, eq(cardBlockers.blocksOnCardId, cards.id))
-      .where(eq(cardBlockers.cardId, cardId))
+      .where(inArray(cardBlockers.cardId, cardIds))
       .all();
-    return rows.some((r) => r.status !== "merged");
+    const blocked = new Set<string>();
+    for (const row of rows) {
+      if (row.status !== "merged") blocked.add(row.cardId);
+    }
+    return blocked;
   }
 
   private loadChildren(parentId: string): CardChildSummary[] {
@@ -879,21 +897,5 @@ export class CardStore {
         implementProgress: full.implementProgress,
       };
     });
-  }
-}
-
-/** Depth-first queue step index — only AI-execution pipeline steps. */
-function executionQueueIndex(stepKey: string): number | undefined {
-  switch (stepKey) {
-    case "plan":
-      return 0;
-    case "impl":
-      return 1;
-    case "airev":
-      return 2;
-    case "prepeval":
-      return 3;
-    default:
-      return undefined;
   }
 }

@@ -1,32 +1,33 @@
 import path from "node:path";
 import type { ArtifactStore, HarvestDeclaration } from "../artifacts/store.js";
+import type { CardWithSteps } from "../cards/store.js";
 import type { StepKey } from "../pipelines.js";
+import { aiReviewPromptVars } from "./ai-review.js";
+import { implementPromptVars } from "./implement-task.js";
+import { planPromptVars } from "./plan-implementation.js";
 import {
   PREPEVAL_STUB_EXCHANGE,
   writePrepareEvalStub,
 } from "./prepare-eval-stub.js";
+import type { CardAttachmentInput } from "./render-prompt.js";
 import type { RunFinalizeContext } from "./runner.js";
 import type { WorktreeLifecycle } from "./worktree-manager.js";
 
-export interface StepExecutionPolicy {
+/** Commit expectation on the card branch after the step settles. */
+export type CommitExpectation = "forbidden" | "required" | "any";
+
+export interface PromptBuildContext {
+  card: CardWithSteps;
+  planBody: string;
+  parentSpec: string;
+  manifestPath: string;
+  attachments: readonly CardAttachmentInput[];
+}
+
+interface StepPolicyBase {
   skill: string;
-  /**
-   * Skill prompt under the app repo. Required for agent-run steps; unused when
-   * `hostBody` is set (Prepare Eval stub).
-   */
-  promptFile?: string;
-  /**
-   * Host-owned step body — skips AgentRunner. Used for the Prepare Eval stub
-   * until slice 9 wires real eval-assemble.
-   */
-  hostBody?: (ctx: RunFinalizeContext) => Promise<void>;
-  /** Run-log / SSE status line while `hostBody` runs (Prepare Eval stub). */
-  hostStatusLine?: string;
+  commits: CommitExpectation;
   harvest?: HarvestDeclaration[];
-  assertWorkspace?: (
-    worktrees: WorktreeLifecycle,
-    ctx: RunFinalizeContext,
-  ) => Promise<void>;
   postcondition?: (
     artifacts: ArtifactStore,
     cardId: string,
@@ -38,6 +39,19 @@ export interface StepExecutionPolicy {
    */
   hostVerify?: boolean | "if-committed";
 }
+
+export type StepExecutionPolicy =
+  | (StepPolicyBase & {
+      kind: "agent";
+      promptFile: string;
+      promptVars: (ctx: PromptBuildContext) => Record<string, string>;
+    })
+  | (StepPolicyBase & {
+      kind: "host";
+      hostBody: (ctx: RunFinalizeContext) => Promise<void>;
+      /** Run-log / SSE status line while hostBody runs. */
+      hostStatusLine?: string;
+    });
 
 /** Exchange markdown needs prose beyond headings and empty bullets. */
 export function assertExchangeHasUsefulContent(raw: string): void {
@@ -62,8 +76,18 @@ function stripFrontmatter(raw: string): string {
 
 export const STEP_POLICIES: Partial<Record<StepKey, StepExecutionPolicy>> = {
   plan: {
+    kind: "agent",
     skill: "plan-implementation",
     promptFile: path.join("prompts", "execution", "plan-implementation.md"),
+    commits: "forbidden",
+    promptVars: (ctx) =>
+      planPromptVars({
+        cardTitle: ctx.card.title,
+        cardDescription: ctx.card.description,
+        parentSpec: ctx.parentSpec,
+        manifestPath: ctx.manifestPath,
+        attachments: ctx.attachments,
+      }),
     harvest: [
       {
         exchangePath: ".jeeves/plan.md",
@@ -72,21 +96,40 @@ export const STEP_POLICIES: Partial<Record<StepKey, StepExecutionPolicy>> = {
         validate: assertExchangeHasUsefulContent,
       },
     ],
-    assertWorkspace: assertPlanWorkspaceClean,
     postcondition: (artifacts, cardId, round) =>
-      artifacts.latest(cardId, { stepKey: "plan", round, kind: "plan" }) !== undefined,
+      artifacts.latest(cardId, { stepKey: "plan", round, kind: "plan" }) !==
+      undefined,
   },
   impl: {
+    kind: "agent",
     skill: "implement-task",
     promptFile: path.join("prompts", "execution", "implement-task.md"),
+    commits: "required",
+    promptVars: (ctx) =>
+      implementPromptVars({
+        cardTitle: ctx.card.title,
+        cardDescription: ctx.card.description,
+        plan: ctx.planBody,
+        manifestPath: ctx.manifestPath,
+        attachments: ctx.attachments,
+      }),
     // Empty harvest still runs assertWorkspace (truthy array); Implement outputs are commits.
     harvest: [],
-    assertWorkspace: assertImplementWorkspace,
     hostVerify: true,
   },
   airev: {
+    kind: "agent",
     skill: "ai-review",
     promptFile: path.join("prompts", "execution", "ai-review.md"),
+    commits: "any",
+    promptVars: (ctx) =>
+      aiReviewPromptVars({
+        cardTitle: ctx.card.title,
+        cardDescription: ctx.card.description,
+        plan: ctx.planBody,
+        manifestPath: ctx.manifestPath,
+        attachments: ctx.attachments,
+      }),
     harvest: [
       {
         exchangePath: ".jeeves/review.md",
@@ -95,14 +138,15 @@ export const STEP_POLICIES: Partial<Record<StepKey, StepExecutionPolicy>> = {
         validate: assertExchangeHasUsefulContent,
       },
     ],
-    assertWorkspace: assertAiReviewWorkspace,
     postcondition: (artifacts, cardId, round) =>
       artifacts.latest(cardId, { stepKey: "airev", round, kind: "review" }) !==
       undefined,
     hostVerify: "if-committed",
   },
   prepeval: {
+    kind: "host",
     skill: "eval-assemble",
+    commits: "forbidden",
     hostBody: writePrepareEvalStub,
     hostStatusLine: "Preparing interactive evaluation…",
     harvest: [
@@ -112,7 +156,6 @@ export const STEP_POLICIES: Partial<Record<StepKey, StepExecutionPolicy>> = {
         stepKey: "prepeval",
       },
     ],
-    assertWorkspace: assertPrepareEvalWorkspace,
     postcondition: (artifacts, cardId, round) =>
       artifacts.latest(cardId, { stepKey: "prepeval", round, kind: "eval" }) !==
       undefined,
@@ -133,55 +176,21 @@ export function meetsPostconditions(
   return check ? check(artifacts, cardId, round) : true;
 }
 
-/** Plan runs must leave the target tree unchanged after exchange files are removed. */
-async function assertPlanWorkspaceClean(
-  worktrees: WorktreeLifecycle,
-  ctx: RunFinalizeContext,
-): Promise<void> {
-  if (ctx.headSha !== ctx.baseSha) {
-    throw new Error("plan step must not create commits on the card branch");
-  }
-  await assertTreeCleanIgnoringJeeves(worktrees, ctx, "plan");
-}
-
-/** Implement must leave ≥1 commit and a clean tree after exchange cleanup. */
-async function assertImplementWorkspace(
-  worktrees: WorktreeLifecycle,
-  ctx: RunFinalizeContext,
-): Promise<void> {
-  if (ctx.headSha === ctx.baseSha) {
-    throw new Error("implement step must create at least one commit on the card branch");
-  }
-  await assertTreeCleanIgnoringJeeves(worktrees, ctx, "implement");
-}
-
-/**
- * AI Review: review artifact harvested separately; zero or more commits OK;
- * tree must be clean after exchange removal.
- */
-async function assertAiReviewWorkspace(
-  worktrees: WorktreeLifecycle,
-  ctx: RunFinalizeContext,
-): Promise<void> {
-  await assertTreeCleanIgnoringJeeves(worktrees, ctx, "ai-review");
-}
-
-/** Prepare Eval: placeholder eval only; no source commits; clean tree. */
-async function assertPrepareEvalWorkspace(
-  worktrees: WorktreeLifecycle,
-  ctx: RunFinalizeContext,
-): Promise<void> {
-  if (ctx.headSha !== ctx.baseSha) {
-    throw new Error("prepare-eval step must not create commits on the card branch");
-  }
-  await assertTreeCleanIgnoringJeeves(worktrees, ctx, "prepare-eval");
-}
-
-async function assertTreeCleanIgnoringJeeves(
+/** Enforce commit expectation + clean tree (ignoring `.jeeves` exchange files). */
+export async function assertStepWorkspace(
+  policy: StepExecutionPolicy,
   worktrees: WorktreeLifecycle,
   ctx: RunFinalizeContext,
   stepLabel: string,
 ): Promise<void> {
+  if (policy.commits === "forbidden" && ctx.headSha !== ctx.baseSha) {
+    throw new Error(`${stepLabel} step must not create commits on the card branch`);
+  }
+  if (policy.commits === "required" && ctx.headSha === ctx.baseSha) {
+    throw new Error(
+      `${stepLabel} step must create at least one commit on the card branch`,
+    );
+  }
   const status = await worktrees.worktreeStatus(ctx.workspacePath, {
     ignorePathPrefixes: [".jeeves"],
   });

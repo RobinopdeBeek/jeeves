@@ -116,6 +116,29 @@ export function fakeWorktrees(root: string): WorktreeLifecycle {
     async checkoutExisting(_branch, worktreePath) {
       fs.mkdirSync(worktreePath, { recursive: true });
     },
+    async resolveRunBase(input) {
+      if (input.priorFailedBaseSha) {
+        return { mode: "create", baseSha: input.priorFailedBaseSha };
+      }
+      if (input.hasDurableBranch) {
+        const tip = await this.resolveRef(input.cardBranch);
+        return { mode: "checkout", baseSha: tip };
+      }
+      const baseSha = await this.resolveRef(input.upstreamRef);
+      return { mode: "create", baseSha };
+    },
+    async openRunWorkspace(decision, cardBranch, worktreePath) {
+      if (decision.mode === "checkout") {
+        await this.checkoutExisting(cardBranch, worktreePath);
+      } else {
+        await this.createFrom(cardBranch, decision.baseSha, worktreePath);
+      }
+    },
+    async prepareRunWorkspace(input) {
+      const decision = await this.resolveRunBase(input);
+      await this.openRunWorkspace(decision, input.cardBranch, input.worktreePath);
+      return decision;
+    },
     async ensureBranch() {
       // No-op in harness — ExecutionEngine.ensureBranch tests stub this.
     },

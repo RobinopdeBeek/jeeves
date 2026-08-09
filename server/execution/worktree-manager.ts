@@ -14,6 +14,26 @@ export type WorktreeDiagnostics = {
   headSha: string;
 };
 
+/** ADR 0009 decision inputs for a run's worktree. */
+export type ResolveRunBaseInput = {
+  cardBranch: string;
+  /** True when `cards.branch` is already recorded. */
+  hasDurableBranch: boolean;
+  /** Failed prior run's `base_sha` — recreate from that SHA. */
+  priorFailedBaseSha: string | null;
+  /** Upstream ref (project default_branch or parent feature branch). */
+  upstreamRef: string;
+};
+
+export type PrepareRunWorkspaceResult = {
+  mode: "create" | "checkout";
+  baseSha: string;
+};
+
+export type PrepareRunWorkspaceInput = ResolveRunBaseInput & {
+  worktreePath: string;
+};
+
 /** Seam for ExecutionEngine — WorktreeManager is the production impl. */
 export interface WorktreeLifecycle {
   worktreePathFor(cardId: string): string;
@@ -21,6 +41,23 @@ export interface WorktreeLifecycle {
   createFrom(cardBranch: string, baseSha: string, worktreePath: string): Promise<void>;
   /** Check out an existing durable branch at its tip (no upstream `-B` reset). */
   checkoutExisting(cardBranch: string, worktreePath: string): Promise<void>;
+  /**
+   * ADR 0009: decide retry / continuation / first-run → `{ mode, baseSha }`
+   * without opening a worktree (so the engine can record the run first).
+   */
+  resolveRunBase(input: ResolveRunBaseInput): Promise<PrepareRunWorkspaceResult>;
+  /** Materialize the worktree for a prior `resolveRunBase` decision. */
+  openRunWorkspace(
+    decision: PrepareRunWorkspaceResult,
+    cardBranch: string,
+    worktreePath: string,
+  ): Promise<void>;
+  /**
+   * resolveRunBase + openRunWorkspace — for callers that do not need a run row first.
+   */
+  prepareRunWorkspace(
+    input: PrepareRunWorkspaceInput,
+  ): Promise<PrepareRunWorkspaceResult>;
   /**
    * Create a durable branch at `baseSha` with no worktree (fan-out feature branch).
    * No-op when the branch already exists.
@@ -116,6 +153,48 @@ export class WorktreeManager implements WorktreeLifecycle {
   ): Promise<void> {
     const absPath = await this.prepareWorktreePath(worktreePath);
     await git(this.repoPath, ["worktree", "add", absPath, cardBranch]);
+  }
+
+  /**
+   * ADR 0009: retry uses recorded base_sha; continuation tip of durable
+   * branch; first run upstream tip. Does not open a worktree.
+   */
+  async resolveRunBase(
+    input: ResolveRunBaseInput,
+  ): Promise<PrepareRunWorkspaceResult> {
+    if (input.priorFailedBaseSha) {
+      return { mode: "create", baseSha: input.priorFailedBaseSha };
+    }
+    if (input.hasDurableBranch) {
+      const tip = await this.resolveRef(input.cardBranch);
+      return { mode: "checkout", baseSha: tip };
+    }
+    const baseSha = await this.resolveRef(input.upstreamRef);
+    return { mode: "create", baseSha };
+  }
+
+  /** Open a worktree for a prior `resolveRunBase` decision. */
+  async openRunWorkspace(
+    decision: PrepareRunWorkspaceResult,
+    cardBranch: string,
+    worktreePath: string,
+  ): Promise<void> {
+    if (decision.mode === "checkout") {
+      await this.checkoutExisting(cardBranch, worktreePath);
+    } else {
+      await this.createFrom(cardBranch, decision.baseSha, worktreePath);
+    }
+  }
+
+  /**
+   * ADR 0009: resolve + open in one call (ensure-branch / non-engine callers).
+   */
+  async prepareRunWorkspace(
+    input: PrepareRunWorkspaceInput,
+  ): Promise<PrepareRunWorkspaceResult> {
+    const decision = await this.resolveRunBase(input);
+    await this.openRunWorkspace(decision, input.cardBranch, input.worktreePath);
+    return decision;
   }
 
   /**

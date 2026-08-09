@@ -265,6 +265,15 @@ export function tasksToImplementTransition(
   };
 }
 
+/**
+ * Same-card success chain for Implement-column AI-execution steps.
+ * AI Review → Review column is special-cased below (ensureSteps + column).
+ */
+const STEP_SUCCESS_CHAIN: Partial<Record<StepKey, StepKey>> = {
+  plan: "impl",
+  impl: "airev",
+};
+
 /** What triggered a pipeline advance (routes / engine are thin adapters). */
 export type AdvanceTrigger =
   | { type: "kind-decision"; path: KindPath }
@@ -387,35 +396,22 @@ export function advance(
     };
   }
 
-  // step-finished: status patch for the completed step; Plan → Implement →
-  // AI Review chain on the same card; AI Review success enters Review with
-  // Prepare Eval queued; Prepare Eval success unlocks human Review.
-  if (trigger.stepKey === "plan" && trigger.outcome === "succeeded") {
+  // step-finished: same-card success chain plan → impl → airev.
+  const nextInChain = STEP_SUCCESS_CHAIN[trigger.stepKey];
+  if (trigger.outcome === "succeeded" && nextInChain) {
     return {
       ok: true,
       stepPatches: [
-        { key: "plan", status: "done" },
-        { key: "impl", status: "queued" },
+        { key: trigger.stepKey, status: "done" },
+        { key: nextInChain, status: "queued" },
       ],
       sideEffects: [
-        { type: "enqueue", cardId: card.id, stepKey: "impl" },
+        { type: "enqueue", cardId: card.id, stepKey: nextInChain },
       ],
     };
   }
 
-  if (trigger.stepKey === "impl" && trigger.outcome === "succeeded") {
-    return {
-      ok: true,
-      stepPatches: [
-        { key: "impl", status: "done" },
-        { key: "airev", status: "queued" },
-      ],
-      sideEffects: [
-        { type: "enqueue", cardId: card.id, stepKey: "airev" },
-      ],
-    };
-  }
-
+  // AI Review success enters Review with Prepare Eval queued.
   if (trigger.stepKey === "airev" && trigger.outcome === "succeeded") {
     if (card.kind !== "task") {
       return { ok: false, reason: "AI Review advance requires a task card" };
@@ -462,4 +458,16 @@ export function backlogEnrichedSteps(
   return rows
     .filter((r) => r.stepKey === "info")
     .map((r) => enrichStep(r.stepKey, r.status));
+}
+
+/**
+ * Depth-first eligible-queue order for AI-execution steps.
+ * CardStore filters/sorts the derived queue; this owns step identity order.
+ */
+const EXECUTION_QUEUE_ORDER = ["plan", "impl", "airev", "prepeval"] as const;
+
+/** Index in the depth-first execution queue, or undefined if not queueable. */
+export function executionQueueIndex(stepKey: string): number | undefined {
+  const idx = (EXECUTION_QUEUE_ORDER as readonly string[]).indexOf(stepKey);
+  return idx === -1 ? undefined : idx;
 }

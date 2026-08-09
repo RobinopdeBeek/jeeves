@@ -1,11 +1,12 @@
 import fs from "node:fs";
+import {
+  formatCardAttachments,
+  nonemptyOr,
+  renderPrompt,
+  type CardAttachmentInput,
+} from "./render-prompt.js";
 
-export interface PlanAttachmentInput {
-  /** Absolute host path to the library file bytes. */
-  absolutePath: string;
-  filename: string;
-  instruction: string;
-}
+export type PlanAttachmentInput = CardAttachmentInput;
 
 export interface PlanImplementationPromptInput {
   cardTitle: string;
@@ -17,21 +18,20 @@ export interface PlanImplementationPromptInput {
   attachments: readonly PlanAttachmentInput[];
 }
 
-/** Render the Card attachments block for the plan prompt. */
-export function formatPlanAttachments(
-  attachments: readonly PlanAttachmentInput[],
-): string {
-  if (attachments.length === 0) return "(none)";
-  return attachments
-    .map((att) => {
-      const instruction = att.instruction.trim() || "(none)";
-      return [
-        `- **${att.filename}**`,
-        `  - path: \`${att.absolutePath}\``,
-        `  - instruction: ${instruction}`,
-      ].join("\n");
-    })
-    .join("\n");
+/** @deprecated Prefer formatCardAttachments from render-prompt. */
+export const formatPlanAttachments = formatCardAttachments;
+
+/** Vars for the plan-implementation template. */
+export function planPromptVars(
+  input: PlanImplementationPromptInput,
+): Record<string, string> {
+  return {
+    cardTitle: nonemptyOr(input.cardTitle, "(untitled)"),
+    cardDescription: nonemptyOr(input.cardDescription, "(none)"),
+    parentSpec: nonemptyOr(input.parentSpec, "(none)"),
+    manifestPath: input.manifestPath,
+    attachments: formatCardAttachments(input.attachments),
+  };
 }
 
 /** Load the plan-implementation template and inject Plan inputs. */
@@ -39,14 +39,5 @@ export function buildPlanImplementationPrompt(
   input: PlanImplementationPromptInput,
   templatePath: string,
 ): string {
-  const template = fs.readFileSync(templatePath, "utf8");
-  return template
-    .replaceAll("{{cardTitle}}", input.cardTitle.trim() || "(untitled)")
-    .replaceAll(
-      "{{cardDescription}}",
-      input.cardDescription.trim() || "(none)",
-    )
-    .replaceAll("{{parentSpec}}", input.parentSpec.trim() || "(none)")
-    .replaceAll("{{manifestPath}}", input.manifestPath)
-    .replaceAll("{{attachments}}", formatPlanAttachments(input.attachments));
+  return renderPrompt(fs.readFileSync(templatePath, "utf8"), planPromptVars(input));
 }

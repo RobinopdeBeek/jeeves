@@ -5,18 +5,20 @@ import { CardStoreError, type CardWithSteps } from "../cards/store.js";
 import type { CardStore } from "../cards/store.js";
 import type { ArtifactStore } from "../artifacts/store.js";
 import type { StepKey } from "../pipelines.js";
+import { dispatchAdvanceEffects } from "./dispatch-effects.js";
 import { EventBus } from "./events.js";
-import {
-  buildImplementTaskPrompt,
-  type ImplementAttachmentInput,
-} from "./implement-task.js";
-import { buildAiReviewPrompt } from "./ai-review.js";
-import { buildPlanImplementationPrompt } from "./plan-implementation.js";
+import type { CardAttachmentInput } from "./render-prompt.js";
+import { renderPrompt } from "./render-prompt.js";
 import type { RunStore } from "./run-store.js";
 import type { AgentRunner, RunEvent } from "./runner.js";
 import type { WorktreeDiagnostics, WorktreeLifecycle } from "./worktree-manager.js";
 import { WorktreeManager } from "./worktree-manager.js";
-import { meetsPostconditions, stepPolicy } from "./step-policies.js";
+import {
+  assertStepWorkspace,
+  meetsPostconditions,
+  stepPolicy,
+  type StepExecutionPolicy,
+} from "./step-policies.js";
 import { parseVerifyCommands, runVerifyCommands } from "./verify-commands.js";
 
 export interface ExecutionEngineDeps {
@@ -31,6 +33,8 @@ export interface ExecutionEngineDeps {
   /** Card Info library — Plan/Implement/AI Review inject on-disk paths. */
   cardAttachments?: CardAttachmentStore;
 }
+
+type RunRow = { id: string; cardId: string; logPath: string | null };
 
 /**
  * ExecutionEngine — sequential queue over the AgentRunner seam. One run at
@@ -47,8 +51,9 @@ export class ExecutionEngine {
   /**
    * Wake the processor. The card/step must already be `queued` in the store;
    * the next job is always the head of listQueuedSteps (eligible + depth-first).
+   * Args are ignored — kept for AdvanceSideEffect enqueue dispatch shape.
    */
-  enqueue(_cardId: string, _stepKey: StepKey): void {
+  enqueue(_cardId?: string, _stepKey?: StepKey): void {
     void this.processQueue();
   }
 
@@ -100,8 +105,7 @@ export class ExecutionEngine {
     }
     // One wake drains all eligible steps in durable depth-first order.
     if (store.listQueuedSteps().length > 0) {
-      const head = store.listQueuedSteps()[0]!;
-      this.enqueue(head.cardId, head.stepKey);
+      this.enqueue();
     }
   }
 
@@ -141,7 +145,7 @@ export class ExecutionEngine {
   }
 
   private async execute(cardId: string, stepKey: StepKey): Promise<void> {
-    const { store, runs, runner, worktrees, artifacts, events } = this.deps;
+    const { store, runs, worktrees, events } = this.deps;
     const policy = stepPolicy(stepKey);
     const card = store.getCard(cardId);
     if (!policy || !card) return;
@@ -154,39 +158,15 @@ export class ExecutionEngine {
     const priorRun = runs.latestForStep(cardId, stepKey);
     const branch = card.branch ?? WorktreeManager.cardBranch(cardId);
     const isRetry = priorRun?.status === "failed" && Boolean(priorRun.baseSha);
-    const isContinuation = Boolean(card.branch) && !isRetry;
-
-    let baseSha: string;
-    if (isRetry) {
-      baseSha = priorRun!.baseSha!;
-    } else if (isContinuation) {
-      // Record tip-at-start so a later retry of this run can recreate cleanly.
-      baseSha = await worktrees.resolveRef(branch);
-    } else {
-      baseSha = await worktrees.resolveRef(store.getUpstreamRef(cardId));
-    }
-
-    const run = runs.create({
-      cardId,
-      stepKey,
-      skill: policy.skill,
-      round,
-      logPath: "",
-      baseSha,
-    });
-    const logPath = artifacts.liveLogPath(cardId, round, run.id);
-    runs.setLogPath(run.id, logPath);
-
-    events.emit({
-      type: "card.updated",
-      card: store.setStepStatus(cardId, stepKey, "ai-working"),
-    });
-
-    const repoPath = store.getRepoPath(cardId);
     const worktreePath = worktrees.worktreePathFor(cardId);
+    const repoPath = store.getRepoPath(cardId);
+
     let headSha: string | undefined;
+    let run: RunRow | undefined;
+    let logPath = "";
 
     const fail = async (message: string) => {
+      if (!run) return;
       await this.preserveFailureEvidence(
         run,
         stepKey,
@@ -196,106 +176,61 @@ export class ExecutionEngine {
         headSha,
       );
       runs.finish(run.id, { status: "failed", error: message });
-      this.finishStep(cardId, stepKey, run.id, "failed", message);
+      await this.finishStep(cardId, stepKey, run.id, "failed", message);
     };
 
     try {
-      if (isContinuation) {
-        await worktrees.checkoutExisting(branch, worktreePath);
-      } else {
-        await worktrees.createFrom(branch, baseSha, worktreePath);
-      }
+      const decision = await worktrees.resolveRunBase({
+        cardBranch: branch,
+        hasDurableBranch: Boolean(card.branch) && !isRetry,
+        priorFailedBaseSha: isRetry ? priorRun!.baseSha! : null,
+        upstreamRef: store.getUpstreamRef(cardId),
+      });
+      const baseSha = decision.baseSha;
+
+      run = runs.create({
+        cardId,
+        stepKey,
+        skill: policy.skill,
+        round,
+        logPath: "",
+        baseSha,
+      });
+      logPath = this.deps.artifacts.liveLogPath(cardId, round, run.id);
+      runs.setLogPath(run.id, logPath);
+
+      events.emit({
+        type: "card.updated",
+        card: store.setStepStatus(cardId, stepKey, "ai-working"),
+      });
+
+      await worktrees.openRunWorkspace(decision, branch, worktreePath);
+
       if (!card.branch) {
         store.setCardBranch(cardId, branch);
       }
 
-      if (policy.hostBody) {
-        const line = policy.hostStatusLine ?? "Host step running…";
-        try {
-          fs.appendFileSync(logPath, `${line}\n`);
-        } catch {
-          // Best-effort — UI still gets the SSE line.
-        }
-        events.emit({ type: "run.log", runId: run.id, cardId, line });
-
-        const tipBefore = baseSha;
-        await policy.hostBody({
-          workspacePath: worktreePath,
-          headSha: tipBefore,
-          baseSha,
-        });
-        // Re-resolve tip so "no commits" is checked against the real worktree.
-        headSha = await worktrees.resolveRef(branch);
-        const ctx = {
-          workspacePath: worktreePath,
-          headSha,
-          baseSha: tipBefore,
-        };
-        await this.finalizeStep(cardId, stepKey, round, policy.skill, ctx);
-
-        if (!meetsPostconditions(stepKey, artifacts, cardId, round)) {
-          await fail("step postconditions not met");
-        } else {
-          this.freezeRunLog(run, stepKey, round, policy.skill, headSha);
-          runs.finish(run.id, { status: "succeeded" });
-          this.finishStep(cardId, stepKey, run.id, "succeeded");
-        }
-        return;
-      }
-
-      if (!policy.promptFile) {
-        throw new Error(`step ${stepKey} has no promptFile`);
-      }
-
-      let result: Extract<RunEvent, { type: "result" }> | undefined;
-      const prompt = this.buildPrompt(card, stepKey, policy.promptFile);
-      const iterable = runner.run(prompt, {
-        cwd: repoPath,
-        branch,
-        worktreePath,
+      const settleCtx = {
+        run,
+        cardId,
+        stepKey,
+        round,
+        skill: policy.skill,
+        policy,
         baseSha,
+        worktreePath,
         logPath,
-        signal: this.abort.signal,
-        onFinalize: async (ctx) => {
-          headSha = ctx.headSha;
-          await this.finalizeStep(cardId, stepKey, round, policy.skill, ctx);
-        },
-      });
-      for await (const event of iterable) {
-        if (event.type === "log") {
-          events.emit({ type: "run.log", runId: run.id, cardId, line: event.line });
-        } else {
-          result = event;
-        }
-      }
-      if (
-        result?.status === "finished" &&
-        meetsPostconditions(stepKey, artifacts, cardId, round)
-      ) {
-        const verify = await this.runHostVerifyIfNeeded(
-          run.id,
-          cardId,
-          stepKey,
-          worktreePath,
-          logPath,
-          headSha !== undefined && headSha !== baseSha,
-        );
-        if (verify.status === "failed") {
-          await fail(verify.message);
-        } else {
-          this.freezeRunLog(run, stepKey, round, policy.skill, headSha);
-          runs.finish(run.id, {
-            status: "succeeded",
-            model: result.model,
-            tokensIn: result.tokensIn,
-            tokensOut: result.tokensOut,
-          });
-          this.finishStep(cardId, stepKey, run.id, "succeeded");
-        }
-      } else if (result?.status === "cancelled") {
-        await fail("run cancelled");
+        fail,
+      };
+
+      if (policy.kind === "host") {
+        await this.runHostBody(policy, settleCtx, (sha) => {
+          headSha = sha;
+        });
       } else {
-        await fail("step postconditions not met");
+        await this.runAgentBody(policy, card, settleCtx, repoPath, branch, (sha) => {
+          headSha = sha;
+        });
       }
     } catch (e) {
       await fail(e instanceof Error ? e.message : String(e));
@@ -308,8 +243,151 @@ export class ExecutionEngine {
     }
   }
 
+  private async runHostBody(
+    policy: Extract<StepExecutionPolicy, { kind: "host" }>,
+    settleCtx: SettleContext,
+    setHeadSha: (sha: string) => void,
+  ): Promise<void> {
+    const { worktrees } = this.deps;
+    const { worktreePath, baseSha, logPath, run, cardId } = settleCtx;
+    const line = policy.hostStatusLine ?? "Host step running…";
+    try {
+      fs.appendFileSync(logPath, `${line}\n`);
+    } catch {
+      // Best-effort — UI still gets the SSE line.
+    }
+    this.deps.events.emit({ type: "run.log", runId: run.id, cardId, line });
+
+    const tipBefore = baseSha;
+    await policy.hostBody({
+      workspacePath: worktreePath,
+      headSha: tipBefore,
+      baseSha,
+    });
+    // Re-resolve tip so "no commits" is checked against the real worktree.
+    const branch = this.deps.store.getCard(cardId)?.branch;
+    const headSha = branch
+      ? await worktrees.resolveRef(branch)
+      : tipBefore;
+    setHeadSha(headSha);
+    await this.finalizeStep(settleCtx.cardId, settleCtx.stepKey, settleCtx.round, settleCtx.skill, {
+      workspacePath: worktreePath,
+      headSha,
+      baseSha: tipBefore,
+    });
+    await this.settle(settleCtx, { headSha, committed: headSha !== tipBefore });
+  }
+
+  private async runAgentBody(
+    policy: Extract<StepExecutionPolicy, { kind: "agent" }>,
+    card: CardWithSteps,
+    settleCtx: SettleContext,
+    repoPath: string,
+    branch: string,
+    setHeadSha: (sha: string) => void,
+  ): Promise<void> {
+    const { runner } = this.deps;
+    const { worktreePath, baseSha, logPath, cardId, stepKey, round, skill } =
+      settleCtx;
+
+    let result: Extract<RunEvent, { type: "result" }> | undefined;
+    let headSha: string | undefined;
+    const prompt = this.buildPrompt(card, policy);
+    const iterable = runner.run(prompt, {
+      cwd: repoPath,
+      branch,
+      worktreePath,
+      baseSha,
+      logPath,
+      signal: this.abort.signal,
+      onFinalize: async (ctx) => {
+        headSha = ctx.headSha;
+        setHeadSha(ctx.headSha);
+        await this.finalizeStep(cardId, stepKey, round, skill, ctx);
+      },
+    });
+    for await (const event of iterable) {
+      if (event.type === "log") {
+        this.deps.events.emit({
+          type: "run.log",
+          runId: settleCtx.run.id,
+          cardId,
+          line: event.line,
+        });
+      } else {
+        result = event;
+      }
+    }
+
+    if (result?.status === "cancelled") {
+      await settleCtx.fail("run cancelled");
+      return;
+    }
+    if (result?.status !== "finished") {
+      await settleCtx.fail("step postconditions not met");
+      return;
+    }
+
+    await this.settle(settleCtx, {
+      headSha,
+      committed: headSha !== undefined && headSha !== baseSha,
+      model: result.model,
+      tokensIn: result.tokensIn,
+      tokensOut: result.tokensOut,
+    });
+  }
+
+  /**
+   * Shared success path: postconditions → host verify → freeze → finish.
+   * Host and agent bodies both land here after finalize.
+   */
+  private async settle(
+    ctx: SettleContext,
+    outcome: {
+      headSha?: string;
+      committed: boolean;
+      model?: string;
+      tokensIn?: number;
+      tokensOut?: number;
+    },
+  ): Promise<void> {
+    const { artifacts, runs } = this.deps;
+    if (!meetsPostconditions(ctx.stepKey, artifacts, ctx.cardId, ctx.round)) {
+      await ctx.fail("step postconditions not met");
+      return;
+    }
+
+    const verify = await this.runHostVerifyIfNeeded(
+      ctx.run.id,
+      ctx.cardId,
+      ctx.policy,
+      ctx.worktreePath,
+      ctx.logPath,
+      outcome.committed,
+    );
+    if (verify.status === "failed") {
+      await ctx.fail(verify.message);
+      return;
+    }
+
+    this.freezeRunLog(
+      ctx.run,
+      ctx.stepKey,
+      ctx.round,
+      ctx.skill,
+      outcome.headSha,
+    );
+    runs.finish(ctx.run.id, {
+      status: "succeeded",
+      model: outcome.model,
+      tokensIn: outcome.tokensIn,
+      tokensOut: outcome.tokensOut,
+    });
+    await this.finishStep(ctx.cardId, ctx.stepKey, ctx.run.id, "succeeded");
+  }
+
   private freezeRunLog(
-    run: { id: string; cardId: string; logPath: string | null },
+    run: RunRow,
     stepKey: StepKey,
     round: number,
     sourceSkill: string,
@@ -346,9 +424,18 @@ export class ExecutionEngine {
   ): Promise<void> {
     const policy = stepPolicy(stepKey);
     if (!policy?.harvest) return;
-    if (policy.assertWorkspace) {
-      await policy.assertWorkspace(this.deps.worktrees, ctx);
-    }
+    await assertStepWorkspace(
+      policy,
+      this.deps.worktrees,
+      ctx,
+      stepKey === "impl"
+        ? "implement"
+        : stepKey === "airev"
+          ? "ai-review"
+          : stepKey === "prepeval"
+            ? "prepare-eval"
+            : stepKey,
+    );
     this.deps.artifacts.harvest(ctx.workspacePath, policy.harvest, {
       cardId,
       round,
@@ -358,7 +445,7 @@ export class ExecutionEngine {
   }
 
   private async preserveFailureEvidence(
-    run: { id: string; cardId: string; logPath: string | null },
+    run: RunRow,
     stepKey: StepKey,
     round: number,
     sourceSkill: string,
@@ -405,13 +492,13 @@ export class ExecutionEngine {
     return updated;
   }
 
-  private finishStep(
+  private async finishStep(
     cardId: string,
     stepKey: StepKey,
     runId: string,
     runStatus: "succeeded" | "failed",
     error?: string,
-  ): void {
+  ): Promise<void> {
     const { store, events } = this.deps;
     const outcome = runStatus === "succeeded" ? "succeeded" : "failed";
     const { card, sideEffects } = store.applyStepFinished(
@@ -421,62 +508,30 @@ export class ExecutionEngine {
     );
     events.emit({ type: "run.finished", runId, cardId, status: runStatus, error });
     events.emit({ type: "card.updated", card });
-    for (const effect of sideEffects) {
-      if (effect.type === "enqueue") {
-        this.enqueue(effect.cardId, effect.stepKey);
-      }
-    }
+    await dispatchAdvanceEffects(cardId, sideEffects, {
+      enqueue: (id, key) => this.enqueue(id, key),
+      ensureBranch: (id) => this.ensureBranch(id),
+    });
   }
 
-  /** Compose the fully injected prompt for a step (skills never hunt the DB). */
+  /** Compose the fully injected prompt for an agent step. */
   private buildPrompt(
     card: CardWithSteps,
-    stepKey: StepKey,
-    promptFile: string,
+    policy: Extract<StepExecutionPolicy, { kind: "agent" }>,
   ): string {
     const { artifacts, repoRoot } = this.deps;
-    const templatePath = path.resolve(repoRoot, promptFile);
-
-    if (stepKey === "plan") {
-      return buildPlanImplementationPrompt(
-        {
-          cardTitle: card.title,
-          cardDescription: card.description,
-          parentSpec: this.parentSpecBody(card),
-          manifestPath: artifacts.manifestAbsolutePath(card.id),
-          attachments: this.cardLibraryAttachments(card.id),
-        },
-        templatePath,
-      );
-    }
-
-    if (stepKey === "impl") {
-      return buildImplementTaskPrompt(
-        {
-          cardTitle: card.title,
-          cardDescription: card.description,
-          plan: this.planArtifactBody(card.id),
-          manifestPath: artifacts.manifestAbsolutePath(card.id),
-          attachments: this.cardLibraryAttachments(card.id),
-        },
-        templatePath,
-      );
-    }
-
-    if (stepKey === "airev") {
-      return buildAiReviewPrompt(
-        {
-          cardTitle: card.title,
-          cardDescription: card.description,
-          plan: this.planArtifactBody(card.id),
-          manifestPath: artifacts.manifestAbsolutePath(card.id),
-          attachments: this.cardLibraryAttachments(card.id),
-        },
-        templatePath,
-      );
-    }
-
-    return fs.readFileSync(templatePath, "utf8");
+    const templatePath = path.resolve(repoRoot, policy.promptFile);
+    const template = fs.readFileSync(templatePath, "utf8");
+    return renderPrompt(
+      template,
+      policy.promptVars({
+        card,
+        planBody: this.planArtifactBody(card.id),
+        parentSpec: this.parentSpecBody(card),
+        manifestPath: artifacts.manifestAbsolutePath(card.id),
+        attachments: this.cardLibraryAttachments(card.id),
+      }),
+    );
   }
 
   private planArtifactBody(cardId: string): string {
@@ -500,10 +555,10 @@ export class ExecutionEngine {
     return spec ? artifacts.readBody(spec) : "";
   }
 
-  private cardLibraryAttachments(cardId: string): ImplementAttachmentInput[] {
+  private cardLibraryAttachments(cardId: string): CardAttachmentInput[] {
     const library = this.deps.cardAttachments;
     if (!library) return [];
-    const out: ImplementAttachmentInput[] = [];
+    const out: CardAttachmentInput[] = [];
     for (const att of library.list(cardId)) {
       const absolutePath = library.absolutePath(cardId, att.id);
       if (!absolutePath) continue;
@@ -517,20 +572,19 @@ export class ExecutionEngine {
   }
 
   /**
-   * Host gate after a successful agent finalize when the step policy opts in.
+   * Host gate after a successful finalize when the step policy opts in.
    * Null/empty `projects.verify_commands` skips with a warning on the run log.
    * `"if-committed"` skips entirely when the step made no commits.
    */
   private async runHostVerifyIfNeeded(
     runId: string,
     cardId: string,
-    stepKey: StepKey,
+    policy: StepExecutionPolicy,
     worktreePath: string,
     logPath: string,
     committed: boolean,
   ): Promise<{ status: "passed" | "skipped" } | { status: "failed"; message: string }> {
-    const policy = stepPolicy(stepKey);
-    if (!policy?.hostVerify) return { status: "skipped" };
+    if (!policy.hostVerify) return { status: "skipped" };
     if (policy.hostVerify === "if-committed" && !committed) {
       return { status: "skipped" };
     }
@@ -568,6 +622,19 @@ export class ExecutionEngine {
     }
     return { status: result.status === "passed" ? "passed" : "skipped" };
   }
+}
+
+interface SettleContext {
+  run: RunRow;
+  cardId: string;
+  stepKey: StepKey;
+  round: number;
+  skill: string;
+  policy: StepExecutionPolicy;
+  baseSha: string;
+  worktreePath: string;
+  logPath: string;
+  fail: (message: string) => Promise<void>;
 }
 
 /** Slice 8 stays on round 0; task rework rounds land in slice 12. */

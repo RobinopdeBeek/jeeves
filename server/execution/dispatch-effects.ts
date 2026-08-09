@@ -7,12 +7,14 @@ export interface EffectDispatchDeps {
   enqueue: (cardId: string, stepKey: StepKey) => void;
   /** Create/record a durable card branch (git + cards.branch). */
   ensureBranch?: (cardId: string) => void | Promise<void>;
-  sessions: ChatSessionRegistry;
+  /** Required when effects include close-chat. */
+  sessions?: ChatSessionRegistry;
 }
 
 /**
- * Run side-effects declared by PipelineEngine.advance / CardStore.fanOut.
- * ensure-branch runs before enqueue so child Plan sees the feature branch.
+ * Run side-effects declared by PipelineEngine.advance / CardStore.fanOut /
+ * ExecutionEngine.finishStep. ensure-branch runs before enqueue so child Plan
+ * sees the feature branch.
  */
 export async function dispatchAdvanceEffects(
   cardId: string,
@@ -28,6 +30,9 @@ export async function dispatchAdvanceEffects(
     } else if (effect.type === "enqueue") {
       deps.enqueue(effect.cardId, effect.stepKey);
     } else if (effect.type === "close-chat") {
+      if (!deps.sessions) {
+        throw new Error("close-chat effect requires sessions dispatch dep");
+      }
       deps.sessions.close(
         stepChatSessionId(cardId, effect.stepKey, effect.round),
         effect.reason,

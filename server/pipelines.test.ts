@@ -3,9 +3,21 @@ import {
   advance,
   canCreateSpec,
   canCreateTasks,
+  executionQueueIndex,
   grillToSpecTransition,
   specToTasksTransition,
 } from "./pipelines.js";
+
+describe("executionQueueIndex", () => {
+  it("orders plan < impl < airev < prepeval and ignores other steps", () => {
+    expect(executionQueueIndex("plan")).toBe(0);
+    expect(executionQueueIndex("impl")).toBe(1);
+    expect(executionQueueIndex("airev")).toBe(2);
+    expect(executionQueueIndex("prepeval")).toBe(3);
+    expect(executionQueueIndex("review")).toBeUndefined();
+    expect(executionQueueIndex("grill")).toBeUndefined();
+  });
+});
 
 describe("canCreateSpec", () => {
   it("matches grillToSpecTransition.ok", () => {

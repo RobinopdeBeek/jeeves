@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import {
-  formatPlanAttachments,
-  type PlanAttachmentInput,
-} from "./plan-implementation.js";
+  formatCardAttachments,
+  nonemptyOr,
+  renderPrompt,
+  type CardAttachmentInput,
+} from "./render-prompt.js";
 
-export type ImplementAttachmentInput = PlanAttachmentInput;
+export type ImplementAttachmentInput = CardAttachmentInput;
 
 export interface ImplementTaskPromptInput {
   cardTitle: string;
@@ -16,25 +18,29 @@ export interface ImplementTaskPromptInput {
   attachments: readonly ImplementAttachmentInput[];
 }
 
-/** Same Card-attachment formatting rules as Plan (absolute paths + instructions). */
-export const formatImplementAttachments = formatPlanAttachments;
+/** @deprecated Prefer formatCardAttachments from render-prompt. */
+export const formatImplementAttachments = formatCardAttachments;
+
+/** Vars for the implement-task template. */
+export function implementPromptVars(
+  input: ImplementTaskPromptInput,
+): Record<string, string> {
+  return {
+    cardTitle: nonemptyOr(input.cardTitle, "(untitled)"),
+    cardDescription: nonemptyOr(input.cardDescription, "(none)"),
+    plan: nonemptyOr(input.plan, "(none)"),
+    manifestPath: input.manifestPath,
+    attachments: formatCardAttachments(input.attachments),
+  };
+}
 
 /** Load the implement-task template and inject Implement inputs. */
 export function buildImplementTaskPrompt(
   input: ImplementTaskPromptInput,
   templatePath: string,
 ): string {
-  const template = fs.readFileSync(templatePath, "utf8");
-  return template
-    .replaceAll("{{cardTitle}}", input.cardTitle.trim() || "(untitled)")
-    .replaceAll(
-      "{{cardDescription}}",
-      input.cardDescription.trim() || "(none)",
-    )
-    .replaceAll("{{plan}}", input.plan.trim() || "(none)")
-    .replaceAll("{{manifestPath}}", input.manifestPath)
-    .replaceAll(
-      "{{attachments}}",
-      formatImplementAttachments(input.attachments),
-    );
+  return renderPrompt(
+    fs.readFileSync(templatePath, "utf8"),
+    implementPromptVars(input),
+  );
 }

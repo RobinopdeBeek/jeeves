@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import {
-  formatPlanAttachments,
-  type PlanAttachmentInput,
-} from "./plan-implementation.js";
+  formatCardAttachments,
+  nonemptyOr,
+  renderPrompt,
+  type CardAttachmentInput,
+} from "./render-prompt.js";
 
-export type AiReviewAttachmentInput = PlanAttachmentInput;
+export type AiReviewAttachmentInput = CardAttachmentInput;
 
 export interface AiReviewPromptInput {
   cardTitle: string;
@@ -16,25 +18,26 @@ export interface AiReviewPromptInput {
   attachments: readonly AiReviewAttachmentInput[];
 }
 
-/** Same Card-attachment formatting rules as Plan/Implement. */
-export const formatAiReviewAttachments = formatPlanAttachments;
+/** @deprecated Prefer formatCardAttachments from render-prompt. */
+export const formatAiReviewAttachments = formatCardAttachments;
+
+/** Vars for the ai-review template. */
+export function aiReviewPromptVars(
+  input: AiReviewPromptInput,
+): Record<string, string> {
+  return {
+    cardTitle: nonemptyOr(input.cardTitle, "(untitled)"),
+    cardDescription: nonemptyOr(input.cardDescription, "(none)"),
+    plan: nonemptyOr(input.plan, "(none)"),
+    manifestPath: input.manifestPath,
+    attachments: formatCardAttachments(input.attachments),
+  };
+}
 
 /** Load the ai-review template and inject AI Review inputs. */
 export function buildAiReviewPrompt(
   input: AiReviewPromptInput,
   templatePath: string,
 ): string {
-  const template = fs.readFileSync(templatePath, "utf8");
-  return template
-    .replaceAll("{{cardTitle}}", input.cardTitle.trim() || "(untitled)")
-    .replaceAll(
-      "{{cardDescription}}",
-      input.cardDescription.trim() || "(none)",
-    )
-    .replaceAll("{{plan}}", input.plan.trim() || "(none)")
-    .replaceAll("{{manifestPath}}", input.manifestPath)
-    .replaceAll(
-      "{{attachments}}",
-      formatAiReviewAttachments(input.attachments),
-    );
+  return renderPrompt(fs.readFileSync(templatePath, "utf8"), aiReviewPromptVars(input));
 }

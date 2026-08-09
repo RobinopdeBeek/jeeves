@@ -37,7 +37,8 @@ Honor each file's instruction when planning.
   work, and risks.
 - Name the module seams under test so Implement can use `/tdd` at those seams.
 - Use Context7 / MCP docs tools when they help; missing tools are non-fatal —
-  continue with repo sources.
+  continue with repo sources. If docs tools were unavailable, note that briefly
+  under risks / open questions.
 - Prefer vocabulary from `CONTEXT.md` and respect ADRs in the target repo.
 - Do not hunt the project store or SQLite for inputs — everything you need is
   injected above (plus the manifest paths).

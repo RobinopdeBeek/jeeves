@@ -46,6 +46,9 @@ describe("buildPlanImplementationPrompt", () => {
     expect(prompt).not.toContain("slice-3-tracer");
     // Injected attachment entries use absolute paths, not chat pointers.
     expect(prompt).toMatch(/path: `\/repo\/\.jeeves\/data\/cards\/c1\/attachments\//);
+    // Context7 / MCP missing must not hard-fail Plan (#64).
+    expect(prompt).toMatch(/missing tools are non-fatal/i);
+    expect(prompt).toMatch(/If docs tools were unavailable, note that briefly/i);
   });
 
   it("treats empty attachment library like no attachments", () => {

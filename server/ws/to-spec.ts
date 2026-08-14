@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { renderPrompt } from "../execution/render-prompt.js";
 
 export interface ToSpecPromptInput {
   grillSession: string;
@@ -16,12 +17,14 @@ export function buildToSpecPrompt(
 ): string {
   const templatePath = path.join(promptsRoot, "chat", "to-spec.md");
   const template = fs.readFileSync(templatePath, "utf8");
-  return template
-    .replaceAll("{{cardTitle}}", input.cardTitle.trim() || "(untitled)")
-    .replaceAll(
-      "{{cardDescription}}",
-      input.cardDescription.trim() || "(none)",
-    )
-    .replaceAll("{{grillSession}}", input.grillSession.trim() || "(empty)")
-    .replaceAll("{{exchangePath}}", input.exchangePath);
+  return renderPrompt(
+    template,
+    {
+      cardTitle: input.cardTitle.trim() || "(untitled)",
+      cardDescription: input.cardDescription.trim() || "(none)",
+      grillSession: input.grillSession.trim() || "(empty)",
+      exchangePath: input.exchangePath,
+    },
+    { promptsRoot },
+  );
 }

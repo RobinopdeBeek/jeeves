@@ -4,6 +4,8 @@ You are the **Implement** step of Implement Task on the Jeeves board. Follow the
 plan. Use `/tdd` at the pre-agreed seams. Commit incrementally on this card
 branch. Do **not** run `/code-review` — that is the next step (AI Review).
 
+{{jeevesHost}}
+
 ## Card
 
 - **Title:** {{cardTitle}}
@@ -37,9 +39,6 @@ Honor each file's instruction when implementing.
 - Use `/tdd` at the named seams: red → green → next seam.
 - Run typecheck and tests as you go; fix failures before moving on.
 - Commit incrementally with clear messages on the card branch.
-- Prefer vocabulary from `CONTEXT.md` and respect ADRs in the target repo.
-- Do not hunt the project store or SQLite for inputs — everything you need is
-  injected above (plus the manifest paths).
 - Do **not** run `/code-review` or produce a review artifact.
 
 ## Postconditions

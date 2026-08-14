@@ -3,6 +3,8 @@
 Synthesize a **Spec** markdown document for this Jeeves board card from the Grill session below.
 Do **not** interview the user. Do **not** publish to an issue tracker. Do **not** invent decisions the Grill session did not settle.
 
+{{jeevesHost}}
+
 ## Card
 
 - **Title:** {{cardTitle}}

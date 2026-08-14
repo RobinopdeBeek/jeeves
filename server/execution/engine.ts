@@ -8,7 +8,7 @@ import type { StepKey } from "../pipelines.js";
 import { dispatchAdvanceEffects } from "./dispatch-effects.js";
 import { EventBus } from "./events.js";
 import type { CardAttachmentInput } from "./render-prompt.js";
-import { renderPrompt } from "./render-prompt.js";
+import { promptsRootFromTemplatePath, renderPrompt } from "./render-prompt.js";
 import type { RunStore } from "./run-store.js";
 import type { AgentRunner, RunEvent } from "./runner.js";
 import type { WorktreeDiagnostics, WorktreeLifecycle } from "./worktree-manager.js";
@@ -203,6 +203,10 @@ export class ExecutionEngine {
         type: "card.updated",
         card: store.setStepStatus(cardId, stepKey, "ai-working"),
       });
+
+      if (policy.precondition) {
+        policy.precondition(store.getCard(cardId) ?? card, this.cardLibraryAttachments(cardId));
+      }
 
       await worktrees.openRunWorkspace(decision, branch, worktreePath);
 
@@ -531,6 +535,7 @@ export class ExecutionEngine {
         manifestPath: artifacts.manifestAbsolutePath(card.id),
         attachments: this.cardLibraryAttachments(card.id),
       }),
+      { promptsRoot: promptsRootFromTemplatePath(templatePath) },
     );
   }
 

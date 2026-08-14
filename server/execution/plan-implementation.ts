@@ -2,6 +2,7 @@ import fs from "node:fs";
 import {
   formatCardAttachments,
   nonemptyOr,
+  promptsRootFromTemplatePath,
   renderPrompt,
   type CardAttachmentInput,
 } from "./render-prompt.js";
@@ -39,5 +40,9 @@ export function buildPlanImplementationPrompt(
   input: PlanImplementationPromptInput,
   templatePath: string,
 ): string {
-  return renderPrompt(fs.readFileSync(templatePath, "utf8"), planPromptVars(input));
+  return renderPrompt(
+    fs.readFileSync(templatePath, "utf8"),
+    planPromptVars(input),
+    { promptsRoot: promptsRootFromTemplatePath(templatePath) },
+  );
 }

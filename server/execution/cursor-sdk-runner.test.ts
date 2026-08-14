@@ -17,6 +17,9 @@ vi.mock("@cursor/sdk", () => ({
       this.cause = options?.cause;
     }
   },
+  JsonlLocalAgentStore: class JsonlLocalAgentStore {
+    constructor(public readonly rootDir: string) {}
+  },
 }));
 
 import {
@@ -103,5 +106,43 @@ describe("CursorSdkAgentRunner local settingSources", () => {
       type: "result",
       status: "finished",
     });
+  });
+
+  it("disables SDK stall auto-retry so retry stays at the step seam", async () => {
+    const runner = new CursorSdkAgentRunner();
+    for await (const _event of runner.run("plan this slice", {
+      cwd: worktreePath,
+      branch: "jeeves/card-1",
+      worktreePath,
+      baseSha,
+      logPath,
+    })) {
+      // Drain — the assertion is on the Agent.create argument.
+    }
+
+    const createArg = agentCreate.mock.calls[0]?.[0] as {
+      local: { enableAgentRetries?: boolean };
+    };
+    expect(createArg.local.enableAgentRetries).toBe(false);
+  });
+
+  it("backs the SDK agent store under the artifact tree, not the worktree", async () => {
+    const runner = new CursorSdkAgentRunner();
+    for await (const _event of runner.run("plan this slice", {
+      cwd: worktreePath,
+      branch: "jeeves/card-1",
+      worktreePath,
+      baseSha,
+      logPath,
+    })) {
+      // Drain — the assertion is on the Agent.create argument.
+    }
+
+    const createArg = agentCreate.mock.calls[0]?.[0] as {
+      local: { store?: { rootDir: string } };
+    };
+    const storeRoot = createArg.local.store?.rootDir;
+    expect(storeRoot).toBe(path.join(path.dirname(logPath), "sdk-store"));
+    expect(storeRoot).not.toContain(worktreePath);
   });
 });

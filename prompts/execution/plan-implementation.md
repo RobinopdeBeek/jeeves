@@ -4,6 +4,8 @@ You are the **Plan** step of Implement Task on the Jeeves board. Write a light p
 for **this slice only** — the same role as `/implement`'s planning phase. Do not
 implement source changes.
 
+{{jeevesHost}}
+
 ## Card
 
 - **Title:** {{cardTitle}}
@@ -39,9 +41,8 @@ Honor each file's instruction when planning.
 - Use Context7 / MCP docs tools when they help; missing tools are non-fatal —
   continue with repo sources. If docs tools were unavailable, note that briefly
   under risks / open questions.
-- Prefer vocabulary from `CONTEXT.md` and respect ADRs in the target repo.
-- Do not hunt the project store or SQLite for inputs — everything you need is
-  injected above (plus the manifest paths).
+- If the card description and all attachment instructions are empty, stop —
+  do not invent scope from the title. The host should have blocked this run.
 
 ## Output (required)
 

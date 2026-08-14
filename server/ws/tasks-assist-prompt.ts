@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { renderPrompt } from "../execution/render-prompt.js";
 
 export interface TasksAssistPromptInput {
   title: string;
@@ -19,10 +20,15 @@ export function buildTasksAssistOpeningPrompt(
 ): string {
   const templatePath = path.join(promptsRoot, "chat", "tasks-assist.md");
   const template = fs.readFileSync(templatePath, "utf8");
-  return template
-    .replaceAll("{{title}}", input.title || "(untitled)")
-    .replaceAll("{{description}}", input.description || "(none)")
-    .replaceAll("{{contextPath}}", input.contextPath)
-    .replaceAll("{{spec}}", input.spec.trim() || "(no Spec artifact yet)")
-    .replaceAll("{{exchangePath}}", input.exchangePath);
+  return renderPrompt(
+    template,
+    {
+      title: input.title || "(untitled)",
+      description: input.description || "(none)",
+      contextPath: input.contextPath,
+      spec: input.spec.trim() || "(no Spec artifact yet)",
+      exchangePath: input.exchangePath,
+    },
+    { promptsRoot },
+  );
 }

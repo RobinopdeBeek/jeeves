@@ -49,6 +49,11 @@ describe("buildPlanImplementationPrompt", () => {
     // Context7 / MCP missing must not hard-fail Plan (#64).
     expect(prompt).toMatch(/missing tools are non-fatal/i);
     expect(prompt).toMatch(/If docs tools were unavailable, note that briefly/i);
+    // Shared host contract expanded (not left as {{jeevesHost}}).
+    expect(prompt).toContain("## Jeeves host rules");
+    expect(prompt).toMatch(/Do not open\s+sibling repos/i);
+    expect(prompt).not.toContain("{{jeevesHost}}");
+    expect(prompt).toMatch(/do not invent scope from the title/i);
   });
 
   it("treats empty attachment library like no attachments", () => {

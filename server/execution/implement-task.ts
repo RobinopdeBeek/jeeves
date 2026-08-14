@@ -2,6 +2,7 @@ import fs from "node:fs";
 import {
   formatCardAttachments,
   nonemptyOr,
+  promptsRootFromTemplatePath,
   renderPrompt,
   type CardAttachmentInput,
 } from "./render-prompt.js";
@@ -42,5 +43,6 @@ export function buildImplementTaskPrompt(
   return renderPrompt(
     fs.readFileSync(templatePath, "utf8"),
     implementPromptVars(input),
+    { promptsRoot: promptsRootFromTemplatePath(templatePath) },
   );
 }

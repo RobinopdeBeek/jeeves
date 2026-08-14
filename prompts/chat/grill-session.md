@@ -4,6 +4,8 @@
 Preserve settled substance **verbatim** (wording of questions and answers).
 **Collapse** clarification threads into the settled Q&A pair.
 
+{{jeevesHost}}
+
 ## Document
 
 ```markdown

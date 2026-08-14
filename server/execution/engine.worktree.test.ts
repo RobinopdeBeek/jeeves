@@ -91,7 +91,10 @@ describe("ExecutionEngine", () => {
         .where(eq(projects.id, project.id))
         .run();
       const card = harness.store.createCard(project.id);
-      harness.store.updateCard(card.id, { title: "Develop base" });
+      harness.store.updateCard(card.id, {
+        title: "Develop base",
+        description: "Persist countdown across reloads.",
+      });
       const queued = harness.store.decideKind(card.id, "standalone").card;
 
       const { worktrees, createFromCalls, resolvedRefs } = trackingWorktrees(

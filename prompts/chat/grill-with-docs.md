@@ -2,6 +2,8 @@
 
 You are running a `/grill-with-docs` session for a Jeeves feature card.
 
+{{jeevesHost}}
+
 ## Card
 
 - **Title:** {{title}}

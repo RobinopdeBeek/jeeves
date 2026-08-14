@@ -38,6 +38,14 @@ interface StepPolicyBase {
    * `true` always; `"if-committed"` only when headSha !== baseSha.
    */
   hostVerify?: boolean | "if-committed";
+  /**
+   * Checked after the run row exists and before the worktree / agent starts.
+   * Throw to fail the step (`needs-user`) without calling the runner.
+   */
+  precondition?: (
+    card: CardWithSteps,
+    attachments: readonly CardAttachmentInput[],
+  ) => void;
 }
 
 export type StepExecutionPolicy =
@@ -52,6 +60,20 @@ export type StepExecutionPolicy =
       /** Run-log / SSE status line while hostBody runs. */
       hostStatusLine?: string;
     });
+
+/** Plan must not start from a title alone. */
+export const PLAN_INSUFFICIENT_INPUT =
+  "Plan needs a card description or an Info attachment with an instruction. Add either, then retry.";
+
+/** Host gate: description or at least one non-empty attachment instruction. */
+export function assertPlanHasEnoughInput(input: {
+  description: string;
+  attachments: readonly CardAttachmentInput[];
+}): void {
+  if (input.description.trim()) return;
+  if (input.attachments.some((att) => att.instruction.trim())) return;
+  throw new Error(PLAN_INSUFFICIENT_INPUT);
+}
 
 /** Exchange markdown needs prose beyond headings and empty bullets. */
 export function assertExchangeHasUsefulContent(raw: string): void {
@@ -87,6 +109,11 @@ export const STEP_POLICIES: Partial<Record<StepKey, StepExecutionPolicy>> = {
         parentSpec: ctx.parentSpec,
         manifestPath: ctx.manifestPath,
         attachments: ctx.attachments,
+      }),
+    precondition: (card, attachments) =>
+      assertPlanHasEnoughInput({
+        description: card.description,
+        attachments,
       }),
     harvest: [
       {

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { renderPrompt } from "../execution/render-prompt.js";
 
 export interface SpecAssistPromptInput {
   title: string;
@@ -19,13 +20,16 @@ export function buildSpecAssistOpeningPrompt(
 ): string {
   const templatePath = path.join(promptsRoot, "chat", "spec-assist.md");
   const template = fs.readFileSync(templatePath, "utf8");
-  return template
-    .replaceAll("{{title}}", input.title || "(untitled)")
-    .replaceAll("{{description}}", input.description || "(none)")
-    .replaceAll("{{contextPath}}", input.contextPath)
-    .replaceAll(
-      "{{grillSession}}",
-      input.grillSession.trim() || "(no Grill session artifact yet)",
-    )
-    .replaceAll("{{exchangePath}}", input.exchangePath);
+  return renderPrompt(
+    template,
+    {
+      title: input.title || "(untitled)",
+      description: input.description || "(none)",
+      contextPath: input.contextPath,
+      grillSession:
+        input.grillSession.trim() || "(no Grill session artifact yet)",
+      exchangePath: input.exchangePath,
+    },
+    { promptsRoot },
+  );
 }

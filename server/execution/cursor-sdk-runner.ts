@@ -3,7 +3,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { Code, ConnectError } from "@connectrpc/connect";
-import { Agent, CursorAgentError } from "@cursor/sdk";
+import { Agent, CursorAgentError, JsonlLocalAgentStore } from "@cursor/sdk";
 import type { LocalAgentOptions, Run, SettingSource } from "@cursor/sdk";
 import type { AgentRunner, RunAgentOptions, RunEvent } from "./runner.js";
 import { RunLogWriter } from "./run-log.js";
@@ -47,6 +47,14 @@ export class CursorSdkAgentRunner implements AgentRunner {
     const log = fs.createWriteStream(options.logPath, { flags: "w" });
     const logWriter = new RunLogWriter((chunk) => log.write(chunk));
 
+    // Keep the SDK's agent store out of the ephemeral worktree: engine.ts
+    // removes the worktree in its finally, and the default store lives under
+    // the worktree's state root — a disappearing directory behind an open
+    // store is the "[internal] unable to open database file" we saw. JSONL
+    // keeps one store per run under the durable artifact tree; each run is
+    // one-shot, so there is nothing worth persisting across runs.
+    const store = new JsonlLocalAgentStore(sdkStoreRoot(options.logPath));
+
     let agent: Awaited<ReturnType<typeof Agent.create>> | undefined;
     let run: Run | undefined;
 
@@ -59,7 +67,7 @@ export class CursorSdkAgentRunner implements AgentRunner {
       agent = await Agent.create({
         apiKey,
         model: { id: MODEL },
-        local: localOptions(worktreePath),
+        local: localOptions(worktreePath, store),
       });
 
       run = await agent.send(prompt);
@@ -116,10 +124,24 @@ export class CursorSdkAgentRunner implements AgentRunner {
   }
 }
 
-function localOptions(worktreePath: string): LocalAgentOptions {
+/** Sibling folder of the run log, so store files land under the artifact tree. */
+function sdkStoreRoot(logPath: string): string {
+  return path.join(path.dirname(logPath), "sdk-store");
+}
+
+function localOptions(
+  worktreePath: string,
+  store: LocalAgentOptions["store"],
+): LocalAgentOptions {
   const local: LocalAgentOptions = {
     cwd: worktreePath,
     settingSources: [...EXECUTION_SETTING_SOURCES],
+    // The SDK default (true) replays a stalled / dropped run from its last
+    // checkpoint inside one `send`, which reads as the step looping and is
+    // invisible to the run log. Jeeves owns retry at the step seam instead
+    // (ExecutionEngine.retry — durable run row, resumed base sha).
+    enableAgentRetries: false,
+    store,
   };
   if (process.platform !== "win32") {
     local.sandboxOptions = { enabled: true };

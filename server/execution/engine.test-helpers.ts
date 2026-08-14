@@ -244,7 +244,10 @@ export function makeEngine(
 export function queuedCard(harness: EngineTestHarness, title = "Rest timer"): CardWithSteps {
   const projectId = harness.store.ensureDefaultProject("jeeves", "C:/target-repo").id;
   const card = harness.store.createCard(projectId);
-  harness.store.updateCard(card.id, { title });
+  harness.store.updateCard(card.id, {
+    title,
+    description: "Persist countdown across reloads.",
+  });
   return harness.store.decideKind(card.id, "standalone").card;
 }
 

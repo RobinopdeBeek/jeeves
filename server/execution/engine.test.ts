@@ -141,6 +141,67 @@ describe("ExecutionEngine", () => {
     expect(stepStatus(harness, card.id, "impl")).toBe("done");
   });
 
+  it("fails Plan to needs-user when the card has only a title", async () => {
+    const { PLAN_INSUFFICIENT_INPUT } = await import("./step-policies.js");
+    const card = queuedCard(harness);
+    harness.store.updateCard(card.id, { title: "QA S8 standalone pipe", description: "" });
+    const { engine, calls } = makeEngine(harness, [planOk(), implementOk(), airevOk()]);
+
+    engine.enqueue(card.id, "plan");
+    await engine.whenIdle();
+
+    expect(calls).toHaveLength(0);
+    expect(stepStatus(harness, card.id, "plan")).toBe("needs-user");
+    expect(stepStatus(harness, card.id, "impl")).toBe("pending");
+    const run = harness.runStore.latestForStep(card.id, "plan");
+    expect(run?.status).toBe("failed");
+    expect(run?.error).toBe(PLAN_INSUFFICIENT_INPUT);
+  });
+
+  it("runs Plan when the card has no description but an instructed attachment", async () => {
+    const { CardAttachmentStore } = await import("../attachments/card-library.js");
+    const cardAttachments = new CardAttachmentStore(harness.db, harness.artifactRoot);
+    const card = queuedCard(harness);
+    harness.store.updateCard(card.id, { description: "" });
+    cardAttachments.add({
+      cardId: card.id,
+      filename: "notes.md",
+      mediaType: "text/markdown",
+      bytes: Buffer.from("# Slice notes\n"),
+      instruction: "Add a QA marker module only.",
+    });
+    const { engine, calls } = makeEngine(
+      harness,
+      [planOk(), implementOk(), airevOk()],
+      cardAttachments,
+    );
+
+    engine.enqueue(card.id, "plan");
+    await engine.whenIdle();
+
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    expect(stepStatus(harness, card.id, "plan")).toBe("done");
+  });
+
+  it("retries Plan after the user adds a description", async () => {
+    const card = queuedCard(harness);
+    harness.store.updateCard(card.id, { description: "" });
+    const { engine } = makeEngine(harness, [planOk(), implementOk(), airevOk()]);
+
+    engine.enqueue(card.id, "plan");
+    await engine.whenIdle();
+    expect(stepStatus(harness, card.id, "plan")).toBe("needs-user");
+
+    harness.store.updateCard(card.id, {
+      description: "Add a QA marker; no pantry UI changes.",
+    });
+    engine.retry(card.id, "plan");
+    await engine.whenIdle();
+
+    expect(stepStatus(harness, card.id, "plan")).toBe("done");
+    expect(stepStatus(harness, card.id, "impl")).toBe("done");
+  });
+
   it("injects the parent feature spec for a child task Plan", async () => {
     const projectId = harness.store.ensureDefaultProject("jeeves", "C:/target-repo").id;
     const feature = harness.store.createCard(projectId);
@@ -363,8 +424,8 @@ describe("ExecutionEngine", () => {
     harness.store.handOffSpecToTasks(featureId);
     harness.artifactStore.appendTasksDraft(featureId, 0, {
       tasks: [
-        { id: "a", title: "First", description: "", dependsOn: [] },
-        { id: "b", title: "Second", description: "", dependsOn: [] },
+        { id: "a", title: "First", description: "First slice.", dependsOn: [] },
+        { id: "b", title: "Second", description: "Second slice.", dependsOn: [] },
       ],
     });
     harness.store.setCardBranch(featureId, "jeeves/card-feature");
@@ -413,8 +474,8 @@ describe("ExecutionEngine", () => {
     harness.store.handOffSpecToTasks(featureId);
     harness.artifactStore.appendTasksDraft(featureId, 0, {
       tasks: [
-        { id: "a", title: "API", description: "", dependsOn: [] },
-        { id: "b", title: "UI", description: "", dependsOn: ["a"] },
+        { id: "a", title: "API", description: "API slice.", dependsOn: [] },
+        { id: "b", title: "UI", description: "UI slice.", dependsOn: ["a"] },
       ],
     });
     harness.store.setCardBranch(featureId, "jeeves/card-feature");
@@ -526,8 +587,8 @@ describe("ExecutionEngine", () => {
       harness.store.handOffSpecToTasks(featureId);
       harness.artifactStore.appendTasksDraft(featureId, 0, {
         tasks: [
-          { id: "a", title: "First", description: "", dependsOn: [] },
-          { id: "b", title: "Second", description: "", dependsOn: [] },
+          { id: "a", title: "First", description: "First slice.", dependsOn: [] },
+          { id: "b", title: "Second", description: "Second slice.", dependsOn: [] },
         ],
       });
       harness.store.setCardBranch(featureId, "jeeves/card-feature");

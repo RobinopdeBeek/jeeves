@@ -2,6 +2,7 @@ import fs from "node:fs";
 import {
   formatCardAttachments,
   nonemptyOr,
+  promptsRootFromTemplatePath,
   renderPrompt,
   type CardAttachmentInput,
 } from "./render-prompt.js";
@@ -39,5 +40,9 @@ export function buildAiReviewPrompt(
   input: AiReviewPromptInput,
   templatePath: string,
 ): string {
-  return renderPrompt(fs.readFileSync(templatePath, "utf8"), aiReviewPromptVars(input));
+  return renderPrompt(
+    fs.readFileSync(templatePath, "utf8"),
+    aiReviewPromptVars(input),
+    { promptsRoot: promptsRootFromTemplatePath(templatePath) },
+  );
 }

@@ -6,6 +6,8 @@ single run**, perform a dual-axis **Standards** + **Spec** review (same shape as
 findings. Do **not** produce Evaluation HTML or eval fragments — Prepare Eval
 owns that later.
 
+{{jeevesHost}}
+
 ## Card
 
 - **Title:** {{cardTitle}}
@@ -47,9 +49,6 @@ the diff against upstream yourself (`git log`, `git diff <upstream>...HEAD`).
   what you reworked (or an explicit clean review with no findings).
 - Commit only when rework changes source. A clean review may leave the tip
   unchanged (zero commits is allowed).
-- Prefer vocabulary from `CONTEXT.md` and respect ADRs in the target repo.
-- Do not hunt the project store or SQLite for inputs — everything you need is
-  injected above (plus the manifest paths).
 - Do **not** write Evaluation HTML, `eval.html`, or eval fragment files.
 
 ## Postconditions

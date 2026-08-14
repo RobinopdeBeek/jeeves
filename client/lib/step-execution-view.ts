@@ -28,7 +28,7 @@ export function usesFrozenArtifacts(mode: StepExecutionMode): boolean {
 /** Markdown overview kinds shown after a successful execution step. */
 const MARKDOWN_ARTIFACT_BY_STEP: Record<string, string> = {
   plan: "plan",
-  airev: "review",
+  "ai-review": "review",
 };
 
 /** Whether to fetch the step's markdown overview artifact (successful runs only). */
@@ -55,6 +55,6 @@ export function showMarkdownArtifact(
 
 /** Live empty-state / status line while a step is ai-working. */
 export function liveWorkingMessage(stepKey: string): string {
-  if (stepKey === "prepeval") return "Preparing interactive evaluation…";
+  if (stepKey === "prepare-human-review") return "Preparing Human Review Report…";
   return "agent is warming up…";
 }

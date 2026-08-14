@@ -12,7 +12,7 @@ there are four classes, and storage follows from the class:
 |---|---|---|---|
 | **Human/AI prose** | Grill session (read-only), Spec, Plan, AI Review overview | Humans + next AI step | Diffable, greppable markdown |
 | **Structured state** | Tip `tasks-draft` (ArtifactStore), blockers after fan-out, change requests, rework round, decisions, session meta (tokens/cost) | The UI and the queue | Files + queryable SQLite rows |
-| **Composite review doc** | Task Evaluation, Feature Evaluation (from **Prepare Eval**) | Human review; linked from other evaluations | Self-contained HTML pinned to a commit SHA |
+| **Composite review doc** | Task / Feature Human Review Report (from **Prepare Human Review**) | Human Review; linked from other reports | Self-contained HTML pinned to a commit SHA |
 | **Media / raw** | Screenshots/GIFs, run logs, chat transcripts (`UIMessage[]`) | Occasional human, gallery | Plain files, possibly large |
 
 ### Storage: SQLite index + project store
@@ -33,13 +33,14 @@ nothing the UI renders on a card tile is trapped inside markdown/HTML. Applicati
 │       └── <cardId>/
 │           ├── manifest.json       # regenerated projection of the DB index
 │           └── <round>/
-│               ├── grill/<artifactId>.md
-│               ├── spec/<artifactId>.md
-│               ├── plan/<artifactId>.md
-│               ├── review/<artifactId>.md
-│               ├── eval/<artifactId>.html
-│               ├── screenshots/
-│               └── runlog/<runId>.log
+│               ├── grill/
+│               ├── spec/
+│               ├── tasks/
+│               ├── plan/
+│               ├── implement/
+│               ├── ai-review/
+│               ├── prepare-human-review/
+│               └── review/
 └── worktrees/<cardId>/             # ephemeral agent checkouts (also gitignored)
 ```
 
@@ -104,8 +105,9 @@ the target repo including `.jeeves/` (or back up that folder separately).
 Two production contexts, two flows:
 
 - **Host-produced** (Grill session extract, spec, chat transcripts, finalized run logs): written
-  or finalized by the Hono server. A live log belongs to its mutable `run`; on success or failure
-  it is closed and registered as an immutable `runlog` artifact. The Grill session is extracted
+  or finalized by the Hono server. A live log belongs to its mutable `run` (written under the
+  step folder); on success or failure it is closed, registered as an immutable `runlog` artifact
+  in that same step folder, and the live file is deleted. The Grill session is extracted
   from the Grill transcript on Grill → Spec ([ADR 0012](../adr/0012-grill-session-qa-handoff.md));
   a failed extract blocks the advance.
 - **Worktree-produced** (Plan, AI Review markdown, eval HTML, screenshots, structured JSON
@@ -119,7 +121,7 @@ Two production contexts, two flows:
 
 ### Serving artifacts
 
-- Hono serves the artifact folder over HTTP (`/artifacts/<cardId>/…`). The eval iframe loads from
+- Hono serves the artifact folder over HTTP (`/artifacts/<cardId>/…`). The Human Review Report iframe loads from
   there, and the screenshot gallery's relative image paths resolve for free — including from
   phone/tablet over Tailscale.
 - Database paths are root-relative; callers identify artifacts/cards, never arbitrary filesystem
@@ -127,7 +129,7 @@ Two production contexts, two flows:
 - The UI has a subtle **"open artifacts folder"** button per card. Remote (phone/tablet) it
   links to the HTTP directory listing; on the host it can additionally reveal the folder in
   Finder/Explorer.
-- The eval iframe uses `sandbox="allow-scripts"`—no `allow-same-origin`—because it renders
+- The Human Review Report iframe uses `sandbox="allow-scripts"`—no `allow-same-origin`—because it renders
   AI-generated HTML.
 
 ### QA state: parent localStorage + postMessage, one audit boolean

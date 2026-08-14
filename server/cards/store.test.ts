@@ -162,8 +162,8 @@ describe("CardStore", () => {
       expect(decided.steps).toEqual([
         { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
         { key: "plan", status: "queued", label: "Plan", stepKind: "ai-execution", column: "implement" },
-        { key: "impl", status: "pending", label: "Implement", stepKind: "ai-execution", column: "implement" },
-        { key: "airev", status: "pending", label: "AI Review", stepKind: "ai-execution", column: "implement" },
+        { key: "implement", status: "pending", label: "Implement", stepKind: "ai-execution", column: "implement" },
+        { key: "ai-review", status: "pending", label: "AI Review", stepKind: "ai-execution", column: "implement" },
       ]);
       // queued is persisted only — route/engine dispatch the enqueue effect
       const rows = db.select().from(cardSteps).where(eq(cardSteps.cardId, card.id)).all();
@@ -381,13 +381,13 @@ describe("CardStore", () => {
       });
       expect(children[0]!.steps.map((s) => ({ key: s.key, status: s.status }))).toEqual([
         { key: "plan", status: "queued" },
-        { key: "impl", status: "pending" },
-        { key: "airev", status: "pending" },
+        { key: "implement", status: "pending" },
+        { key: "ai-review", status: "pending" },
       ]);
       expect(children[1]!.steps.map((s) => ({ key: s.key, status: s.status }))).toEqual([
         { key: "plan", status: "pending" },
-        { key: "impl", status: "pending" },
-        { key: "airev", status: "pending" },
+        { key: "implement", status: "pending" },
+        { key: "ai-review", status: "pending" },
       ]);
       expect(children[1]!.blockedBy).toEqual([
         { id: children[0]!.id, title: "API" },
@@ -529,7 +529,7 @@ describe("CardStore", () => {
       return id;
     }
 
-    it("orders eligible steps by sibling position then plan < impl < airev < prepeval", () => {
+    it("orders eligible steps by sibling position then plan < implement < ai-review < prepare-human-review", () => {
       const earlier = queueStore.createCard(projectId);
       queueStore.updateCard(earlier.id, { title: "Created first" });
       const earlierId = queueStore.decideKind(earlier.id, "standalone").card.id;
@@ -550,10 +550,10 @@ describe("CardStore", () => {
 
       queueStore.setStepStatus(earlierId, "plan", "queued");
       queueStore.setStepStatus(laterId, "plan", "done");
-      queueStore.setStepStatus(laterId, "impl", "queued");
+      queueStore.setStepStatus(laterId, "implement", "queued");
 
       expect(queueStore.listQueuedSteps()).toEqual([
-        { cardId: laterId, stepKey: "impl" },
+        { cardId: laterId, stepKey: "implement" },
         { cardId: earlierId, stepKey: "plan" },
       ]);
     });
@@ -563,22 +563,22 @@ describe("CardStore", () => {
       queueStore.updateCard(card.id, { title: "Standalone" });
       const id = queueStore.decideKind(card.id, "standalone").card.id;
       queueStore.setStepStatus(id, "plan", "done");
-      queueStore.setStepStatus(id, "impl", "queued");
-      queueStore.setStepStatus(id, "airev", "queued");
-      // prepeval row appears only after AI Review advance — insert for the seam.
+      queueStore.setStepStatus(id, "implement", "queued");
+      queueStore.setStepStatus(id, "ai-review", "queued");
+      // prepare-human-review row appears only after AI Review advance — insert for the seam.
       db.insert(cardSteps)
         .values({
           id: "prepeval-row",
           cardId: id,
-          stepKey: "prepeval",
+          stepKey: "prepare-human-review",
           status: "queued",
         })
         .run();
 
       expect(queueStore.listQueuedSteps()).toEqual([
-        { cardId: id, stepKey: "impl" },
-        { cardId: id, stepKey: "airev" },
-        { cardId: id, stepKey: "prepeval" },
+        { cardId: id, stepKey: "implement" },
+        { cardId: id, stepKey: "ai-review" },
+        { cardId: id, stepKey: "prepare-human-review" },
       ]);
     });
 
@@ -613,10 +613,10 @@ describe("CardStore", () => {
       const { children: kidsB } = queueStore.fanOut(featureB);
 
       queueStore.setStepStatus(kidsA[0]!.id, "plan", "done");
-      queueStore.setStepStatus(kidsA[0]!.id, "impl", "queued");
+      queueStore.setStepStatus(kidsA[0]!.id, "implement", "queued");
       // Child A2 still Plan queued; B1 Plan queued at sibling position 0.
       expect(queueStore.listQueuedSteps()).toEqual([
-        { cardId: kidsA[0]!.id, stepKey: "impl" },
+        { cardId: kidsA[0]!.id, stepKey: "implement" },
         { cardId: kidsA[1]!.id, stepKey: "plan" },
         { cardId: kidsB[0]!.id, stepKey: "plan" },
       ]);

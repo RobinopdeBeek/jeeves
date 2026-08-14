@@ -91,7 +91,7 @@ blocker relationship can be built in parallel or reordered.
    fan-out `ensure-branch` + enqueue Plan for unblocked children only; depth-first queue
    derived from `(position, step index)` with blocker filter, rebuilt on boot; host verify
    after Implement and after AI Review commits; MCP/`settingSources` (Context7 non-fatal);
-   on `airev` success → Review column with **Prepare Eval** stub queued then human Review;
+   on `ai-review` success → Review column with **Prepare Eval** stub queued then human Review;
    Implement tab: assistant-ui DiffViewer, lazy per-file three-dot diff vs upstream.
    *Demo: a child task runs Plan → Implement → AI Review → Prepare Eval (stub) unattended.*
    (Blocked by 4 and 7; Project Chat / app shell already landed — #33 / PR #54.)

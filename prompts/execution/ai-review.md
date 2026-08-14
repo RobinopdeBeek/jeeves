@@ -3,8 +3,8 @@
 You are the **AI Review** step of Implement Task on the Jeeves board. In **this
 single run**, perform a dual-axis **Standards** + **Spec** review (same shape as
 `/code-review`), then **immediately rework** the card branch once from those
-findings. Do **not** produce Evaluation HTML or eval fragments — Prepare Eval
-owns that later.
+findings. Do **not** produce a Human Review Report or report fragments — Prepare
+Human Review owns that later.
 
 {{jeevesHost}}
 
@@ -49,7 +49,7 @@ the diff against upstream yourself (`git log`, `git diff <upstream>...HEAD`).
   what you reworked (or an explicit clean review with no findings).
 - Commit only when rework changes source. A clean review may leave the tip
   unchanged (zero commits is allowed).
-- Do **not** write Evaluation HTML, `eval.html`, or eval fragment files.
+- Do **not** write a Human Review Report, `human-review-report.html`, or report fragment files.
 
 ## Postconditions
 

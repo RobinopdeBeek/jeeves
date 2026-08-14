@@ -298,7 +298,7 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
 
 #### `eval-assemble`
 
-- **Step:** Prepare Eval (`prepeval`) — terminal skill of the eval pipeline (slice 9 stub first)
+- **Step:** Prepare Eval (`prepare-eval`) — terminal skill of the eval pipeline (slice 9 stub first)
 - **Inputs (injected):** all eval fragments; per-skill notification exchange files; session meta
   (runs aggregation: duration, tokens, model, cost); `git_sha` of card tip after AI Review
 - **Outputs:** `.jeeves/eval.html` (self-contained HTML, sandboxed iframe) +
@@ -308,7 +308,7 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
   notifications. Inline CSS; sticky TOC; syntax-highlighted diffs. (No separate “AI review”
   eval section — that work already happened in the AI Review step’s markdown overview.)
 - **Postconditions:** eval HTML + notifications required; git tree clean.
-- **Workflow awareness:** on success, `prepeval → done` and human `review → needs-user`.
+- **Workflow awareness:** on success, `prepare-eval → done` and human `review → needs-user`.
   One assembled eval per task round; supersedes prior version within the same round on partial
   re-run. Feature Evaluation uses a parallel assemble path from `/eval-acceptance`.
 
@@ -372,7 +372,7 @@ what runs next in the pipeline. Skills that emit **notifications** write them to
 
 ### Prepare Eval sequencing
 
-Prepare Eval is a **sequence** of `runs` rows on step `prepeval`, displayed as a mini-pipeline:
+Prepare Eval is a **sequence** of `runs` rows on step `prepare-eval`, displayed as a mini-pipeline:
 
 ```
 ai-review  (rework commits + review.md)  ← Implement Task column

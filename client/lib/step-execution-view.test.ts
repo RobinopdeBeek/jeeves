@@ -55,32 +55,32 @@ describe("step-execution-view", () => {
   describe("markdown overview artifact visibility", () => {
     it("loads plan and review artifacts only after a successful run", () => {
       expect(shouldLoadMarkdownArtifact("plan", "done")).toBe(true);
-      expect(shouldLoadMarkdownArtifact("airev", "done")).toBe(true);
+      expect(shouldLoadMarkdownArtifact("ai-review", "done")).toBe(true);
       expect(shouldLoadMarkdownArtifact("plan", "needs-user")).toBe(false);
-      expect(shouldLoadMarkdownArtifact("airev", "ai-working")).toBe(false);
-      expect(shouldLoadMarkdownArtifact("impl", "done")).toBe(false);
+      expect(shouldLoadMarkdownArtifact("ai-review", "ai-working")).toBe(false);
+      expect(shouldLoadMarkdownArtifact("implement", "done")).toBe(false);
       expect(markdownArtifactKind("plan")).toBe("plan");
-      expect(markdownArtifactKind("airev")).toBe("review");
+      expect(markdownArtifactKind("ai-review")).toBe("review");
     });
 
     it("shows markdown only when the step succeeded", () => {
       expect(showMarkdownArtifact("plan", "done", { content: "# Plan" })).toBe(true);
-      expect(showMarkdownArtifact("airev", "done", { content: "# Review" })).toBe(true);
-      expect(showMarkdownArtifact("airev", "needs-user", { content: "# Review" })).toBe(false);
+      expect(showMarkdownArtifact("ai-review", "done", { content: "# Review" })).toBe(true);
+      expect(showMarkdownArtifact("ai-review", "needs-user", { content: "# Review" })).toBe(false);
       expect(showMarkdownArtifact("plan", "done", null)).toBe(false);
     });
   });
 
   describe("live working message", () => {
-    it("shows Prepare Eval preparing copy while ai-working", () => {
-      expect(liveWorkingMessage("prepeval")).toBe(
-        "Preparing interactive evaluation…",
+    it("shows Prepare Human Review preparing copy while ai-working", () => {
+      expect(liveWorkingMessage("prepare-human-review")).toBe(
+        "Preparing Human Review Report…",
       );
     });
 
     it("keeps the generic warming copy for other execution steps", () => {
       expect(liveWorkingMessage("plan")).toBe("agent is warming up…");
-      expect(liveWorkingMessage("airev")).toBe("agent is warming up…");
+      expect(liveWorkingMessage("ai-review")).toBe("agent is warming up…");
     });
   });
 });

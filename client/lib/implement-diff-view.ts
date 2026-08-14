@@ -8,7 +8,7 @@ export function shouldShowImplementDiff(
   stepKey: string,
   stepStatus: StepStatus | undefined,
 ): boolean {
-  return stepKey === "impl" && stepStatus === "done";
+  return stepKey === "implement" && stepStatus === "done";
 }
 
 /**

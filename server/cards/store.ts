@@ -503,8 +503,8 @@ export class CardStore {
           createdAt: new Date(),
         }).run();
         this.insertStep(childId, "plan", "pending");
-        this.insertStep(childId, "impl", "pending");
-        this.insertStep(childId, "airev", "pending");
+        this.insertStep(childId, "implement", "pending");
+        this.insertStep(childId, "ai-review", "pending");
       }
 
       for (const task of tip.tasks) {
@@ -662,7 +662,7 @@ export class CardStore {
   /**
    * Eligible execution steps for the queue: `queued` and no unmerged blockers,
    * ordered by sibling group (parent board position, else own position), then
-   * sibling `position`, then step index plan < impl < airev < prepeval
+   * sibling `position`, then step index plan < implement < ai-review < prepare-human-review
    * (depth-first per task). Boot and live enqueue both rebuild from this.
    */
   listQueuedSteps(): Array<{ cardId: string; stepKey: StepKey }> {

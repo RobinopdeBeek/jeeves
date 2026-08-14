@@ -9,8 +9,8 @@ import {
 import type { StepPanelProps } from "./step-panel-types";
 
 /**
- * Human Review stub — QA gate + eval iframe land in slice 9.
- * Prepare Eval unlocks this tab as needs-user after the stub finishes.
+ * Human Review stub — QA gate + report iframe land in slice 9.
+ * Prepare Human Review unlocks this tab as needs-user after the stub finishes.
  */
 export function StepReview(_props: StepPanelProps) {
   return (
@@ -22,7 +22,7 @@ export function StepReview(_props: StepPanelProps) {
           </EmptyMedia>
           <EmptyTitle>Human Review</EmptyTitle>
           <EmptyDescription>
-            Evaluation review surface lands in slice 9.
+            Human Review Report surface lands in slice 9.
           </EmptyDescription>
         </EmptyHeader>
       </Empty>

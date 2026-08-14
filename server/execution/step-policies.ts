@@ -6,9 +6,9 @@ import { aiReviewPromptVars } from "./ai-review.js";
 import { implementPromptVars } from "./implement-task.js";
 import { planPromptVars } from "./plan-implementation.js";
 import {
-  PREPEVAL_STUB_EXCHANGE,
-  writePrepareEvalStub,
-} from "./prepare-eval-stub.js";
+  HUMAN_REVIEW_REPORT_STUB_EXCHANGE,
+  writePrepareHumanReviewStub,
+} from "./prepare-human-review-stub.js";
 import type { CardAttachmentInput } from "./render-prompt.js";
 import type { RunFinalizeContext } from "./runner.js";
 import type { WorktreeLifecycle } from "./worktree-manager.js";
@@ -127,7 +127,7 @@ export const STEP_POLICIES: Partial<Record<StepKey, StepExecutionPolicy>> = {
       artifacts.latest(cardId, { stepKey: "plan", round, kind: "plan" }) !==
       undefined,
   },
-  impl: {
+  implement: {
     kind: "agent",
     skill: "implement-task",
     promptFile: path.join("prompts", "execution", "implement-task.md"),
@@ -144,7 +144,7 @@ export const STEP_POLICIES: Partial<Record<StepKey, StepExecutionPolicy>> = {
     harvest: [],
     hostVerify: true,
   },
-  airev: {
+  "ai-review": {
     kind: "agent",
     skill: "ai-review",
     promptFile: path.join("prompts", "execution", "ai-review.md"),
@@ -161,31 +161,34 @@ export const STEP_POLICIES: Partial<Record<StepKey, StepExecutionPolicy>> = {
       {
         exchangePath: ".jeeves/review.md",
         kind: "review",
-        stepKey: "airev",
+        stepKey: "ai-review",
         validate: assertExchangeHasUsefulContent,
       },
     ],
     postcondition: (artifacts, cardId, round) =>
-      artifacts.latest(cardId, { stepKey: "airev", round, kind: "review" }) !==
+      artifacts.latest(cardId, { stepKey: "ai-review", round, kind: "review" }) !==
       undefined,
     hostVerify: "if-committed",
   },
-  prepeval: {
+  "prepare-human-review": {
     kind: "host",
-    skill: "eval-assemble",
+    skill: "assemble-human-review",
     commits: "forbidden",
-    hostBody: writePrepareEvalStub,
-    hostStatusLine: "Preparing interactive evaluation…",
+    hostBody: writePrepareHumanReviewStub,
+    hostStatusLine: "Preparing Human Review Report…",
     harvest: [
       {
-        exchangePath: PREPEVAL_STUB_EXCHANGE,
-        kind: "eval",
-        stepKey: "prepeval",
+        exchangePath: HUMAN_REVIEW_REPORT_STUB_EXCHANGE,
+        kind: "human-review-report",
+        stepKey: "prepare-human-review",
       },
     ],
     postcondition: (artifacts, cardId, round) =>
-      artifacts.latest(cardId, { stepKey: "prepeval", round, kind: "eval" }) !==
-      undefined,
+      artifacts.latest(cardId, {
+        stepKey: "prepare-human-review",
+        round,
+        kind: "human-review-report",
+      }) !== undefined,
   },
 };
 

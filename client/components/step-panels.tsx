@@ -15,8 +15,8 @@ export const STEP_PANELS: Record<string, ComponentType<StepPanelProps>> = {
   spec: StepSpec,
   tasks: StepTasks,
   plan: StepExecution,
-  impl: StepExecution,
-  airev: StepExecution,
-  prepeval: StepExecution,
-  review: StepReview,
+  implement: StepExecution,
+  "ai-review": StepExecution,
+  "prepare-human-review": StepExecution,
+  "human-review": StepReview,
 };

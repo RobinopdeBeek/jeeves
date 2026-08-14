@@ -39,7 +39,7 @@ function toDisplayLog(raw: string): string {
 }
 
 /**
- * Plan / Implement / AI Review / Prepare Eval run-log panel: queued message →
+ * Plan / Implement / AI Review / Prepare Human Review run-log panel: queued message →
  * live SSE stream while ai-working → run log above formatted markdown when finished.
  */
 export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
@@ -222,12 +222,12 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
                 [queued] {step?.label} step waiting in queue…
               </div>
             )}
-            {mode === "live" && stepKey === "prepeval" && (
+            {mode === "live" && stepKey === "prepare-human-review" && (
               <div className="text-muted-foreground">
                 {liveWorkingMessage(stepKey)}
               </div>
             )}
-            {mode === "live" && !logText && stepKey !== "prepeval" && (
+            {mode === "live" && !logText && stepKey !== "prepare-human-review" && (
               <div className="text-muted-foreground">
                 [starting] {liveWorkingMessage(stepKey)}
               </div>

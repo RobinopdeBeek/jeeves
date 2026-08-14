@@ -78,9 +78,9 @@ describe("ExecutionEngine", () => {
       expect(checkoutCalls).toEqual([{ branch }, { branch }, { branch }]);
       expect(harness.store.getCard(card.id)?.branch).toBe(branch);
       expect(harness.runStore.latestForStep(card.id, "plan")?.baseSha).toBe("sha-of-main");
-      expect(stepStatus(harness, card.id, "impl")).toBe("done");
-      expect(stepStatus(harness, card.id, "airev")).toBe("done");
-      expect(stepStatus(harness, card.id, "prepeval")).toBe("done");
+      expect(stepStatus(harness, card.id, "implement")).toBe("done");
+      expect(stepStatus(harness, card.id, "ai-review")).toBe("done");
+      expect(stepStatus(harness, card.id, "prepare-human-review")).toBe("done");
     });
 
     it("uses a non-main projects.default_branch as the upstream ref", async () => {
@@ -125,13 +125,13 @@ describe("ExecutionEngine", () => {
       engine.enqueue(card.id, "plan");
       await engine.whenIdle();
       expect(tracked.createFromCalls).toHaveLength(1);
-      expect(stepStatus(harness, card.id, "impl")).toBe("done");
+      expect(stepStatus(harness, card.id, "implement")).toBe("done");
 
       // Advance the durable tip, then re-queue Plan as a later run on the same branch.
       const branch = `jeeves/card-${card.id}`;
       tracked.tipByBranch.set(branch, "sha-after-implement");
       harness.store.setStepStatus(card.id, "plan", "queued");
-      harness.store.setStepStatus(card.id, "impl", "pending");
+      harness.store.setStepStatus(card.id, "implement", "pending");
       tracked.createFromCalls.length = 0;
       tracked.checkoutCalls.length = 0;
       tracked.resolvedRefs.length = 0;
@@ -177,7 +177,7 @@ describe("ExecutionEngine", () => {
       expect(tracked.createFromCalls).toEqual([
         { branch: `jeeves/card-${card.id}`, baseSha: "sha-of-main" },
       ]);
-      // Implement + AI Review + Prepare Eval continuations after successful Plan retry.
+      // Implement + AI Review + Prepare Human Review continuations after successful Plan retry.
       expect(tracked.checkoutCalls).toEqual([
         { branch: `jeeves/card-${card.id}` },
         { branch: `jeeves/card-${card.id}` },
@@ -187,7 +187,7 @@ describe("ExecutionEngine", () => {
         `jeeves/card-${card.id}`,
         `jeeves/card-${card.id}`,
         `jeeves/card-${card.id}`,
-        // Prepare Eval host stub re-resolves tip after writing the placeholder.
+        // Prepare Human Review host stub re-resolves tip after writing the placeholder.
         `jeeves/card-${card.id}`,
       ]);
     });
@@ -225,7 +225,7 @@ describe("ExecutionEngine", () => {
         childBranch,
         childBranch,
         childBranch,
-        // Prepare Eval host stub re-resolves tip after writing the placeholder.
+        // Prepare Human Review host stub re-resolves tip after writing the placeholder.
         childBranch,
       ]);
       expect(tracked.createFromCalls).toEqual([

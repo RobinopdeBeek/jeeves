@@ -89,9 +89,32 @@ describe("ArtifactStore", () => {
     expect(artifacts.readContent(latest!)).toContain("# Second plan");
   });
 
-  it("resolves live log paths under the card round folder", () => {
-    const logPath = artifacts.liveLogPath(cardId, 0, "run-abc");
-    expect(logPath).toBe(path.join(artifactRoot, "cards", cardId, "0", "run-run-abc.log"));
+  it("nests artifacts under the step folder, not the kind folder", () => {
+    const review = artifacts.save({
+      cardId,
+      stepKey: "ai-review",
+      round: 0,
+      kind: "review",
+      content: "# Review",
+      sourceSkill: "ai-review",
+    });
+    const runlog = artifacts.save({
+      cardId,
+      stepKey: "plan",
+      round: 0,
+      kind: "runlog",
+      content: "working…\n",
+      sourceSkill: "plan-implementation",
+    });
+    expect(review.path).toMatch(new RegExp(`^cards/${cardId}/0/ai-review/.+\\.md$`));
+    expect(runlog.path).toMatch(new RegExp(`^cards/${cardId}/0/plan/.+\\.log$`));
+  });
+
+  it("resolves live log paths under the step folder", () => {
+    const logPath = artifacts.liveLogPath(cardId, 0, "plan", "run-abc");
+    expect(logPath).toBe(
+      path.join(artifactRoot, "cards", cardId, "0", "plan", "run-run-abc.log"),
+    );
     expect(fs.existsSync(path.dirname(logPath))).toBe(true);
   });
 

@@ -70,13 +70,13 @@ describe("ExecutionEngine", () => {
       expect(calls[2]!.prompt).toContain("Match this layout");
       expect(calls[2]!.prompt).toContain(cardAttachments.absolutePath(card.id, att.id)!);
       expect(calls[2]!.prompt).toContain(".jeeves/review.md");
-      expect(harness.runStore.latestForStep(card.id, "airev")?.skill).toBe("ai-review");
-      expect(harness.runStore.listForCard(card.id).filter((r) => r.stepKey === "airev")).toHaveLength(
+      expect(harness.runStore.latestForStep(card.id, "ai-review")?.skill).toBe("ai-review");
+      expect(harness.runStore.listForCard(card.id).filter((r) => r.stepKey === "ai-review")).toHaveLength(
         1,
       );
     });
 
-    it("harvests review.md and advances through Prepare Eval stub to human Review", async () => {
+    it("harvests review.md and advances through Prepare Human Review stub to Human Review", async () => {
       const card = queuedCard(harness);
       const { engine, calls } = makeEngine(harness, [
         planOk(),
@@ -88,30 +88,30 @@ describe("ExecutionEngine", () => {
       await engine.whenIdle();
 
       const review = harness.artifactStore.latest(card.id, {
-        stepKey: "airev",
+        stepKey: "ai-review",
         round: 0,
         kind: "review",
       });
       expect(review).toBeDefined();
       expect(harness.artifactStore.readBody(review!)).toContain("Clean review");
-      expect(stepStatus(harness, card.id, "airev")).toBe("done");
+      expect(stepStatus(harness, card.id, "ai-review")).toBe("done");
       expect(harness.store.getCard(card.id)?.column).toBe("review");
-      // Host stub — no AgentRunner call for prepeval.
+      // Host stub — no AgentRunner call for prepare-human-review.
       expect(calls).toHaveLength(3);
-      expect(stepStatus(harness, card.id, "prepeval")).toBe("done");
-      expect(stepStatus(harness, card.id, "review")).toBe("needs-user");
+      expect(stepStatus(harness, card.id, "prepare-human-review")).toBe("done");
+      expect(stepStatus(harness, card.id, "human-review")).toBe("needs-user");
 
       const evalArtifact = harness.artifactStore.latest(card.id, {
-        stepKey: "prepeval",
+        stepKey: "prepare-human-review",
         round: 0,
-        kind: "eval",
+        kind: "human-review-report",
       });
       expect(evalArtifact).toBeDefined();
       expect(harness.artifactStore.readBody(evalArtifact!)).toContain(
-        "Prepare Eval stub",
+        "Prepare Human Review stub",
       );
-      expect(harness.runStore.latestForStep(card.id, "prepeval")?.skill).toBe(
-        "eval-assemble",
+      expect(harness.runStore.latestForStep(card.id, "prepare-human-review")?.skill).toBe(
+        "assemble-human-review",
       );
     });
 
@@ -124,7 +124,7 @@ describe("ExecutionEngine", () => {
       await setup.whenIdle();
 
       // Leave Implement done; park AI Review as queued with a branch tip ready.
-      harness.store.setStepStatus(card.id, "airev", "queued");
+      harness.store.setStepStatus(card.id, "ai-review", "queued");
       const project = harness.store.ensureDefaultProject("jeeves", "C:/target-repo");
       harness.db
         .update(projects)
@@ -133,13 +133,13 @@ describe("ExecutionEngine", () => {
         .run();
 
       const { engine } = makeEngine(harness, [airevOk()]);
-      engine.enqueue(card.id, "airev");
+      engine.enqueue(card.id, "ai-review");
       await engine.whenIdle();
 
       // Clean airev made no commits — verify_commands must not run (would fail).
-      expect(stepStatus(harness, card.id, "airev")).toBe("done");
+      expect(stepStatus(harness, card.id, "ai-review")).toBe("done");
       const runlog = harness.artifactStore.latest(card.id, {
-        stepKey: "airev",
+        stepKey: "ai-review",
         round: 0,
         kind: "runlog",
       });
@@ -155,7 +155,7 @@ describe("ExecutionEngine", () => {
       setup.enqueue(card.id, "plan");
       await setup.whenIdle();
 
-      harness.store.setStepStatus(card.id, "airev", "queued");
+      harness.store.setStepStatus(card.id, "ai-review", "queued");
       const project = harness.store.ensureDefaultProject("jeeves", "C:/target-repo");
       harness.db
         .update(projects)
@@ -164,12 +164,12 @@ describe("ExecutionEngine", () => {
         .run();
 
       const { engine } = makeEngine(harness, [airevReworkOk()]);
-      engine.enqueue(card.id, "airev");
+      engine.enqueue(card.id, "ai-review");
       await engine.whenIdle();
 
-      expect(stepStatus(harness, card.id, "airev")).toBe("needs-user");
+      expect(stepStatus(harness, card.id, "ai-review")).toBe("needs-user");
       expect(harness.store.getCard(card.id)?.column).toBe("implement");
-      const run = harness.runStore.latestForStep(card.id, "airev");
+      const run = harness.runStore.latestForStep(card.id, "ai-review");
       expect(run?.status).toBe("failed");
       expect(run?.error).toMatch(/verify_commands failed/i);
     });
@@ -191,10 +191,10 @@ describe("ExecutionEngine", () => {
       engine.enqueue(card.id, "plan");
       await engine.whenIdle();
 
-      expect(stepStatus(harness, card.id, "airev")).toBe("done");
+      expect(stepStatus(harness, card.id, "ai-review")).toBe("done");
       expect(harness.store.getCard(card.id)?.column).toBe("review");
       const runlog = harness.artifactStore.latest(card.id, {
-        stepKey: "airev",
+        stepKey: "ai-review",
         round: 0,
         kind: "runlog",
       });
@@ -217,8 +217,8 @@ describe("ExecutionEngine", () => {
       engine.enqueue(card.id, "plan");
       await engine.whenIdle();
 
-      expect(stepStatus(harness, card.id, "airev")).toBe("needs-user");
-      expect(harness.runStore.latestForStep(card.id, "airev")?.error).toMatch(
+      expect(stepStatus(harness, card.id, "ai-review")).toBe("needs-user");
+      expect(harness.runStore.latestForStep(card.id, "ai-review")?.error).toMatch(
         /required exchange|postconditions|review/i,
       );
     });
@@ -274,11 +274,11 @@ describe("ExecutionEngine", () => {
       engine.enqueue(card.id, "plan");
       await engine.whenIdle();
 
-      expect(stepStatus(harness, card.id, "airev")).toBe("needs-user");
-      expect(harness.runStore.latestForStep(card.id, "airev")?.error).toMatch(/dirty/i);
+      expect(stepStatus(harness, card.id, "ai-review")).toBe("needs-user");
+      expect(harness.runStore.latestForStep(card.id, "ai-review")?.error).toMatch(/dirty/i);
     });
 
-    it("does not produce Evaluation HTML from AI Review (Prepare Eval owns eval)", async () => {
+    it("does not produce a Human Review Report from AI Review (Prepare Human Review owns it)", async () => {
       const card = queuedCard(harness);
       const { engine } = makeEngine(harness, [planOk(), implementOk(), airevOk()]);
 
@@ -287,24 +287,24 @@ describe("ExecutionEngine", () => {
 
       expect(
         harness.artifactStore.latest(card.id, {
-          stepKey: "airev",
+          stepKey: "ai-review",
           round: 0,
-          kind: "eval",
+          kind: "human-review-report",
         }),
       ).toBeUndefined();
       expect(
         harness.artifactStore.latest(card.id, {
-          stepKey: "airev",
+          stepKey: "ai-review",
           round: 0,
           kind: "review",
         }),
       ).toBeDefined();
-      // Slice 8.5 stub harvests eval on prepeval, not airev.
+      // Slice 8.5 stub harvests the Human Review Report on prepare-human-review, not ai-review.
       expect(
         harness.artifactStore.latest(card.id, {
-          stepKey: "prepeval",
+          stepKey: "prepare-human-review",
           round: 0,
-          kind: "eval",
+          kind: "human-review-report",
         }),
       ).toBeDefined();
     });

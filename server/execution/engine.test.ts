@@ -43,8 +43,8 @@ describe("ExecutionEngine", () => {
     await engine.whenIdle();
 
     expect(stepStatus(harness, card.id, "plan")).toBe("done");
-    expect(stepStatus(harness, card.id, "impl")).toBe("done");
-    expect(stepStatus(harness, card.id, "airev")).toBe("done");
+    expect(stepStatus(harness, card.id, "implement")).toBe("done");
+    expect(stepStatus(harness, card.id, "ai-review")).toBe("done");
 
     const run = harness.runStore.latestForStep(card.id, "plan");
     expect(run?.status).toBe("succeeded");
@@ -83,13 +83,13 @@ describe("ExecutionEngine", () => {
     await engine.whenIdle();
 
     expect(stepStatus(harness, card.id, "plan")).toBe("needs-user");
-    expect(stepStatus(harness, card.id, "impl")).toBe("pending");
+    expect(stepStatus(harness, card.id, "implement")).toBe("pending");
 
     engine.retry(card.id, "plan");
     await engine.whenIdle();
 
     expect(stepStatus(harness, card.id, "plan")).toBe("done");
-    expect(stepStatus(harness, card.id, "impl")).toBe("done");
+    expect(stepStatus(harness, card.id, "implement")).toBe("done");
   });
 
   it("injects card-library attachments into the Plan prompt", async () => {
@@ -120,7 +120,7 @@ describe("ExecutionEngine", () => {
     expect(prompt).toContain("wire.png");
     expect(prompt).toContain("Match this layout");
     expect(prompt).toContain(cardAttachments.absolutePath(card.id, att.id)!);
-    expect(stepStatus(harness, card.id, "impl")).toBe("done");
+    expect(stepStatus(harness, card.id, "implement")).toBe("done");
   });
 
   it("treats an empty card attachment library as non-fatal", async () => {
@@ -138,7 +138,7 @@ describe("ExecutionEngine", () => {
 
     expect(calls[0]!.prompt).toMatch(/Card attachments[\s\S]*\(none\)/);
     expect(stepStatus(harness, card.id, "plan")).toBe("done");
-    expect(stepStatus(harness, card.id, "impl")).toBe("done");
+    expect(stepStatus(harness, card.id, "implement")).toBe("done");
   });
 
   it("fails Plan to needs-user when the card has only a title", async () => {
@@ -152,7 +152,7 @@ describe("ExecutionEngine", () => {
 
     expect(calls).toHaveLength(0);
     expect(stepStatus(harness, card.id, "plan")).toBe("needs-user");
-    expect(stepStatus(harness, card.id, "impl")).toBe("pending");
+    expect(stepStatus(harness, card.id, "implement")).toBe("pending");
     const run = harness.runStore.latestForStep(card.id, "plan");
     expect(run?.status).toBe("failed");
     expect(run?.error).toBe(PLAN_INSUFFICIENT_INPUT);
@@ -199,7 +199,7 @@ describe("ExecutionEngine", () => {
     await engine.whenIdle();
 
     expect(stepStatus(harness, card.id, "plan")).toBe("done");
-    expect(stepStatus(harness, card.id, "impl")).toBe("done");
+    expect(stepStatus(harness, card.id, "implement")).toBe("done");
   });
 
   it("injects the parent feature spec for a child task Plan", async () => {
@@ -239,7 +239,7 @@ describe("ExecutionEngine", () => {
     expect(calls[0]!.prompt).toContain("Streaks must survive offline sync.");
     expect(calls[0]!.prompt).toContain("POST /streaks");
     expect(stepStatus(harness, child.id, "plan")).toBe("done");
-    expect(stepStatus(harness, child.id, "impl")).toBe("done");
+    expect(stepStatus(harness, child.id, "implement")).toBe("done");
   });
 
   it("fails Plan when the exchange file is missing at finalize", async () => {
@@ -410,8 +410,8 @@ describe("ExecutionEngine", () => {
 
     expect(stepStatus(harness, first.id, "plan")).toBe("done");
     expect(stepStatus(harness, second.id, "plan")).toBe("done");
-    expect(stepStatus(harness, first.id, "impl")).toBe("done");
-    expect(stepStatus(harness, second.id, "impl")).toBe("done");
+    expect(stepStatus(harness, first.id, "implement")).toBe("done");
+    expect(stepStatus(harness, second.id, "implement")).toBe("done");
   });
 
   it("runs unblocked siblings depth-first: child 1 Implement-column before child 2 Plan", async () => {
@@ -455,12 +455,12 @@ describe("ExecutionEngine", () => {
     const child1Pipeline = order.filter((id) => id.startsWith(`${child1!.id}:`));
     expect(child1Pipeline).toEqual([
       `${child1!.id}:plan`,
-      `${child1!.id}:impl`,
-      `${child1!.id}:airev`,
-      `${child1!.id}:prepeval`,
+      `${child1!.id}:implement`,
+      `${child1!.id}:ai-review`,
+      `${child1!.id}:prepare-human-review`,
     ]);
     const child2PlanIdx = order.indexOf(`${child2!.id}:plan`);
-    const child1PrepIdx = order.indexOf(`${child1!.id}:prepeval`);
+    const child1PrepIdx = order.indexOf(`${child1!.id}:prepare-human-review`);
     expect(child2PlanIdx).toBeGreaterThan(child1PrepIdx);
   });
 
@@ -547,7 +547,7 @@ describe("ExecutionEngine", () => {
         skill: "plan-implementation",
         logPath: "",
       });
-      const logPath = harness.artifactStore.liveLogPath(card.id, 0, orphan.id);
+      const logPath = harness.artifactStore.liveLogPath(card.id, 0, "plan", orphan.id);
       fs.writeFileSync(logPath, "orphan partial log\n");
       harness.runStore.setLogPath(orphan.id, logPath);
       const { engine, calls } = makeEngine(harness, []);
@@ -574,7 +574,7 @@ describe("ExecutionEngine", () => {
       await engine.whenIdle();
 
       expect(stepStatus(harness, card.id, "plan")).toBe("done");
-      expect(stepStatus(harness, card.id, "impl")).toBe("done");
+      expect(stepStatus(harness, card.id, "implement")).toBe("done");
     });
 
     it("rebuilds depth-first order from the DB (not plans-first FIFO)", async () => {
@@ -597,7 +597,7 @@ describe("ExecutionEngine", () => {
 
       // Simulate restart mid-pipeline: child 1 Implement queued, child 2 Plan queued.
       harness.store.setStepStatus(child1!.id, "plan", "done");
-      harness.store.setStepStatus(child1!.id, "impl", "queued");
+      harness.store.setStepStatus(child1!.id, "implement", "queued");
       harness.store.setCardBranch(child1!.id, `jeeves/card-${child1!.id}`);
 
       const { engine } = makeEngine(harness, [
@@ -617,10 +617,10 @@ describe("ExecutionEngine", () => {
         .all()
         .map((r) => `${r.cardId}:${r.stepKey}`);
 
-      expect(order.indexOf(`${child1!.id}:impl`)).toBeLessThan(
+      expect(order.indexOf(`${child1!.id}:implement`)).toBeLessThan(
         order.indexOf(`${child2!.id}:plan`),
       );
-      expect(order.indexOf(`${child1!.id}:airev`)).toBeLessThan(
+      expect(order.indexOf(`${child1!.id}:ai-review`)).toBeLessThan(
         order.indexOf(`${child2!.id}:plan`),
       );
     });
@@ -671,16 +671,16 @@ describe("ExecutionEngine", () => {
     await engine.whenIdle();
 
     expect(stepStatus(harness, card.id, "plan")).toBe("done");
-    expect(stepStatus(harness, card.id, "impl")).toBe("done");
+    expect(stepStatus(harness, card.id, "implement")).toBe("done");
     const runsForCard = harness.runStore.listForCard(card.id);
     expect(runsForCard).toHaveLength(5);
     expect(runsForCard.filter((r) => r.stepKey === "plan").map((r) => r.status).sort()).toEqual([
       "failed",
       "succeeded",
     ]);
-    expect(runsForCard.find((r) => r.stepKey === "impl")?.status).toBe("succeeded");
-    expect(runsForCard.find((r) => r.stepKey === "airev")?.status).toBe("succeeded");
-    expect(runsForCard.find((r) => r.stepKey === "prepeval")?.status).toBe("succeeded");
+    expect(runsForCard.find((r) => r.stepKey === "implement")?.status).toBe("succeeded");
+    expect(runsForCard.find((r) => r.stepKey === "ai-review")?.status).toBe("succeeded");
+    expect(runsForCard.find((r) => r.stepKey === "prepare-human-review")?.status).toBe("succeeded");
   });
 
   it("rejects retry when the step has no failed run", () => {
@@ -741,7 +741,7 @@ describe("ExecutionEngine", () => {
       expect(calls[1].options.baseSha).toBe("sha-v1");
       const succeededRun = harness.runStore.latestForStep(card.id, "plan");
       expect(succeededRun?.baseSha).toBe("sha-v1");
-      expect(stepStatus(harness, card.id, "impl")).toBe("done");
+      expect(stepStatus(harness, card.id, "implement")).toBe("done");
     });
 
     it("creates a fresh worktree on retry without contamination from the failed attempt", async () => {
@@ -800,7 +800,7 @@ describe("ExecutionEngine", () => {
       expect(createCalls).toHaveLength(2);
       expect(createCalls[1].hadContamination).toBe(false);
       expect(stepStatus(harness, card.id, "plan")).toBe("done");
-      expect(stepStatus(harness, card.id, "impl")).toBe("done");
+      expect(stepStatus(harness, card.id, "implement")).toBe("done");
       expect(
         fs.existsSync(path.join(createCalls[1].worktreePath, "contamination.txt")),
       ).toBe(false);
@@ -914,7 +914,7 @@ describe("ExecutionEngine", () => {
       expect(
         harness.artifactStore.list(card.id).filter((a) => a.kind === "runlog" && a.stepKey === "plan"),
       ).toHaveLength(2);
-      expect(stepStatus(harness, card.id, "impl")).toBe("done");
+      expect(stepStatus(harness, card.id, "implement")).toBe("done");
     });
 
     it("replays base_sha after server restart when the step was left queued for retry", async () => {
@@ -976,7 +976,10 @@ describe("ExecutionEngine", () => {
       });
       expect(runlog).toBeDefined();
       expect(harness.artifactStore.readBody(runlog!)).toContain("working…");
-      expect(runlog!.path).toMatch(new RegExp(`^cards/${card.id}/0/runlog/.+\\.log$`));
+      expect(runlog!.path).toMatch(new RegExp(`^cards/${card.id}/0/plan/.+\\.log$`));
+      const livePath = harness.runStore.latestForStep(card.id, "plan")?.logPath;
+      expect(livePath).toBeTruthy();
+      expect(fs.existsSync(livePath!)).toBe(false);
     });
 
     it("freezes the final log as a runlog artifact after a failed run", async () => {
@@ -1001,6 +1004,10 @@ describe("ExecutionEngine", () => {
       expect(runlog).toBeDefined();
       expect(harness.artifactStore.readBody(runlog!)).toContain("partial output");
       expect(runlog!.gitSha).toBeNull();
+      expect(runlog!.path).toMatch(new RegExp(`^cards/${card.id}/0/plan/.+\\.log$`));
+      const livePath = harness.runStore.latestForStep(card.id, "plan")?.logPath;
+      expect(livePath).toBeTruthy();
+      expect(fs.existsSync(livePath!)).toBe(false);
     });
 
     it("does not index a runlog while the step is still queued", async () => {

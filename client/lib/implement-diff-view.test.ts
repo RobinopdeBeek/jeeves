@@ -8,11 +8,11 @@ import {
 
 describe("implement-diff-view", () => {
   it("shows the DiffViewer only for a successful Implement step", () => {
-    expect(shouldShowImplementDiff("impl", "done")).toBe(true);
-    expect(shouldShowImplementDiff("impl", "needs-user")).toBe(false);
-    expect(shouldShowImplementDiff("impl", "ai-working")).toBe(false);
+    expect(shouldShowImplementDiff("implement", "done")).toBe(true);
+    expect(shouldShowImplementDiff("implement", "needs-user")).toBe(false);
+    expect(shouldShowImplementDiff("implement", "ai-working")).toBe(false);
     expect(shouldShowImplementDiff("plan", "done")).toBe(false);
-    expect(shouldShowImplementDiff("airev", "done")).toBe(false);
+    expect(shouldShowImplementDiff("ai-review", "done")).toBe(false);
   });
 
   it("soft-warns when total changed lines exceed the limit", () => {

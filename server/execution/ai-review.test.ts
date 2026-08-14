@@ -45,7 +45,7 @@ describe("buildAiReviewPrompt", () => {
     expect(prompt).toMatch(/Standards/i);
     expect(prompt).toMatch(/Spec/i);
     expect(prompt).toContain(".jeeves/review.md");
-    expect(prompt).toMatch(/Do \*\*not\*\* produce Evaluation HTML/i);
+    expect(prompt).toMatch(/Do \*\*not\*\* produce a Human Review Report/i);
     expect(prompt).not.toContain("{{");
     expect(prompt).toMatch(/path: `\/repo\/\.jeeves\/data\/cards\/c1\/attachments\//);
   });

@@ -70,9 +70,9 @@ describe("ExecutionEngine", () => {
       expect(calls[1]!.prompt).toContain("Match this layout");
       expect(calls[1]!.prompt).toContain(cardAttachments.absolutePath(card.id, att.id)!);
       expect(calls[1]!.prompt).toContain("/tdd");
-      expect(harness.runStore.latestForStep(card.id, "impl")?.skill).toBe("implement-task");
-      expect(stepStatus(harness, card.id, "impl")).toBe("done");
-      expect(stepStatus(harness, card.id, "airev")).toBe("done");
+      expect(harness.runStore.latestForStep(card.id, "implement")?.skill).toBe("implement-task");
+      expect(stepStatus(harness, card.id, "implement")).toBe("done");
+      expect(stepStatus(harness, card.id, "ai-review")).toBe("done");
     });
 
     it("uses checkoutExisting for Implement so Plan commits survive on the tip", async () => {
@@ -106,9 +106,9 @@ describe("ExecutionEngine", () => {
         `jeeves/card-${card.id}`,
         `jeeves/card-${card.id}`,
       ]);
-      expect(stepStatus(harness, card.id, "impl")).toBe("done");
-      expect(stepStatus(harness, card.id, "airev")).toBe("done");
-      expect(stepStatus(harness, card.id, "prepeval")).toBe("done");
+      expect(stepStatus(harness, card.id, "implement")).toBe("done");
+      expect(stepStatus(harness, card.id, "ai-review")).toBe("done");
+      expect(stepStatus(harness, card.id, "prepare-human-review")).toBe("done");
     });
 
     it("fails Implement when the agent leaves no commits", async () => {
@@ -125,8 +125,8 @@ describe("ExecutionEngine", () => {
       await engine.whenIdle();
 
       expect(stepStatus(harness, card.id, "plan")).toBe("done");
-      expect(stepStatus(harness, card.id, "impl")).toBe("needs-user");
-      expect(harness.runStore.latestForStep(card.id, "impl")?.error).toMatch(
+      expect(stepStatus(harness, card.id, "implement")).toBe("needs-user");
+      expect(harness.runStore.latestForStep(card.id, "implement")?.error).toMatch(
         /at least one commit/i,
       );
     });
@@ -165,8 +165,8 @@ describe("ExecutionEngine", () => {
       engine.enqueue(card.id, "plan");
       await engine.whenIdle();
 
-      expect(stepStatus(harness, card.id, "impl")).toBe("needs-user");
-      expect(harness.runStore.latestForStep(card.id, "impl")?.error).toMatch(/dirty/i);
+      expect(stepStatus(harness, card.id, "implement")).toBe("needs-user");
+      expect(harness.runStore.latestForStep(card.id, "implement")?.error).toMatch(/dirty/i);
     });
 
     it("skips verify_commands with a warning when null/empty", async () => {
@@ -176,9 +176,9 @@ describe("ExecutionEngine", () => {
       engine.enqueue(card.id, "plan");
       await engine.whenIdle();
 
-      expect(stepStatus(harness, card.id, "impl")).toBe("done");
+      expect(stepStatus(harness, card.id, "implement")).toBe("done");
       const runlog = harness.artifactStore.latest(card.id, {
-        stepKey: "impl",
+        stepKey: "implement",
         round: 0,
         kind: "runlog",
       });
@@ -201,12 +201,12 @@ describe("ExecutionEngine", () => {
       engine.enqueue(card.id, "plan");
       await engine.whenIdle();
 
-      expect(stepStatus(harness, card.id, "impl")).toBe("needs-user");
-      const run = harness.runStore.latestForStep(card.id, "impl");
+      expect(stepStatus(harness, card.id, "implement")).toBe("needs-user");
+      const run = harness.runStore.latestForStep(card.id, "implement");
       expect(run?.status).toBe("failed");
       expect(run?.error).toMatch(/verify_commands failed/i);
       const runlog = harness.artifactStore.latest(card.id, {
-        stepKey: "impl",
+        stepKey: "implement",
         round: 0,
         kind: "runlog",
       });
@@ -226,9 +226,9 @@ describe("ExecutionEngine", () => {
       engine.enqueue(card.id, "plan");
       await engine.whenIdle();
 
-      expect(stepStatus(harness, card.id, "impl")).toBe("done");
+      expect(stepStatus(harness, card.id, "implement")).toBe("done");
       const runlog = harness.artifactStore.latest(card.id, {
-        stepKey: "impl",
+        stepKey: "implement",
         round: 0,
         kind: "runlog",
       });

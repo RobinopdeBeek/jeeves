@@ -32,27 +32,28 @@ _Avoid_: Stage, phase, "shape" (legacy id for Define)
 **Pipeline**:
 The ordered list of columns a card kind passes through. Defined in code per kind, not in the database.
 
-**Evaluation**:
-The generated, self-contained HTML report a review works from, pinned to the commit it evaluated. Produced by the **Prepare Eval** step in the Review column (not by AI Review). Comes in two scopes: a **Task Evaluation** (deep: diff narrative, tests, QA checklist) and a **Feature Evaluation** (integration-focused: regression, journeys, spec criteria, refactor opportunities).
-_Avoid_: Evaluation plan, eval plan, acceptance eval, review doc; treating AI Review output as the evaluation
+**Human Review Report**:
+The generated, self-contained HTML a Human Review works from, pinned to the commit it describes. Produced by **Prepare Human Review**, not by AI Review. Two scopes: a **task report** (diff narrative, tests, QA checklist) and a **feature report** (regression, journeys, spec criteria, refactor opportunities).
+_Avoid_: Evaluation, eval, Human Review Doc, Review Report (unqualified — that could be the AI Review overview)
 
-**AI Review** (Implement Task step):
-An autonomous `ai-execution` step after Implement: runs a dual-axis code review (Standards + Spec, same shape as `/code-review`), then **immediately reworks** the card branch from those findings. Produces a concise markdown **review artifact** (process overview), not the Human Review evaluation.
-_Avoid_: Using "AI Review" for the human Review column; assuming AI Review assembles the evaluation
+**AI Review** (Implement-column step):
+An autonomous `ai-execution` step after Implement: runs a dual-axis code review (Standards + Spec, same shape as `/code-review`), then **immediately reworks** the card branch from those findings. Produces a concise markdown **overview** (process evidence), not a Human Review Report.
+_Avoid_: Using "AI Review" for the Review column or Human Review; calling its overview a report or evaluation
 
-**Prepare Eval**:
-The `ai-execution` step that opens the Review column: builds the Evaluation for the card's current tip (“Preparing interactive evaluation…” while `ai-working`). Precedes the human **Review** step. Step key `prepeval`.
-_Avoid_: Folding this into AI Review; treating it as a hidden side-effect of column entry
+**Prepare Human Review**:
+The `ai-execution` step that opens the Review column: builds the Human Review Report for the card's current tip. Precedes **Human Review**. Step key `prepare-human-review`.
+_Avoid_: Prepare Eval, eval; folding this into AI Review; treating it as a hidden side-effect of column entry
 
-**Review**:
-The human activity in the Review column: reading the evaluation, doing QA, and recording a decision. Follows **Prepare Eval**. Distinct from the **AI Review** step in Implement Task.
+**Human Review**:
+The human step in the Review column: reading the Human Review Report, doing QA, and recording a Decision. Follows **Prepare Human Review**. Step key `human-review`. Distinct from **AI Review**.
+_Avoid_: Review (unqualified for this step), Evaluation, eval
 
 **Decision**:
-The recorded outcome of a review: approved or changes requested, with a snapshot of whether QA was complete.
+The recorded outcome of a Human Review: approved or changes requested, with a snapshot of whether QA was complete.
 _Avoid_: Approval (as the entity name)
 
 **Notification**:
-A typed alert (critical / warning / info) raised by a pipeline skill during execution, consolidated into the evaluation, and shown unread-counted on the card tile until read. Browser push is a delivery mechanism, not this entity.
+A typed alert (critical / warning / info) raised by a pipeline skill during execution, consolidated into the Human Review Report, and shown unread-counted on the card tile until read. Browser push is a delivery mechanism, not this entity.
 _Avoid_: Attention flag, flag
 
 **Status** (card lifecycle):
@@ -63,7 +64,7 @@ A proposed vertical slice in a feature's Tasks tip — an entry in the versioned
 _Avoid_: Draft card; `status = 'draft'` card rows
 
 **Step**:
-A typed unit of work inside a column — human, AI chat, or AI execution — with status pending / queued / ai-working / needs-user / awaiting / done. **awaiting** means the step is watching child work (e.g. feature Tasks after **Implement →**); it must not be auto-reset like orphaned `ai-working` on restart. The database stores current step state only; history lives in runs and artifacts. Review-column steps include **Prepare Eval** then **Review**.
+A typed unit of work inside a column — human, AI chat, or AI execution — with status pending / queued / ai-working / needs-user / awaiting / done. **awaiting** means the step is watching child work (e.g. feature Tasks after **Implement →**); it must not be auto-reset like orphaned `ai-working` on restart. The database stores current step state only; history lives in runs and artifacts. Review-column steps include **Prepare Human Review** then **Human Review**.
 
 **Round**:
 One pass of a card's rework loop, counted from 0. A partition key on record tables (artifacts, runs, change requests, decisions, notifications), never an entity of its own. A changes-requested decision at round N begets round N+1.
@@ -72,10 +73,10 @@ One pass of a card's rework loop, counted from 0. A partition key on record tabl
 The loop triggered by a changes-requested decision: a task re-implements against the change requests; a feature re-shapes new draft tasks from them.
 
 **Run**:
-One skill invocation by the execution runner, recording status, timestamps, model, tokens, cost, and a pointer to its log file. Session metadata and the eval mini-pipeline display are aggregations of runs.
+One skill invocation by the execution runner, recording status, timestamps, model, tokens, cost, and a pointer to its log file. Session metadata and the Prepare Human Review sequence display are aggregations of runs.
 
 **Change Request**:
-A free-text item raised during review, scoped to a round, moving open → consumed. The open set is collectively the input to the next round. Sources: manual, AI-review finding, refactor opportunity.
+A free-text item raised during Human Review, scoped to a round, moving open → consumed. The open set is collectively the input to the next round. Sources: manual, AI Review finding, refactor opportunity.
 
 **Artifact**:
 A file produced by a step, stored in the project store's artifact folder and indexed by a database row holding metadata and a path — never content. Self-describing via frontmatter; lineage recorded as derived-from links.
@@ -126,10 +127,10 @@ Copying an **exchange file** into the project store's artifact folder (and notif
 Host materialization of a feature's tip `tasks-draft` into active child task cards on the board (**Implement →**).
 
 **QA gate**:
-The Approve-button gating driven by the evaluation's QA checklist. Checkbox state is ephemeral in the parent board's browser-local storage and synchronized with the sandboxed evaluation by validated messages; only the decision's QA-complete snapshot persists.
+The Approve-button gating driven by the Human Review Report's QA checklist. Checkbox state is ephemeral in the parent board's browser-local storage and synchronized with the sandboxed report by validated messages; only the decision's QA-complete snapshot persists.
 
 **Preview**:
-A temporary host-process development server for manually testing a card in Human Review at the evaluation's exact Git SHA. The preview manager recreates a worktree at that SHA, runs Jeeves-owned setup/dev commands as a child process on an allocated port, and probes readiness over HTTP. One preview is lazy-retained at a time; its process tree and worktree are removed on Stop or review exit. Launch policy (`preview_config`: setup/dev commands, port, readiness, env allowlist) belongs to the project in Jeeves, never to the reviewed branch.
+A temporary host-process development server for manually testing a card in Human Review at the Human Review Report's exact Git SHA. The preview manager recreates a worktree at that SHA, runs Jeeves-owned setup/dev commands as a child process on an allocated port, and probes readiness over HTTP. One preview is lazy-retained at a time; its process tree and worktree are removed on Stop or Human Review exit. Launch policy (`preview_config`: setup/dev commands, port, readiness, env allowlist) belongs to the project in Jeeves, never to the reviewed branch.
 
 **Blocker**:
 A card that must merge before another may start. Stored as card-to-card edges.

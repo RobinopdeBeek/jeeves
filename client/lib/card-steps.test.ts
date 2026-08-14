@@ -20,8 +20,8 @@ const featureAfterDecide: CardStep[] = [
 const standaloneAfterDecide: CardStep[] = [
   { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
   { key: "plan", status: "queued", label: "Plan", stepKind: "ai-execution", column: "implement" },
-  { key: "impl", status: "pending", label: "Implement", stepKind: "ai-execution", column: "implement" },
-  { key: "airev", status: "pending", label: "AI Review", stepKind: "ai-execution", column: "implement" },
+  { key: "implement", status: "pending", label: "Implement", stepKind: "ai-execution", column: "implement" },
+  { key: "ai-review", status: "pending", label: "AI Review", stepKind: "ai-execution", column: "implement" },
 ];
 
 describe("card-steps", () => {
@@ -49,7 +49,7 @@ describe("card-steps", () => {
     const steps: CardStep[] = [
       { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
       { key: "plan", status: "queued", label: "Plan", stepKind: "ai-execution", column: "implement" },
-      { key: "impl", status: "pending", label: "Implement", stepKind: "ai-execution", column: "implement" },
+      { key: "implement", status: "pending", label: "Implement", stepKind: "ai-execution", column: "implement" },
     ];
     expect(activeStep(steps)?.key).toBe("plan");
     expect(activeTabKey(steps)).toBe("plan");
@@ -71,10 +71,10 @@ describe("card-steps", () => {
     const steps: CardStep[] = [
       { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
       { key: "plan", status: "done", label: "Plan", stepKind: "ai-execution", column: "implement" },
-      { key: "impl", status: "pending", label: "Implement", stepKind: "ai-execution", column: "implement" },
-      { key: "airev", status: "pending", label: "AI Review", stepKind: "ai-execution", column: "implement" },
+      { key: "implement", status: "pending", label: "Implement", stepKind: "ai-execution", column: "implement" },
+      { key: "ai-review", status: "pending", label: "AI Review", stepKind: "ai-execution", column: "implement" },
     ];
-    expect(activeStep(steps)?.key).toBe("impl");
+    expect(activeStep(steps)?.key).toBe("implement");
     expect(activeTabKey(steps)).toBe("plan");
   });
 
@@ -93,8 +93,8 @@ describe("card-steps", () => {
       ]);
       expect(columnWorkSteps(standaloneAfterDecide, "implement").map((s) => s.key)).toEqual([
         "plan",
-        "impl",
-        "airev",
+        "implement",
+        "ai-review",
       ]);
       expect(columnWorkSteps(featureAfterDecide, "implement")).toEqual([]);
     });
@@ -114,7 +114,7 @@ describe("card-steps", () => {
 
       const reviewSteps: CardStep[] = [
         { key: "info", status: "done", label: "Info", stepKind: "human", column: "backlog" },
-        { key: "review", status: "done", label: "Human Review", stepKind: "human", column: "review" },
+        { key: "human-review", status: "done", label: "Human Review", stepKind: "human", column: "review" },
       ];
       expect(needsUserAttention({ column: "review", steps: reviewSteps })).toBe(true);
     });

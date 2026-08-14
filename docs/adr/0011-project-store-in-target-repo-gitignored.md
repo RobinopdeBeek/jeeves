@@ -15,7 +15,7 @@ This supersedes [ADR 0007](./0007-artifacts-outside-the-repo-evals-pinned-by-sha
     ├── data/
     │   └── cards/<cardId>/
     │       ├── manifest.json
-    │       └── <round>/          # grill/, spec/, plan/, eval/, screenshots/, runlog/, …
+    │       └── <round>/          # grill/, spec/, plan/, implement/, ai-review/, prepare-human-review/, …
     └── worktrees/                # ephemeral card worktrees (not committed)
         └── <cardId>/
 ```

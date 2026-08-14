@@ -196,7 +196,7 @@ export class ExecutionEngine {
         logPath: "",
         baseSha,
       });
-      logPath = this.deps.artifacts.liveLogPath(cardId, round, run.id);
+      logPath = this.deps.artifacts.liveLogPath(cardId, round, stepKey, run.id);
       runs.setLogPath(run.id, logPath);
 
       events.emit({
@@ -417,6 +417,11 @@ export class ExecutionEngine {
       sourceSkill,
       gitSha,
     });
+    try {
+      if (fs.existsSync(logPath)) fs.unlinkSync(logPath);
+    } catch {
+      // Frozen artifact is the source of truth; a leftover live file is harmless.
+    }
   }
 
   private async finalizeStep(
@@ -432,13 +437,7 @@ export class ExecutionEngine {
       policy,
       this.deps.worktrees,
       ctx,
-      stepKey === "impl"
-        ? "implement"
-        : stepKey === "airev"
-          ? "ai-review"
-          : stepKey === "prepeval"
-            ? "prepare-eval"
-            : stepKey,
+      stepKey,
     );
     this.deps.artifacts.harvest(ctx.workspacePath, policy.harvest, {
       cardId,

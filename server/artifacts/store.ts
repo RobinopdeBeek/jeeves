@@ -88,7 +88,13 @@ export class ArtifactStore {
   save(input: SaveArtifactInput): Artifact {
     const id = nanoid(10);
     const createdAt = new Date();
-    const relativePath = this.destinationPath(input.cardId, input.round, input.kind, id);
+    const relativePath = this.destinationPath(
+      input.cardId,
+      input.round,
+      input.stepKey,
+      input.kind,
+      id,
+    );
     const absPath = this.assertUnderRoot(relativePath);
     fs.mkdirSync(path.dirname(absPath), { recursive: true });
 
@@ -203,7 +209,7 @@ export class ArtifactStore {
     const content = `${JSON.stringify(validated, null, 2)}\n`;
     const id = nanoid(10);
     const createdAt = new Date();
-    const relativePath = this.destinationPath(cardId, round, "tasks-draft", id);
+    const relativePath = this.destinationPath(cardId, round, "tasks", "tasks-draft", id);
     const absPath = this.assertUnderRoot(relativePath);
     fs.mkdirSync(path.dirname(absPath), { recursive: true });
     this.writeAtomic(absPath, content);
@@ -335,6 +341,7 @@ export class ArtifactStore {
     const relativePath = this.destinationPath(
       cardId,
       round,
+      "tasks",
       "tasks-breakdown",
       id,
     );
@@ -414,7 +421,7 @@ export class ArtifactStore {
     }
 
     const id = specArtifactId(cardId, round);
-    const relativePath = this.destinationPath(cardId, round, "spec", SPEC_FILE_ID);
+    const relativePath = this.destinationPath(cardId, round, "spec", "spec", SPEC_FILE_ID);
     const absPath = this.assertUnderRoot(relativePath);
     fs.mkdirSync(path.dirname(absPath), { recursive: true });
     this.writeAtomic(absPath, body);
@@ -557,11 +564,12 @@ export class ArtifactStore {
   }
 
   /** Host path for a mutable run log; frozen as a runlog artifact when the run ends. */
-  liveLogPath(cardId: string, round: number, runId: string): string {
+  liveLogPath(cardId: string, round: number, stepKey: StepKey, runId: string): string {
     const relativePath = path.posix.join(
       "cards",
       cardId,
       String(round),
+      stepKey,
       `run-${runId}.log`,
     );
     const absPath = this.assertUnderRoot(relativePath);
@@ -590,11 +598,12 @@ export class ArtifactStore {
   private destinationPath(
     cardId: string,
     round: number,
+    stepKey: StepKey,
     kind: ArtifactKind,
     id: string,
   ): string {
     const ext =
-      kind === "eval"
+      kind === "human-review-report"
         ? "html"
         : kind === "runlog"
           ? "log"
@@ -607,8 +616,8 @@ export class ArtifactStore {
     // (kind stays `tasks-draft` in SQLite / ADR 0014).
     const dir =
       kind === "tasks-draft"
-        ? path.posix.join("tasks", "drafts")
-        : kind;
+        ? path.posix.join(stepKey, "drafts")
+        : stepKey;
     return path.posix.join("cards", cardId, String(round), dir, `${id}.${ext}`);
   }
 

@@ -15,5 +15,3 @@ Run typechecking regularly, single test files regularly, and the full test suite
 Once done, use /code-review to review the work.
 
 Commit your work to the current branch.
-
-Remind the user to run `/qa-checklist` when the PR is ready for manual QA.

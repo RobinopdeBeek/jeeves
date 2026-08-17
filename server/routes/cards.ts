@@ -24,11 +24,13 @@ import {
   stepAttachmentsDir,
   writeAttachmentBytes,
 } from "../attachments/store.js";
+import type { CardDiff } from "../execution/card-diff.js";
 import { isStepKey } from "../pipelines.js";
 import type { ChatSessionRegistry } from "../ws/session-registry.js";
 import type { SpawnAcp } from "../ws/chat.js";
 import { artifactRoutes } from "./artifacts.js";
 import { cardAttachmentRoutes } from "./card-attachments.js";
+import { cardDiffRoutes } from "./card-diff.js";
 
 function isKindPath(value: unknown): value is KindPath {
   return value === "feature" || value === "standalone";
@@ -45,6 +47,7 @@ export interface CardRouteDeps {
   createSpec: CreateSpec;
   createTasks: CreateTasks;
   promptsRoot: string;
+  cardDiff: CardDiff;
 }
 
 /** Thin HTTP adapter over the CardStore seam. */
@@ -90,8 +93,9 @@ export function cardRoutes(
       // Board tabs open elsewhere only see decide via SSE — not the HTTP response.
       deps.events.emit({ type: "card.updated", card });
       // advance declares enqueue; route only dispatches (ADR 0006).
-      dispatchAdvanceEffects(card.id, sideEffects, {
+      await dispatchAdvanceEffects(card.id, sideEffects, {
         enqueue: (id, step) => deps.engine.enqueue(id, step),
+        ensureBranch: (id) => deps.engine.ensureBranch(id),
         sessions: deps.sessions,
       });
       return c.json(card);
@@ -172,19 +176,33 @@ export function cardRoutes(
     }
   });
 
-  app.post("/:id/implement", (c) => {
+  app.post("/:id/implement", async (c) => {
     const cardId = c.req.param("id");
     try {
+      // Validate + ensure feature branch before mutating children so a git
+      // failure leaves Tasks needs-user and the board still fannable.
+      store.assertReadyToFanOut(cardId);
+      await deps.engine.ensureBranch(cardId);
+
       const { card, children, sideEffects } = store.fanOut(cardId);
       deps.events.emit({ type: "card.updated", card });
       for (const child of children) {
         deps.events.emit({ type: "card.updated", card: child });
       }
-      dispatchAdvanceEffects(card.id, sideEffects, {
-        enqueue: (id, step) => deps.engine.enqueue(id, step),
-        sessions: deps.sessions,
-      });
-      return c.json(card);
+      try {
+        await dispatchAdvanceEffects(card.id, sideEffects, {
+          enqueue: (id, step) => deps.engine.enqueue(id, step),
+          // Idempotent — branch already created above; kept so fan-out still
+          // declares ensure-branch and adapters still dispatch it.
+          ensureBranch: (id) => deps.engine.ensureBranch(id),
+          sessions: deps.sessions,
+        });
+      } catch (err) {
+        store.revertIgnitedPlans(children.map((child) => child.id));
+        throw err;
+      }
+      // Re-read after ensure-branch so cards.branch is in the response.
+      return c.json(store.getCard(cardId)!);
     } catch (e) {
       if (e instanceof CardStoreError) {
         return c.json({ error: e.message }, e.status as 400 | 404 | 409);
@@ -248,6 +266,7 @@ export function cardRoutes(
   });
 
   app.route("/:id/artifacts", artifactRoutes(deps.artifacts));
+  app.route("/:id/diff", cardDiffRoutes(store, deps.cardDiff));
 
   app.route(
     "/:id/attachments",

@@ -2,14 +2,18 @@ import { IconChevronDown, IconRefresh } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { ImplementDiffPanel } from "@/components/ImplementDiffPanel";
 import { api, type ArtifactContent, type Run } from "@/lib/api";
 import { useJeevesEvents } from "@/lib/events";
+import { shouldShowImplementDiff } from "@/lib/implement-diff-view";
 import { appendLogLine, formatRunLogText } from "@/lib/run-log";
 import {
   initialLogOpen,
+  liveWorkingMessage,
   logOpenAfterFinish,
-  shouldLoadPlanArtifact,
-  showPlanArtifact,
+  markdownArtifactKind,
+  shouldLoadMarkdownArtifact,
+  showMarkdownArtifact,
   stepExecutionMode,
   usesFrozenArtifacts,
 } from "@/lib/step-execution-view";
@@ -35,8 +39,8 @@ function toDisplayLog(raw: string): string {
 }
 
 /**
- * Plan / Implement / AI Review run-log panel: queued message → live SSE
- * stream while ai-working → run log above formatted plan when finished.
+ * Plan / Implement / AI Review / Prepare Human Review run-log panel: queued message →
+ * live SSE stream while ai-working → run log above formatted markdown when finished.
  */
 export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
   const step = card.steps.find((s) => s.key === stepKey);
@@ -45,7 +49,7 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
 
   const [logText, setLogText] = useState("");
   const [latestRun, setLatestRun] = useState<Run | null>(null);
-  const [planArtifact, setPlanArtifact] = useState<ArtifactContent | null>(null);
+  const [markdownArtifact, setMarkdownArtifact] = useState<ArtifactContent | null>(null);
   const [logOpen, setLogOpen] = useState(() => initialLogOpen(step?.status));
   const [retrying, setRetrying] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -53,13 +57,14 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
   const wasLiveRef = useRef(step?.status === "ai-working");
 
   async function loadArtifacts() {
-    const [plan, runlog] = await Promise.all([
-      shouldLoadPlanArtifact(stepKey, step?.status)
-        ? fetchArtifact(card.id, stepKey, round, "plan")
+    const kind = markdownArtifactKind(stepKey);
+    const [markdown, runlog] = await Promise.all([
+      shouldLoadMarkdownArtifact(stepKey, step?.status) && kind
+        ? fetchArtifact(card.id, stepKey, round, kind)
         : Promise.resolve(null),
       fetchArtifact(card.id, stepKey, round, "runlog"),
     ]);
-    setPlanArtifact(plan);
+    setMarkdownArtifact(markdown);
     if (runlog?.content) {
       setLogText(toDisplayLog(runlog.content));
     }
@@ -107,7 +112,7 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
     }
     if (prevStepStatus.current !== step?.status && step?.status === "ai-working") {
       activeRunIdRef.current = null;
-      setPlanArtifact(null);
+      setMarkdownArtifact(null);
     }
     prevStepStatus.current = step?.status;
   }, [step?.status]);
@@ -142,7 +147,7 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
       wasLiveRef.current = false;
       setLogText("");
       setLatestRun(null);
-      setPlanArtifact(null);
+      setMarkdownArtifact(null);
       setLogOpen(false);
     } catch (err) {
       console.error(err);
@@ -153,7 +158,10 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
 
   const failed = step?.status === "needs-user" && latestRun?.status === "failed";
   const frozen = usesFrozenArtifacts(mode);
-  const showPlan = frozen && showPlanArtifact(stepKey, step?.status, planArtifact);
+  const showMarkdown =
+    frozen && showMarkdownArtifact(stepKey, step?.status, markdownArtifact);
+  const showImplementDiff =
+    frozen && shouldShowImplementDiff(stepKey, step?.status);
 
   function renderLogBody() {
     return (
@@ -198,11 +206,13 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
             )}
           </div>
 
-          {showPlan && planArtifact ? (
+          {showMarkdown && markdownArtifact ? (
             <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border p-4 text-sm">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{planArtifact.content}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdownArtifact.content}</ReactMarkdown>
             </div>
           ) : null}
+
+          {showImplementDiff ? <ImplementDiffPanel cardId={card.id} /> : null}
         </>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
@@ -212,10 +222,17 @@ export function StepExecution({ card, stepKey, onCardChange }: StepPanelProps) {
                 [queued] {step?.label} step waiting in queue…
               </div>
             )}
-            {renderLogBody()}
-            {mode === "live" && !logText && (
-              <div className="text-muted-foreground">[starting] agent is warming up…</div>
+            {mode === "live" && stepKey === "prepare-human-review" && (
+              <div className="text-muted-foreground">
+                {liveWorkingMessage(stepKey)}
+              </div>
             )}
+            {mode === "live" && !logText && stepKey !== "prepare-human-review" && (
+              <div className="text-muted-foreground">
+                [starting] {liveWorkingMessage(stepKey)}
+              </div>
+            )}
+            {renderLogBody()}
           </div>
         </div>
       )}

@@ -16,9 +16,10 @@ export type StepKey =
   | "spec"
   | "tasks"
   | "plan"
-  | "impl"
-  | "airev"
-  | "review"
+  | "implement"
+  | "ai-review"
+  | "prepare-human-review"
+  | "human-review"
   | "document"
   | "deploy";
 
@@ -38,9 +39,10 @@ export const stepKeys = [
   "spec",
   "tasks",
   "plan",
-  "impl",
-  "airev",
-  "review",
+  "implement",
+  "ai-review",
+  "prepare-human-review",
+  "human-review",
   "document",
   "deploy",
 ] as const satisfies readonly StepKey[];
@@ -73,9 +75,14 @@ const STEP_DEFS: Record<StepKey, StepDef> = {
   spec: { label: "Spec", stepKind: "ai-chat", column: "define" },
   tasks: { label: "Tasks", stepKind: "ai-chat", column: "define" },
   plan: { label: "Plan", stepKind: "ai-execution", column: "implement" },
-  impl: { label: "Implement", stepKind: "ai-execution", column: "implement" },
-  airev: { label: "AI Review", stepKind: "ai-execution", column: "implement" },
-  review: { label: "Human Review", stepKind: "human", column: "review" },
+  implement: { label: "Implement", stepKind: "ai-execution", column: "implement" },
+  "ai-review": { label: "AI Review", stepKind: "ai-execution", column: "implement" },
+  "prepare-human-review": {
+    label: "Prepare Human Review",
+    stepKind: "ai-execution",
+    column: "review",
+  },
+  "human-review": { label: "Human Review", stepKind: "human", column: "review" },
   document: { label: "Document", stepKind: "ai-execution", column: "finalize" },
   deploy: { label: "Deploy", stepKind: "ai-execution", column: "finalize" },
 };
@@ -83,8 +90,8 @@ const STEP_DEFS: Record<StepKey, StepDef> = {
 const COLUMN_STEPS: Record<ColumnId, StepKey[]> = {
   backlog: ["info"],
   define: ["grill", "spec", "tasks"],
-  implement: ["plan", "impl", "airev"],
-  review: ["review"],
+  implement: ["plan", "implement", "ai-review"],
+  review: ["prepare-human-review", "human-review"],
   finalize: ["document", "deploy"],
 };
 
@@ -162,8 +169,8 @@ export function kindDecisionTransition(path: KindPath): {
     steps: [
       { key: "info", status: "done" },
       { key: "plan", status: "queued" },
-      { key: "impl", status: "pending" },
-      { key: "airev", status: "pending" },
+      { key: "implement", status: "pending" },
+      { key: "ai-review", status: "pending" },
     ],
   };
 }
@@ -262,6 +269,15 @@ export function tasksToImplementTransition(
   };
 }
 
+/**
+ * Same-card success chain for Implement-column AI-execution steps.
+ * AI Review → Review column is special-cased below (ensureSteps + column).
+ */
+const STEP_SUCCESS_CHAIN: Partial<Record<StepKey, StepKey>> = {
+  plan: "implement",
+  implement: "ai-review",
+};
+
 /** What triggered a pipeline advance (routes / engine are thin adapters). */
 export type AdvanceTrigger =
   | { type: "kind-decision"; path: KindPath }
@@ -276,7 +292,8 @@ export type AdvanceTrigger =
 
 /** Declared follow-on work — adapters dispatch; PipelineEngine does not I/O. */
 export type AdvanceSideEffect =
-  | { type: "enqueue"; stepKey: StepKey }
+  | { type: "enqueue"; cardId: string; stepKey: StepKey }
+  | { type: "ensure-branch"; cardId: string }
   | {
       type: "close-chat";
       stepKey: StepKey;
@@ -297,10 +314,11 @@ export type AdvancePlan =
 
 /**
  * Pure workflow transition: patches + side-effects for a trigger.
- * CardStore persists; routes/engine dispatch effects (enqueue, close-chat).
+ * CardStore persists; routes/engine dispatch effects (enqueue, ensure-branch, close-chat).
  */
 export function advance(
   card: {
+    id: string;
     kind: CardKind | null;
     steps: Array<{ key: StepKey; status: StepStatus }>;
   },
@@ -314,7 +332,11 @@ export function advance(
     const sideEffects: AdvanceSideEffect[] = [];
     for (const step of transition.steps) {
       if (step.status === "queued") {
-        sideEffects.push({ type: "enqueue", stepKey: step.key });
+        sideEffects.push({
+          type: "enqueue",
+          cardId: card.id,
+          stepKey: step.key,
+        });
       }
     }
     return {
@@ -367,6 +389,7 @@ export function advance(
       ok: true,
       stepPatches: transition.patches,
       sideEffects: [
+        { type: "ensure-branch", cardId: card.id },
         {
           type: "close-chat",
           stepKey: "tasks",
@@ -377,8 +400,52 @@ export function advance(
     };
   }
 
-  // step-finished: status patch for the completed step; future rules may
-  // enqueue the next step / move columns here (seam exists even if minimal).
+  // step-finished: same-card success chain plan → implement → ai-review.
+  const nextInChain = STEP_SUCCESS_CHAIN[trigger.stepKey];
+  if (trigger.outcome === "succeeded" && nextInChain) {
+    return {
+      ok: true,
+      stepPatches: [
+        { key: trigger.stepKey, status: "done" },
+        { key: nextInChain, status: "queued" },
+      ],
+      sideEffects: [
+        { type: "enqueue", cardId: card.id, stepKey: nextInChain },
+      ],
+    };
+  }
+
+  // AI Review success enters Review with Prepare Human Review queued.
+  if (trigger.stepKey === "ai-review" && trigger.outcome === "succeeded") {
+    if (card.kind !== "task") {
+      return { ok: false, reason: "AI Review advance requires a task card" };
+    }
+    return {
+      ok: true,
+      cardPatch: { kind: "task", column: "review" },
+      ensureSteps: [
+        { key: "prepare-human-review", status: "queued" },
+        { key: "human-review", status: "pending" },
+      ],
+      stepPatches: [{ key: "ai-review", status: "done" }],
+      sideEffects: [
+        { type: "enqueue", cardId: card.id, stepKey: "prepare-human-review" },
+      ],
+    };
+  }
+
+  // Prepare Human Review stub success unlocks Human Review (slice 8.5; real assemble in 9).
+  if (trigger.stepKey === "prepare-human-review" && trigger.outcome === "succeeded") {
+    return {
+      ok: true,
+      stepPatches: [
+        { key: "prepare-human-review", status: "done" },
+        { key: "human-review", status: "needs-user" },
+      ],
+      sideEffects: [],
+    };
+  }
+
   const stepStatus: StepStatus =
     trigger.outcome === "succeeded" ? "done" : "needs-user";
   return {
@@ -395,4 +462,21 @@ export function backlogEnrichedSteps(
   return rows
     .filter((r) => r.stepKey === "info")
     .map((r) => enrichStep(r.stepKey, r.status));
+}
+
+/**
+ * Depth-first eligible-queue order for AI-execution steps.
+ * CardStore filters/sorts the derived queue; this owns step identity order.
+ */
+const EXECUTION_QUEUE_ORDER = [
+  "plan",
+  "implement",
+  "ai-review",
+  "prepare-human-review",
+] as const;
+
+/** Index in the depth-first execution queue, or undefined if not queueable. */
+export function executionQueueIndex(stepKey: string): number | undefined {
+  const idx = (EXECUTION_QUEUE_ORDER as readonly string[]).indexOf(stepKey);
+  return idx === -1 ? undefined : idx;
 }

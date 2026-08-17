@@ -102,7 +102,7 @@ export function createCreateSpec(deps: {
       });
 
       // Freeze Grill chat before headless /to-spec (closes warm ACP).
-      dispatchAdvanceEffects(
+      await dispatchAdvanceEffects(
         input.cardId,
         [
           {

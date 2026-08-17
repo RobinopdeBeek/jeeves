@@ -1,26 +1,82 @@
 import path from "node:path";
 import type { ArtifactStore, HarvestDeclaration } from "../artifacts/store.js";
+import type { CardWithSteps } from "../cards/store.js";
 import type { StepKey } from "../pipelines.js";
+import { aiReviewPromptVars } from "./ai-review.js";
+import { implementPromptVars } from "./implement-task.js";
+import { planPromptVars } from "./plan-implementation.js";
+import {
+  HUMAN_REVIEW_REPORT_STUB_EXCHANGE,
+  writePrepareHumanReviewStub,
+} from "./prepare-human-review-stub.js";
+import type { CardAttachmentInput } from "./render-prompt.js";
 import type { RunFinalizeContext } from "./runner.js";
 import type { WorktreeLifecycle } from "./worktree-manager.js";
 
-export interface StepExecutionPolicy {
+/** Commit expectation on the card branch after the step settles. */
+export type CommitExpectation = "forbidden" | "required" | "any";
+
+export interface PromptBuildContext {
+  card: CardWithSteps;
+  planBody: string;
+  parentSpec: string;
+  manifestPath: string;
+  attachments: readonly CardAttachmentInput[];
+}
+
+interface StepPolicyBase {
   skill: string;
-  promptFile: string;
+  commits: CommitExpectation;
   harvest?: HarvestDeclaration[];
-  assertWorkspace?: (
-    worktrees: WorktreeLifecycle,
-    ctx: RunFinalizeContext,
-  ) => Promise<void>;
   postcondition?: (
     artifacts: ArtifactStore,
     cardId: string,
     round: number,
   ) => boolean;
+  /**
+   * Host `projects.verify_commands` after a successful finalize.
+   * `true` always; `"if-committed"` only when headSha !== baseSha.
+   */
+  hostVerify?: boolean | "if-committed";
+  /**
+   * Checked after the run row exists and before the worktree / agent starts.
+   * Throw to fail the step (`needs-user`) without calling the runner.
+   */
+  precondition?: (
+    card: CardWithSteps,
+    attachments: readonly CardAttachmentInput[],
+  ) => void;
 }
 
-/** Plan exchange files need prose beyond headings and empty bullets. */
-export function assertPlanHasUsefulContent(raw: string): void {
+export type StepExecutionPolicy =
+  | (StepPolicyBase & {
+      kind: "agent";
+      promptFile: string;
+      promptVars: (ctx: PromptBuildContext) => Record<string, string>;
+    })
+  | (StepPolicyBase & {
+      kind: "host";
+      hostBody: (ctx: RunFinalizeContext) => Promise<void>;
+      /** Run-log / SSE status line while hostBody runs. */
+      hostStatusLine?: string;
+    });
+
+/** Plan must not start from a title alone. */
+export const PLAN_INSUFFICIENT_INPUT =
+  "Plan needs a card description or an Info attachment with an instruction. Add either, then retry.";
+
+/** Host gate: description or at least one non-empty attachment instruction. */
+export function assertPlanHasEnoughInput(input: {
+  description: string;
+  attachments: readonly CardAttachmentInput[];
+}): void {
+  if (input.description.trim()) return;
+  if (input.attachments.some((att) => att.instruction.trim())) return;
+  throw new Error(PLAN_INSUFFICIENT_INPUT);
+}
+
+/** Exchange markdown needs prose beyond headings and empty bullets. */
+export function assertExchangeHasUsefulContent(raw: string): void {
   const body = stripFrontmatter(raw)
     .replace(/^#+\s+.*$/gm, "")
     .replace(/^[-*]\s*$/gm, "")
@@ -29,6 +85,9 @@ export function assertPlanHasUsefulContent(raw: string): void {
     throw new Error("exchange file has no useful content");
   }
 }
+
+/** @deprecated Prefer assertExchangeHasUsefulContent. */
+export const assertPlanHasUsefulContent = assertExchangeHasUsefulContent;
 
 function stripFrontmatter(raw: string): string {
   if (!raw.startsWith("---\n")) return raw;
@@ -39,19 +98,97 @@ function stripFrontmatter(raw: string): string {
 
 export const STEP_POLICIES: Partial<Record<StepKey, StepExecutionPolicy>> = {
   plan: {
-    skill: "slice-3-tracer",
-    promptFile: path.join("prompts", "execution", "slice-3-tracer.md"),
+    kind: "agent",
+    skill: "plan-implementation",
+    promptFile: path.join("prompts", "execution", "plan-implementation.md"),
+    commits: "forbidden",
+    promptVars: (ctx) =>
+      planPromptVars({
+        cardTitle: ctx.card.title,
+        cardDescription: ctx.card.description,
+        parentSpec: ctx.parentSpec,
+        manifestPath: ctx.manifestPath,
+        attachments: ctx.attachments,
+      }),
+    precondition: (card, attachments) =>
+      assertPlanHasEnoughInput({
+        description: card.description,
+        attachments,
+      }),
     harvest: [
       {
         exchangePath: ".jeeves/plan.md",
         kind: "plan",
         stepKey: "plan",
-        validate: assertPlanHasUsefulContent,
+        validate: assertExchangeHasUsefulContent,
       },
     ],
-    assertWorkspace: assertPlanWorkspaceClean,
     postcondition: (artifacts, cardId, round) =>
-      artifacts.latest(cardId, { stepKey: "plan", round, kind: "plan" }) !== undefined,
+      artifacts.latest(cardId, { stepKey: "plan", round, kind: "plan" }) !==
+      undefined,
+  },
+  implement: {
+    kind: "agent",
+    skill: "implement-task",
+    promptFile: path.join("prompts", "execution", "implement-task.md"),
+    commits: "required",
+    promptVars: (ctx) =>
+      implementPromptVars({
+        cardTitle: ctx.card.title,
+        cardDescription: ctx.card.description,
+        plan: ctx.planBody,
+        manifestPath: ctx.manifestPath,
+        attachments: ctx.attachments,
+      }),
+    // Empty harvest still runs assertWorkspace (truthy array); Implement outputs are commits.
+    harvest: [],
+    hostVerify: true,
+  },
+  "ai-review": {
+    kind: "agent",
+    skill: "ai-review",
+    promptFile: path.join("prompts", "execution", "ai-review.md"),
+    commits: "any",
+    promptVars: (ctx) =>
+      aiReviewPromptVars({
+        cardTitle: ctx.card.title,
+        cardDescription: ctx.card.description,
+        plan: ctx.planBody,
+        manifestPath: ctx.manifestPath,
+        attachments: ctx.attachments,
+      }),
+    harvest: [
+      {
+        exchangePath: ".jeeves/review.md",
+        kind: "review",
+        stepKey: "ai-review",
+        validate: assertExchangeHasUsefulContent,
+      },
+    ],
+    postcondition: (artifacts, cardId, round) =>
+      artifacts.latest(cardId, { stepKey: "ai-review", round, kind: "review" }) !==
+      undefined,
+    hostVerify: "if-committed",
+  },
+  "prepare-human-review": {
+    kind: "host",
+    skill: "assemble-human-review",
+    commits: "forbidden",
+    hostBody: writePrepareHumanReviewStub,
+    hostStatusLine: "Preparing Human Review Report…",
+    harvest: [
+      {
+        exchangePath: HUMAN_REVIEW_REPORT_STUB_EXCHANGE,
+        kind: "human-review-report",
+        stepKey: "prepare-human-review",
+      },
+    ],
+    postcondition: (artifacts, cardId, round) =>
+      artifacts.latest(cardId, {
+        stepKey: "prepare-human-review",
+        round,
+        kind: "human-review-report",
+      }) !== undefined,
   },
 };
 
@@ -69,19 +206,26 @@ export function meetsPostconditions(
   return check ? check(artifacts, cardId, round) : true;
 }
 
-/** Plan runs must leave the target tree unchanged after exchange files are removed. */
-async function assertPlanWorkspaceClean(
+/** Enforce commit expectation + clean tree (ignoring `.jeeves` exchange files). */
+export async function assertStepWorkspace(
+  policy: StepExecutionPolicy,
   worktrees: WorktreeLifecycle,
   ctx: RunFinalizeContext,
+  stepLabel: string,
 ): Promise<void> {
-  if (ctx.headSha !== ctx.baseSha) {
-    throw new Error("plan step must not create commits on the card branch");
+  if (policy.commits === "forbidden" && ctx.headSha !== ctx.baseSha) {
+    throw new Error(`${stepLabel} step must not create commits on the card branch`);
+  }
+  if (policy.commits === "required" && ctx.headSha === ctx.baseSha) {
+    throw new Error(
+      `${stepLabel} step must create at least one commit on the card branch`,
+    );
   }
   const status = await worktrees.worktreeStatus(ctx.workspacePath, {
     ignorePathPrefixes: [".jeeves"],
   });
   if (status) {
     const summary = status.split("\n")[0] ?? "dirty tree";
-    throw new Error(`plan step left source tree dirty: ${summary}`);
+    throw new Error(`${stepLabel} step left source tree dirty: ${summary}`);
   }
 }

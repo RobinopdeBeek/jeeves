@@ -84,12 +84,12 @@ export function createCreateTasks(deps: {
       skill: "to-draft-tasks",
       logPath: "",
     });
-    const logPath = deps.artifacts.liveLogPath(input.cardId, 0, run.id);
+    const logPath = deps.artifacts.liveLogPath(input.cardId, 0, "tasks", run.id);
     deps.runs.setLogPath(run.id, logPath);
 
     try {
       // Freeze Spec chat before headless /to-draft-tasks (closes warm ACP).
-      dispatchAdvanceEffects(
+      await dispatchAdvanceEffects(
         input.cardId,
         [
           {

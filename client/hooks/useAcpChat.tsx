@@ -383,27 +383,23 @@ export function AcpChatProvider({
     onAutoSendConsumed?.();
   }, [autoSendText, autoSendKey, sessionOpen, chat, onAutoSendConsumed]);
 
-  // Nested @ai-sdk/react inside react-ai-sdk can disagree on UseChatHelpers.
-  const runtime = useAISDKRuntime(
-    chat as unknown as Parameters<typeof useAISDKRuntime>[0],
-    {
-      adapters: {
-        attachments: createAcpAttachmentAdapter(promptCapabilities, {
-          target: transport.attachmentUploadTarget(),
-          upload: async (target, file) => {
-            if (target.kind === "chat") {
-              return api.uploadChatThreadAttachment(target.threadId, file);
-            }
-            return api.uploadStepChatAttachment(
-              target.cardId,
-              target.stepKey,
-              file,
-            );
-          },
-        }),
-      },
+  const runtime = useAISDKRuntime(chat, {
+    adapters: {
+      attachments: createAcpAttachmentAdapter(promptCapabilities, {
+        target: transport.attachmentUploadTarget(),
+        upload: async (target, file) => {
+          if (target.kind === "chat") {
+            return api.uploadChatThreadAttachment(target.threadId, file);
+          }
+          return api.uploadStepChatAttachment(
+            target.cardId,
+            target.stepKey,
+            file,
+          );
+        },
+      }),
     },
-  );
+  });
   return (
     <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>
   );

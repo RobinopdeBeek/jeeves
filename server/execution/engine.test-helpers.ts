@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect } from "vitest";
 import { ArtifactStore } from "../artifacts/store.js";
+import type { CardAttachmentStore } from "../attachments/card-library.js";
 import { openDb, type Db } from "../db/index.js";
 import { CardStore, type CardWithSteps } from "../cards/store.js";
 import { EventBus, type JeevesEvent } from "./events.js";
@@ -12,20 +13,38 @@ import type { AgentRunner, RunAgentOptions, RunEvent } from "./runner.js";
 import type { WorktreeLifecycle } from "./worktree-manager.js";
 
 export type Script =
-  | { events: RunEvent[] }
+  | { events: RunEvent[]; finalize?: "plan" | "implement" | "airev" | "airev-rework" }
   | { error: Error }
-  | { gate: Promise<RunEvent[]> };
+  | { gate: Promise<RunEvent[]>; finalize?: "plan" | "implement" | "airev" | "airev-rework" };
 
 export const ok = (): RunEvent[] => [
   { type: "log", line: "working…" },
   { type: "result", status: "finished" },
 ];
 
+/** Successful Plan script — writes `.jeeves/plan.md`, no commits. */
+export const planOk = (): Script => ({ events: ok(), finalize: "plan" });
+
+/** Successful Implement script — reports a new HEAD, clean tree. */
+export const implementOk = (): Script => ({
+  events: ok(),
+  finalize: "implement",
+});
+
+/** Successful clean AI Review — review.md, no rework commits. */
+export const airevOk = (): Script => ({ events: ok(), finalize: "airev" });
+
+/** AI Review with rework commits. */
+export const airevReworkOk = (): Script => ({
+  events: ok(),
+  finalize: "airev-rework",
+});
+
 export function fakeRunner(scripts: Script[]) {
-  const calls: Array<{ promptFile: string; options: RunAgentOptions }> = [];
+  const calls: Array<{ prompt: string; options: RunAgentOptions }> = [];
   const runner: AgentRunner = {
-    async *run(promptFile, options) {
-      calls.push({ promptFile, options });
+    async *run(prompt, options) {
+      calls.push({ prompt, options });
       const script = scripts.shift();
       if (!script) throw new Error("fake runner: no script left");
       if ("error" in script) throw script.error;
@@ -39,14 +58,42 @@ export function fakeRunner(scripts: Script[]) {
           fs.appendFileSync(options.logPath, `${event.line}\n`);
         }
         if (event.type === "result" && event.status === "finished" && options.onFinalize) {
-          const planDir = path.join(options.worktreePath, ".jeeves");
-          fs.mkdirSync(planDir, { recursive: true });
-          fs.writeFileSync(path.join(planDir, "plan.md"), "# Plan\n\nTracer plan.\n");
-          await options.onFinalize({
-            workspacePath: options.worktreePath,
-            headSha: options.baseSha,
-            baseSha: options.baseSha,
-          });
+          const kind = script.finalize ?? "plan";
+          if (kind === "plan") {
+            const planDir = path.join(options.worktreePath, ".jeeves");
+            fs.mkdirSync(planDir, { recursive: true });
+            fs.writeFileSync(
+              path.join(planDir, "plan.md"),
+              "# Plan\n\nTracer plan.\n",
+            );
+            await options.onFinalize({
+              workspacePath: options.worktreePath,
+              headSha: options.baseSha,
+              baseSha: options.baseSha,
+            });
+          } else if (kind === "airev" || kind === "airev-rework") {
+            const reviewDir = path.join(options.worktreePath, ".jeeves");
+            fs.mkdirSync(reviewDir, { recursive: true });
+            fs.writeFileSync(
+              path.join(reviewDir, "review.md"),
+              "# AI Review\n\nClean review — no findings.\n",
+            );
+            const headSha =
+              kind === "airev-rework"
+                ? `${options.baseSha}-airev`
+                : options.baseSha;
+            await options.onFinalize({
+              workspacePath: options.worktreePath,
+              headSha,
+              baseSha: options.baseSha,
+            });
+          } else {
+            await options.onFinalize({
+              workspacePath: options.worktreePath,
+              headSha: `${options.baseSha}-impl`,
+              baseSha: options.baseSha,
+            });
+          }
         }
         yield event;
       }
@@ -63,8 +110,37 @@ export function fakeWorktrees(root: string): WorktreeLifecycle {
     async resolveRef() {
       return "abc123def456";
     },
-    async create(_branch, _baseSha, worktreePath) {
+    async createFrom(_branch, _baseSha, worktreePath) {
       fs.mkdirSync(worktreePath, { recursive: true });
+    },
+    async checkoutExisting(_branch, worktreePath) {
+      fs.mkdirSync(worktreePath, { recursive: true });
+    },
+    async resolveRunBase(input) {
+      if (input.priorFailedBaseSha) {
+        return { mode: "create", baseSha: input.priorFailedBaseSha };
+      }
+      if (input.hasDurableBranch) {
+        const tip = await this.resolveRef(input.cardBranch);
+        return { mode: "checkout", baseSha: tip };
+      }
+      const baseSha = await this.resolveRef(input.upstreamRef);
+      return { mode: "create", baseSha };
+    },
+    async openRunWorkspace(decision, cardBranch, worktreePath) {
+      if (decision.mode === "checkout") {
+        await this.checkoutExisting(cardBranch, worktreePath);
+      } else {
+        await this.createFrom(cardBranch, decision.baseSha, worktreePath);
+      }
+    },
+    async prepareRunWorkspace(input) {
+      const decision = await this.resolveRunBase(input);
+      await this.openRunWorkspace(decision, input.cardBranch, input.worktreePath);
+      return decision;
+    },
+    async ensureBranch() {
+      // No-op in harness — ExecutionEngine.ensureBranch tests stub this.
     },
     async remove(worktreePath) {
       fs.rmSync(worktreePath, { recursive: true, force: true });
@@ -112,15 +188,15 @@ export interface EngineTestHarness {
 
 export function createEngineHarness(): EngineTestHarness {
   const db = openDb(":memory:");
-  const store = new CardStore(db);
-  const runStore = new RunStore(db);
   const artifactRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jeeves-engine-"));
   const artifactStore = new ArtifactStore(db, artifactRoot);
+  const store = new CardStore(db, artifactStore);
+  const runStore = new RunStore(db);
   const events = new EventBus();
   const received: JeevesEvent[] = [];
   events.subscribe((e) => received.push(e));
-  const repoRoot = path.join(os.tmpdir(), "jeeves-repo-root");
-  fs.mkdirSync(repoRoot, { recursive: true });
+  // Real app repo root so prompt templates under prompts/ resolve.
+  const repoRoot = path.resolve(import.meta.dirname, "../..");
   return {
     db,
     store,
@@ -132,7 +208,6 @@ export function createEngineHarness(): EngineTestHarness {
     repoRoot,
     dispose() {
       fs.rmSync(artifactRoot, { recursive: true, force: true });
-      fs.rmSync(repoRoot, { recursive: true, force: true });
     },
   };
 }
@@ -141,6 +216,7 @@ export function makeEngineWithRunner(
   harness: EngineTestHarness,
   runner: AgentRunner,
   worktrees: WorktreeLifecycle = fakeWorktrees(harness.artifactRoot),
+  cardAttachments?: CardAttachmentStore,
 ) {
   const engine = new ExecutionEngine({
     store: harness.store,
@@ -150,26 +226,38 @@ export function makeEngineWithRunner(
     artifacts: harness.artifactStore,
     events: harness.events,
     repoRoot: harness.repoRoot,
+    cardAttachments,
   });
   return engine;
 }
 
-export function makeEngine(harness: EngineTestHarness, scripts: Script[]) {
+export function makeEngine(
+  harness: EngineTestHarness,
+  scripts: Script[],
+  cardAttachments?: CardAttachmentStore,
+) {
   const { runner, calls } = fakeRunner(scripts);
-  const engine = makeEngineWithRunner(harness, runner);
+  const engine = makeEngineWithRunner(harness, runner, undefined, cardAttachments);
   return { engine, calls };
 }
 
 export function queuedCard(harness: EngineTestHarness, title = "Rest timer"): CardWithSteps {
   const projectId = harness.store.ensureDefaultProject("jeeves", "C:/target-repo").id;
   const card = harness.store.createCard(projectId);
-  harness.store.updateCard(card.id, { title });
+  harness.store.updateCard(card.id, {
+    title,
+    description: "Persist countdown across reloads.",
+  });
   return harness.store.decideKind(card.id, "standalone").card;
 }
 
 export function stepStatus(harness: EngineTestHarness, cardId: string, stepKey: string) {
   return harness.store.getCard(cardId)!.steps.find((s) => s.key === stepKey)?.status;
 }
+
+/** Cross-platform verify_commands stubs (Unix `true`/`false` are not cmd.exe builtins). */
+export const VERIFY_CMD_PASS = 'node -e "process.exit(0)"';
+export const VERIFY_CMD_FAIL = 'node -e "process.exit(1)"';
 
 export function expectDiagnosticAttachment(harness: EngineTestHarness, cardId: string) {
   const diag = harness.artifactStore.latest(cardId, {
@@ -187,7 +275,7 @@ export function runnerWithFinalize(
   headSha?: (options: RunAgentOptions) => string,
 ): AgentRunner {
   return {
-    async *run(_promptFile, options) {
+    async *run(_prompt, options) {
       yield { type: "log", line: "working…" };
       fs.appendFileSync(options.logPath, "working…\n");
       setup(options);

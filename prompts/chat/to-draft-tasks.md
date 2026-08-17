@@ -3,6 +3,8 @@
 Break this feature into **vertical-slice tracer-bullet tasks** for the Jeeves board.
 Do **not** interview the user. Do **not** publish to an issue tracker. Do **not** create cards or commit source changes.
 
+{{jeevesHost}}
+
 ## Card
 
 - **Title:** {{cardTitle}}

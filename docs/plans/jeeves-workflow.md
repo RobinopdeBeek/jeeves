@@ -43,7 +43,7 @@ standalone task  Backlog → Implement Task → Human Review → Finalize   (no 
 | Backlog | Info · human (title + description) |
 | Define Feature | Grill · ai-chat → Spec · ai-chat → Tasks · ai-chat |
 | Implement Task | Plan · ai-execution → Implement · ai-execution → AI Review · ai-execution |
-| Human Review | Prepare Eval · ai-execution → Review · human |
+| Human Review | Prepare Human Review · ai-execution → Human Review · human |
 | Finalize | Document · ai-execution → Deploy · ai-execution |
 
 ### Entry point: Backlog → decide the kind
@@ -86,18 +86,18 @@ flow split across three context windows ([ADR 0018](../adr/0018-ai-review-rework
    then **immediate rework** in the same step (one pass). Concise markdown overview artifact;
    does **not** build the Evaluation.
 
-On AI Review success the card enters **Human Review** with **Prepare Eval** queued.
+On AI Review success the card enters the **Review** column with **Prepare Human Review** queued.
 
 ### Human Review (both levels live here)
 
-1. **Prepare Eval** (`ai-execution`, step key `prepeval`) — builds the Evaluation HTML for the
-   card tip (“Preparing interactive evaluation…”). Slice 8 stubs this; slice 9+ fills sections.
-2. **Review** (`human`) — async review surface once the Evaluation is ready.
+1. **Prepare Human Review** (`ai-execution`, step key `prepare-human-review`) — builds the Human Review Report for the
+   card tip (“Preparing Human Review Report…”). Slice 8 stubs this; slice 9+ fills sections.
+2. **Human Review** (`human`, step key `human-review`) — async review surface once the report is ready.
 
-What the Evaluation shows depends on the card kind:
+What the Human Review Report shows depends on the card kind:
 
-- **task** (child or standalone) → the **Task Evaluation** (the deep review).
-- **feature** → the **Feature Evaluation** (thinner, integration-focused).
+- **task** (child or standalone) → the **task report** (the deep review).
+- **feature** → the **feature report** (thinner, integration-focused).
 
 Both present the evaluation on the left and a **"Request changes"** sidepanel on the right, plus
 a **QA checklist that gates the Approve button** (see next section).
@@ -139,7 +139,7 @@ The **"Request changes"** sidepanel holds a list of free-text change requests. Y
 When change requests exist, the primary action changes:
 
 - **Task** (child or standalone) → **"Implement changes →"**
-  - Card returns to **Implement Task** for another pass (`impl` re-queued, `airev` reset).
+  - Card returns to **Implement Task** for another pass (`implement` re-queued, `ai-review` reset).
   - The open change requests are injected into the rework implement prompt and marked
     **consumed** (they remain visible on the card as "Changes added later").
   - The Task Evaluation **persists as a read-only artifact** showing an *"Implementing changes…"*

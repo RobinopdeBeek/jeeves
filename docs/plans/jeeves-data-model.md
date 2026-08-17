@@ -71,8 +71,8 @@ cards                        -- features and tasks (board cards); Tasks shaping 
 card_steps                   -- CURRENT state only; one row per (card, step), mutated in place
   id            pk
   card_id       fk → cards
-  step_key      'info' | 'grill' | 'spec' | 'tasks' | 'plan' | 'impl' | 'airev'
-                | 'prepeval' | 'review' | 'document' | 'deploy'
+  step_key      'info' | 'grill' | 'spec' | 'tasks' | 'plan' | 'implement' | 'ai-review'
+                | 'prepare-human-review' | 'human-review' | 'document' | 'deploy'
   status        'pending' | 'queued' | 'ai-working' | 'needs-user' | 'awaiting' | 'done'
   started_at, completed_at   -- overwritten on rework; per-round timing lives in runs
                              -- rows created lazily as the card reaches each column
@@ -113,11 +113,11 @@ artifacts                    -- metadata + pointer, never content
   step_key      text
   round         int
   kind          'transcript' | 'grill' | 'spec' | 'tasks-draft' | 'tasks-breakdown' | 'plan'
-                | 'review' | 'eval' | 'screenshot' | 'runlog' | 'attachment'
+                | 'review' | 'human-review-report' | 'screenshot' | 'runlog' | 'attachment'
                 -- transcript = mutable UIMessage[] chat log; grill = Grill session Q&A
                 -- (ADR 0012); tasks-draft = append-only tip versions (ADR 0014);
                 -- review = AI Review concise markdown overview (ADR 0018);
-                -- eval = Prepare Eval HTML
+                -- human-review-report = Prepare Human Review HTML
   path          text         -- root-relative; unique immutable destination per version
   git_sha       text, nullable  -- mandatory for evals: the only link to the reviewed diff
   schema_version int
@@ -174,8 +174,8 @@ discriminator could contradict the link. The pipeline constant is looked up by `
 
 | Not stored | Derived from |
 |---|---|
-| Execution queue | Eligible `card_steps` with `status = 'queued'` and no unmerged blockers, ordered by `(sibling position, step index plan < impl < airev < prepeval)` for depth-first per task; rebuilt on restart. Orphaned `running` runs are marked `failed` at boot. |
-| Eval mini-pipeline display | `runs` of the current `(card, prepeval, round)`, in order |
+| Execution queue | Eligible `card_steps` with `status = 'queued'` and no unmerged blockers, ordered by `(sibling position, step index plan < implement < ai-review < prepare-human-review)` for depth-first per task; rebuilt on restart. Orphaned `running` runs are marked `failed` at boot. |
+| Prepare Human Review sequence display | `runs` of the current `(card, prepare-human-review, round)`, in order |
 | Session metadata (tokens/cost/duration) | SUM over `runs` — per step, per round, or per card |
 | "Implementing Task X of Y" | COUNT over the feature's active/merged children of the current round |
 | Artifact superseded/stale | Latest `created_at` per `(card, step, round, kind)` wins; staleness = an upstream artifact in `artifact_lineage` has a newer version |

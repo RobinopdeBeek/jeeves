@@ -1,6 +1,6 @@
 # Workflow is code, state is data
 
-The pipelines (kind → columns → steps) are TypeScript constants looked up by `(kind, hasParent)`; the database stores only per-card state (`cards`, `card_steps`) and immutable round-scoped records (`artifacts`, `runs`, `change_requests`, `decisions`, `notifications`). We rejected seeding workflow definitions into the database because there is no workflow editor, and the step semantics are welded to code anyway — the runner knows `impl` triggers the eval pipeline and `tasks` fans out children, which no database row can express. Workflow-as-data would have been a shadow copy of what the code already knows.
+The pipelines (kind → columns → steps) are TypeScript constants looked up by `(kind, hasParent)`; the database stores only per-card state (`cards`, `card_steps`) and immutable round-scoped records (`artifacts`, `runs`, `change_requests`, `decisions`, `notifications`). We rejected seeding workflow definitions into the database because there is no workflow editor, and the step semantics are welded to code anyway — the runner knows `implement` triggers the eval pipeline and `tasks` fans out children, which no database row can express. Workflow-as-data would have been a shadow copy of what the code already knows.
 
 ## Consequences
 

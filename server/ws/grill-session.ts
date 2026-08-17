@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { UIMessage } from "ai";
 import { attachmentMarker } from "../../shared/prompt-capabilities.js";
+import { renderPrompt } from "../execution/render-prompt.js";
 
 /** Flatten a chat transcript into role-tagged text for the grill-session extract. */
 export function serializeTranscriptForExtract(messages: UIMessage[]): string {
@@ -41,7 +42,11 @@ export function buildGrillSessionPrompt(
 ): string {
   const templatePath = path.join(promptsRoot, "chat", "grill-session.md");
   const template = fs.readFileSync(templatePath, "utf8");
-  return template.replaceAll("{{transcript}}", transcriptText || "(empty)");
+  return renderPrompt(
+    template,
+    { transcript: transcriptText || "(empty)" },
+    { promptsRoot },
+  );
 }
 
 /**

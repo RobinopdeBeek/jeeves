@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { renderPrompt } from "../execution/render-prompt.js";
 
 export interface ToDraftTasksPromptInput {
   spec: string;
@@ -17,15 +18,17 @@ export function buildToDraftTasksPrompt(
 ): string {
   const templatePath = path.join(promptsRoot, "chat", "to-draft-tasks.md");
   const template = fs.readFileSync(templatePath, "utf8");
-  return template
-    .replaceAll("{{cardTitle}}", input.cardTitle.trim() || "(untitled)")
-    .replaceAll(
-      "{{cardDescription}}",
-      input.cardDescription.trim() || "(none)",
-    )
-    .replaceAll("{{spec}}", input.spec.trim() || "(empty)")
-    .replaceAll("{{grillSession}}", input.grillSession.trim() || "(empty)")
-    .replaceAll("{{exchangePath}}", input.exchangePath);
+  return renderPrompt(
+    template,
+    {
+      cardTitle: input.cardTitle.trim() || "(untitled)",
+      cardDescription: input.cardDescription.trim() || "(none)",
+      spec: input.spec.trim() || "(empty)",
+      grillSession: input.grillSession.trim() || "(empty)",
+      exchangePath: input.exchangePath,
+    },
+    { promptsRoot },
+  );
 }
 
 /**
